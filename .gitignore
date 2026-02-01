@@ -1,0 +1,73 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+DerivedData/
+*.moved-aside
+*.xcuserstate
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods (if ever used)
+Pods/
+
+# Carthage (if ever used)
+Carthage/Build/
+
+# macOS
+.DS_Store
+*.swp
+*~
+.AppleDouble
+.LSOverride
+._*
+
+# VS Code
+.vscode/
+
+# Secrets and credentials - NEVER commit these
+.env
+.env.*
+*.pem
+*.p12
+*.key
+secrets/
+credentials/
+
+# Build outputs
+build/
+*.app
+*.ipa
+
+# Archives
+*.xcarchive
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Instruments
+*.trace
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+iOSInjectionProject/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Claude Code (optional - remove if you want to track .claude config)
+# .claude/
