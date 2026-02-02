@@ -100,7 +100,7 @@ struct KeyboardView: View {
 
         case .triggerVoiceInput:
             if hapticEnabled { state.haptic.specialKeyTap() }
-            VoiceInputTrigger.openMainAppForVoice()
+            VoiceInputTrigger.openMainAppForVoice(from: state.viewController)
 
         case .triggerEmoji:
             if hapticEnabled { state.haptic.specialKeyTap() }

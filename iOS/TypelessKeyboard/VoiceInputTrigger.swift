@@ -6,18 +6,19 @@ import TypelessCore
 /// we redirect to the main app via URL scheme
 enum VoiceInputTrigger {
     /// Open the main Typeless app for voice recording
-    static func openMainAppForVoice() {
+    /// This method uses the responder chain to find an object that can open URLs
+    /// since UIApplication.shared is not available in keyboard extensions
+    static func openMainAppForVoice(from viewController: UIViewController?) {
         guard let url = URL(string: "typeless://voice") else { return }
 
-        // Use the shared application to open the URL
-        // This works from keyboard extensions with "RequestsOpenAccess" = YES
-        let selector = NSSelectorFromString("openURL:")
-        var responder: UIResponder? = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first?.rootViewController
+        // In keyboard extensions, we need to use the responder chain
+        // to find an object that can open URLs
+        var responder: UIResponder? = viewController
 
+        // Walk up the responder chain looking for something that can open URLs
         while let current = responder {
+            // Check if the responder can handle openURL:
+            let selector = sel_registerName("openURL:")
             if current.responds(to: selector) {
                 current.perform(selector, with: url)
                 return
@@ -25,7 +26,14 @@ enum VoiceInputTrigger {
             responder = current.next
         }
 
-        // Fallback: use shared application
-        UIApplication.shared.open(url)
+        // Alternative method using NSExtensionContext if available
+        // This works in some extension contexts
+        if let extensionContext = viewController?.extensionContext {
+            extensionContext.open(url) { success in
+                if !success {
+                    print("VoiceInputTrigger: Failed to open URL via extensionContext")
+                }
+            }
+        }
     }
 }

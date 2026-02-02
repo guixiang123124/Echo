@@ -26,6 +26,9 @@ class KeyboardViewController: UIInputViewController {
         view.addSubview(hostingController.view)
         hostingController.didMove(toParent: self)
 
+        // Set the view controller reference for opening URLs
+        keyboardState.viewController = self
+
         NSLayoutConstraint.activate([
             hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             hostingController.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -67,6 +70,9 @@ class KeyboardState: ObservableObject {
     let actionHandler = KeyboardActionHandler()
     let haptic = HapticFeedbackGenerator()
     let settings = AppSettings()
+
+    /// Reference to the view controller for opening URLs
+    weak var viewController: UIViewController?
 
     init() {
         let savedMode = settings.defaultInputMode
