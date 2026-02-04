@@ -7,15 +7,20 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
     public let requiresNetwork = true
 
     private let keyStore: SecureKeyStore
+    private let apiKeyOverride: String?
     private let apiEndpoint = "https://api.openai.com/v1/chat/completions"
     private let model = "gpt-4o"
 
-    public init(keyStore: SecureKeyStore = SecureKeyStore()) {
+    public init(keyStore: SecureKeyStore = SecureKeyStore(), apiKey: String? = nil) {
         self.keyStore = keyStore
+        self.apiKeyOverride = apiKey
     }
 
     public var isAvailable: Bool {
-        keyStore.hasKey(for: id)
+        if let apiKeyOverride, !apiKeyOverride.isEmpty {
+            return true
+        }
+        return keyStore.hasKey(for: id)
     }
 
     public func correct(
@@ -23,7 +28,7 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         context: ConversationContext,
         confidence: [WordConfidence]
     ) async throws -> CorrectionResult {
-        guard let apiKey = try keyStore.retrieve(for: id) else {
+        guard let apiKey = try (apiKeyOverride ?? keyStore.retrieve(for: id)) else {
             throw CorrectionError.apiKeyMissing
         }
 

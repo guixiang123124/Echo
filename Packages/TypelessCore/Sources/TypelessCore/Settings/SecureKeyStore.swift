@@ -4,6 +4,8 @@ import Security
 /// Secure storage for API keys using the iOS/macOS Keychain
 public struct SecureKeyStore: Sendable {
     private let serviceName: String
+    private static let cacheLock = NSLock()
+    private static var cache: [String: String] = [:]
 
     public init(serviceName: String = "com.typeless.apikeys") {
         self.serviceName = serviceName
@@ -34,10 +36,16 @@ public struct SecureKeyStore: Sendable {
         guard status == errSecSuccess else {
             throw KeyStoreError.storeFailed(status: status)
         }
+
+        setCachedValue(key, for: provider)
     }
 
     /// Retrieve an API key
     public func retrieve(for provider: String) throws -> String? {
+        if let cached = cachedValue(for: provider) {
+            return cached
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
@@ -55,6 +63,7 @@ public struct SecureKeyStore: Sendable {
                   let key = String(data: data, encoding: .utf8) else {
                 return nil
             }
+            setCachedValue(key, for: provider)
             return key
         case errSecItemNotFound:
             return nil
@@ -75,10 +84,15 @@ public struct SecureKeyStore: Sendable {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeyStoreError.deleteFailed(status: status)
         }
+        clearCachedValue(for: provider)
     }
 
     /// Check if an API key exists for a provider
     public func hasKey(for provider: String) -> Bool {
+        if let cached = cachedValue(for: provider), !cached.isEmpty {
+            return true
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
@@ -88,6 +102,30 @@ public struct SecureKeyStore: Sendable {
 
         let status = SecItemCopyMatching(query as CFDictionary, nil)
         return status == errSecSuccess
+    }
+
+    // MARK: - Cache
+
+    private func cacheKey(for provider: String) -> String {
+        "\(serviceName)::\(provider)"
+    }
+
+    private func cachedValue(for provider: String) -> String? {
+        Self.cacheLock.lock()
+        defer { Self.cacheLock.unlock() }
+        return Self.cache[cacheKey(for: provider)]
+    }
+
+    private func setCachedValue(_ value: String, for provider: String) {
+        Self.cacheLock.lock()
+        Self.cache[cacheKey(for: provider)] = value
+        Self.cacheLock.unlock()
+    }
+
+    private func clearCachedValue(for provider: String) {
+        Self.cacheLock.lock()
+        Self.cache.removeValue(forKey: cacheKey(for: provider))
+        Self.cacheLock.unlock()
     }
 }
 

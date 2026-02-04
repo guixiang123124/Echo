@@ -14,9 +14,13 @@ public final class AppleLegacySpeechProvider: NSObject, ASRProvider, @unchecked 
     private var recognitionTask: SFSpeechRecognitionTask?
     private var streamContinuation: AsyncStream<TranscriptionResult>.Continuation?
 
-    public override init() {
+    public init(localeIdentifier: String? = "zh-Hans") {
         super.init()
-        self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-Hans"))
+        if let localeIdentifier {
+            self.recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeIdentifier))
+        } else {
+            self.recognizer = SFSpeechRecognizer()
+        }
     }
 
     public var isAvailable: Bool {
@@ -35,6 +39,10 @@ public final class AppleLegacySpeechProvider: NSObject, ASRProvider, @unchecked 
     public func transcribe(audio: AudioChunk) async throws -> TranscriptionResult {
         guard let recognizer, recognizer.isAvailable else {
             throw ASRError.providerNotAvailable(displayName)
+        }
+
+        guard !audio.data.isEmpty else {
+            throw ASRError.noAudioData
         }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
@@ -153,7 +161,11 @@ public final class AppleLegacySpeechProvider: NSObject, ASRProvider, @unchecked 
     }
 
     private func createBuffer(from data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        let frameCount = UInt32(data.count) / format.streamDescription.pointee.mBytesPerFrame
+        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+        guard bytesPerFrame > 0 else { return nil }
+
+        let frameCount = AVAudioFrameCount(data.count / bytesPerFrame)
+        guard frameCount > 0 else { return nil }
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             return nil
         }
@@ -161,8 +173,25 @@ public final class AppleLegacySpeechProvider: NSObject, ASRProvider, @unchecked 
 
         data.withUnsafeBytes { rawBufferPointer in
             guard let baseAddress = rawBufferPointer.baseAddress else { return }
-            if let channelData = buffer.int16ChannelData {
-                memcpy(channelData[0], baseAddress, data.count)
+
+            if format.isInterleaved {
+                let audioBuffer = buffer.audioBufferList.pointee.mBuffers
+                guard let mData = audioBuffer.mData else { return }
+                memcpy(mData, baseAddress, data.count)
+                return
+            }
+
+            switch format.commonFormat {
+            case .pcmFormatInt16:
+                if let channelData = buffer.int16ChannelData {
+                    memcpy(channelData[0], baseAddress, data.count)
+                }
+            case .pcmFormatFloat32:
+                if let channelData = buffer.floatChannelData {
+                    memcpy(channelData[0], baseAddress, data.count)
+                }
+            default:
+                break
             }
         }
 

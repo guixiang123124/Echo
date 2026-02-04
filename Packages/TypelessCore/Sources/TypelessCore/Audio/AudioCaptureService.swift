@@ -56,8 +56,15 @@ public final class AudioCaptureService: Sendable {
 
     /// Start capturing audio from the microphone
     public func startRecording() throws {
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.reset()
+
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        engine.prepare()
 
         guard let targetFormat = AudioFormatHelper.avFormat(from: format) else {
             stateContinuation.yield(.error("Unsupported audio format"))

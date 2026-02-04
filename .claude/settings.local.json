@@ -23,7 +23,26 @@
       "Bash(find:*)",
       "Bash(wc:*)",
       "Bash(xcode-select:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:www.typeless.com)",
+      "Bash(xcodegen generate:*)",
+      "Bash(/opt/homebrew/bin/xcodegen generate)",
+      "Bash(/usr/local/bin/xcodegen generate:*)",
+      "Bash(~/bin/xcodegen generate:*)",
+      "Bash(mint which:*)",
+      "Bash(mint run:*)",
+      "Bash(brew:*)",
+      "Bash(./xcodegen/bin/xcodegen:*)",
+      "Bash(/tmp/xcodegen/bin/xcodegen generate:*)",
+      "Bash(open:*)",
+      "Bash(# 关闭正在运行的应用 pkill -f TypelessMac || true # 重新构建 xcodebuild -project Typeless.xcodeproj -scheme TypelessMac -destination ''platform=macOS'' build 2>&1)",
+      "Bash(log show:*)",
+      "Bash(# 在前台运行应用查看输出 pkill -f TypelessMac sleep 1 /Applications/TypelessMac.app/Contents/MacOS/TypelessMac 2>&1)",
+      "Bash(# 关闭应用 pkill -f TypelessMac || true # 重新构建 xcodebuild -project Typeless.xcodeproj -scheme TypelessMac -destination ''platform=macOS'' build 2>&1)",
+      "Bash(# 在后台运行并捕获日志 pkill -f TypelessMac || true sleep 1 /Applications/TypelessMac.app/Contents/MacOS/TypelessMac 2>&1 & APP_PID=$! sleep 3 # 查看日志 echo \"\"=== 应用启动日志 ===\"\" cat /tmp/typeless_log.txt echo \"\"\"\" echo \"\"=== 检查进程 ===\"\" ps aux)",
+      "Bash(# 关闭应用 pkill -f TypelessMac || true sleep 1 # 重新构建 xcodebuild -project Typeless.xcodeproj -scheme TypelessMac -destination ''platform=macOS'' build 2>&1)"
     ]
   }
 }

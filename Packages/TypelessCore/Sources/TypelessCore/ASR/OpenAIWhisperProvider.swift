@@ -9,18 +9,29 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
     public let supportedLanguages: Set<String> = ["zh-Hans", "en"]
 
     private let keyStore: SecureKeyStore
+    private let language: String?
+    private let apiKeyOverride: String?
     private let apiEndpoint = "https://api.openai.com/v1/audio/transcriptions"
 
-    public init(keyStore: SecureKeyStore = SecureKeyStore()) {
+    public init(
+        keyStore: SecureKeyStore = SecureKeyStore(),
+        language: String? = nil,
+        apiKey: String? = nil
+    ) {
         self.keyStore = keyStore
+        self.language = language
+        self.apiKeyOverride = apiKey
     }
 
     public var isAvailable: Bool {
-        keyStore.hasKey(for: id)
+        if let apiKeyOverride, !apiKeyOverride.isEmpty {
+            return true
+        }
+        return keyStore.hasKey(for: id)
     }
 
     public func transcribe(audio: AudioChunk) async throws -> TranscriptionResult {
-        guard let apiKey = try keyStore.retrieve(for: id) else {
+        guard let apiKey = try (apiKeyOverride ?? keyStore.retrieve(for: id)) else {
             throw ASRError.apiKeyMissing
         }
 
@@ -45,8 +56,7 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n")
         body.append("Content-Type: audio/wav\r\n\r\n")
-        body.append(createWavHeader(for: audio))
-        body.append(audio.data)
+        body.append(AudioFormatHelper.wavData(for: audio))
         body.append("\r\n")
 
         // Add model field
@@ -58,6 +68,13 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
         body.append("verbose_json\r\n")
+
+        // Add language field if specified
+        if let language {
+            body.append("--\(boundary)\r\n")
+            body.append("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
+            body.append("\(language)\r\n")
+        }
 
         body.append("--\(boundary)--\r\n")
 
@@ -130,32 +147,6 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
         )
     }
 
-    /// Create a minimal WAV header for the audio data
-    private func createWavHeader(for audio: AudioChunk) -> Data {
-        var header = Data()
-        let dataSize = UInt32(audio.data.count)
-        let sampleRate = UInt32(audio.format.sampleRate)
-        let channels = UInt16(audio.format.channelCount)
-        let bitsPerSample = UInt16(audio.format.bitsPerSample)
-        let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample / 8)
-        let blockAlign = channels * (bitsPerSample / 8)
-
-        header.append("RIFF")
-        header.appendLittleEndian(UInt32(36 + dataSize))
-        header.append("WAVE")
-        header.append("fmt ")
-        header.appendLittleEndian(UInt32(16)) // Subchunk1 size
-        header.appendLittleEndian(UInt16(1))  // PCM format
-        header.appendLittleEndian(channels)
-        header.appendLittleEndian(sampleRate)
-        header.appendLittleEndian(byteRate)
-        header.appendLittleEndian(blockAlign)
-        header.appendLittleEndian(bitsPerSample)
-        header.append("data")
-        header.appendLittleEndian(dataSize)
-
-        return header
-    }
 }
 
 // MARK: - Data Extensions
@@ -165,10 +156,5 @@ private extension Data {
         if let data = string.data(using: .utf8) {
             append(data)
         }
-    }
-
-    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
-        var littleEndian = value.littleEndian
-        append(Data(bytes: &littleEndian, count: MemoryLayout<T>.size))
     }
 }

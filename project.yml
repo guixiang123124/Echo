@@ -95,14 +95,40 @@ targets:
         com.apple.security.application-groups:
           - group.com.typeless.shared
 
-  # macOS Input Method (Phase 6 - future)
-  # TypelessInputMethod:
-  #   type: application
-  #   platform: macOS
-  #   sources:
-  #     - path: macOS/TypelessInputMethod
-  #   dependencies:
-  #     - package: TypelessCore
+  # macOS Menu Bar App
+  TypelessMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: macOS/TypelessMac
+    dependencies:
+      - package: TypelessCore
+      - package: TypelessUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.typeless.mac
+        INFOPLIST_FILE: macOS/TypelessMac/Info.plist
+        CODE_SIGN_ENTITLEMENTS: macOS/TypelessMac/TypelessMac.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+    info:
+      path: macOS/TypelessMac/Info.plist
+      properties:
+        CFBundleDisplayName: Typeless
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        LSUIElement: true
+        NSMicrophoneUsageDescription: "Typeless needs microphone access to transcribe your speech to text."
+        NSInputMonitoringUsageDescription: "Typeless needs input monitoring to detect global hotkeys."
+    entitlements:
+      path: macOS/TypelessMac/TypelessMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.device.audio-input: true
+        com.apple.security.automation.apple-events: true
+        com.apple.security.network.client: true
 
 schemes:
   Typeless:
@@ -113,6 +139,23 @@ schemes:
     run:
       config: Debug
       executable: TypelessApp
+    test:
+      config: Debug
+      gatherCoverageData: true
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+
+  TypelessMac:
+    build:
+      targets:
+        TypelessMac: all
+    run:
+      config: Debug
+      executable: TypelessMac
     test:
       config: Debug
       gatherCoverageData: true

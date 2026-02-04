@@ -34,7 +34,7 @@ public protocol ASRProvider: Sendable {
 }
 
 /// Errors that can occur during ASR operations
-public enum ASRError: Error, Sendable, Equatable {
+public enum ASRError: Error, Sendable, Equatable, LocalizedError {
     case providerNotAvailable(String)
     case microphoneAccessDenied
     case audioFormatUnsupported
@@ -46,7 +46,7 @@ public enum ASRError: Error, Sendable, Equatable {
     case noAudioData
     case timeout
 
-    public var localizedDescription: String {
+    public var errorDescription: String? {
         switch self {
         case .providerNotAvailable(let name):
             return "ASR provider '\(name)' is not available"
