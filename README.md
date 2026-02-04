@@ -1,4 +1,4 @@
-# Typeless - AI Voice Input Method
+# Echo - AI Voice Input Method
 
 <p align="center">
   <strong>AI-powered voice input method with LLM error correction</strong>
@@ -14,9 +14,9 @@
 
 ### Overview
 
-**Typeless** is an AI-powered voice input method for iOS and macOS. It combines state-of-the-art speech recognition with Large Language Model (LLM) error correction to deliver highly accurate transcription, especially for Chinese homophones and context-dependent phrases.
+**Echo** is an AI-powered voice input method for iOS and macOS. It combines state-of-the-art speech recognition with Large Language Model (LLM) error correction to deliver highly accurate transcription, especially for Chinese homophones and context-dependent phrases.
 
-Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typeless uses a 3-stage correction pipeline to achieve 20-50% lower error rates compared to traditional ASR alone.
+Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Echo uses a 3-stage correction pipeline to achieve 20-50% lower error rates compared to traditional ASR alone.
 
 ### Key Features
 
@@ -40,18 +40,18 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typ
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Typeless                             │
+│                        Echo                             │
 ├─────────────────────────────────────────────────────────────┤
 │  [Voice Input] → [ASR] → [LLM Correction] → [Text Output]  │
 ├─────────────────────────────────────────────────────────────┤
-│  TypelessCore (Swift Package)                               │
+│  EchoCore (Swift Package)                               │
 │  ├── ASR/          - Pluggable speech recognition          │
 │  ├── LLMCorrection/ - 3-stage correction pipeline          │
 │  ├── Audio/        - Real-time audio capture               │
 │  ├── Keyboard/     - QWERTY + Pinyin engine               │
 │  └── Settings/     - Secure configuration                  │
 ├─────────────────────────────────────────────────────────────┤
-│  TypelessUI (Swift Package)                                 │
+│  EchoUI (Swift Package)                                 │
 │  └── Shared SwiftUI components                             │
 ├─────────────────────────────────────────────────────────────┤
 │  iOS App + Keyboard Extension                               │
@@ -70,11 +70,11 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typ
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/Typeless.git
-   cd Typeless
+   git clone https://github.com/YOUR_USERNAME/Echo.git
+   cd Echo
    ```
 
-2. **Generate Xcode project** (if `Typeless.xcodeproj` doesn't exist)
+2. **Generate Xcode project** (if `Echo.xcodeproj` doesn't exist)
    ```bash
    # Install XcodeGen if needed
    brew install xcodegen
@@ -84,7 +84,7 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typ
 
 3. **Open in Xcode**
    ```bash
-   open Typeless.xcodeproj
+   open Echo.xcodeproj
    ```
 
 4. **Configure signing**
@@ -93,7 +93,7 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typ
    - Select your development team
 
 5. **Build and run**
-   - Select target: `Typeless`
+   - Select target: `Echo`
    - Select destination: iPhone Simulator or device
    - Press `⌘R`
 
@@ -101,16 +101,16 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Typ
 
 1. Go to **Settings → General → Keyboard → Keyboards**
 2. Tap **Add New Keyboard**
-3. Select **Typeless**
-4. Tap **Typeless** and enable **Allow Full Access** (required for App Groups IPC)
+3. Select **Echo**
+4. Tap **Echo** and enable **Allow Full Access** (required for App Groups IPC)
 
 ### Project Structure
 
 ```
-Typeless/
+Echo/
 ├── Packages/
-│   ├── TypelessCore/           # Core business logic
-│   │   └── Sources/TypelessCore/
+│   ├── EchoCore/           # Core business logic
+│   │   └── Sources/EchoCore/
 │   │       ├── ASR/            # Speech recognition providers
 │   │       ├── LLMCorrection/  # Error correction pipeline
 │   │       ├── Audio/          # Audio capture & processing
@@ -118,10 +118,10 @@ Typeless/
 │   │       ├── Context/        # Conversation memory
 │   │       ├── Settings/       # Configuration & Keychain
 │   │       └── Models/         # Data models
-│   └── TypelessUI/             # Shared UI components
+│   └── EchoUI/             # Shared UI components
 ├── iOS/
-│   ├── TypelessApp/            # Main iOS app
-│   └── TypelessKeyboard/       # Keyboard extension
+│   ├── EchoApp/            # Main iOS app
+│   └── EchoKeyboard/       # Keyboard extension
 ├── macOS/                      # (Planned) macOS input method
 ├── project.yml                 # XcodeGen configuration
 └── README.md
@@ -150,10 +150,10 @@ Typeless/
 
 ```bash
 # Run unit tests (75+ tests)
-cd Packages/TypelessCore && swift test
+cd Packages/EchoCore && swift test
 
 # Build UI package
-cd Packages/TypelessUI && swift build
+cd Packages/EchoUI && swift build
 ```
 
 ### Contributing
@@ -170,9 +170,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ### 简介
 
-**Typeless** 是一款 AI 驱动的语音输入法，支持 iOS 和 macOS 平台。它结合了先进的语音识别技术和大语言模型（LLM）纠错功能，能够提供高度准确的转写结果，尤其擅长处理中文同音字和上下文相关的表达。
+**Echo** 是一款 AI 驱动的语音输入法，支持 iOS 和 macOS 平台。它结合了先进的语音识别技术和大语言模型（LLM）纠错功能，能够提供高度准确的转写结果，尤其擅长处理中文同音字和上下文相关的表达。
 
-灵感来自 [豆包输入法](https://www.doubao.com)，Typeless 采用三阶段纠错流水线，相比传统 ASR 可降低 20-50% 的错误率。
+灵感来自 [豆包输入法](https://www.doubao.com)，Echo 采用三阶段纠错流水线，相比传统 ASR 可降低 20-50% 的错误率。
 
 ### 核心功能
 
@@ -189,18 +189,18 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                        Typeless                             │
+│                        Echo                             │
 ├─────────────────────────────────────────────────────────────┤
 │   [语音输入] → [ASR识别] → [LLM纠错] → [文字输出]           │
 ├─────────────────────────────────────────────────────────────┤
-│   TypelessCore (Swift Package)                              │
+│   EchoCore (Swift Package)                              │
 │   ├── ASR/           - 可插拔语音识别                       │
 │   ├── LLMCorrection/ - 三阶段纠错流水线                     │
 │   ├── Audio/         - 实时音频采集                         │
 │   ├── Keyboard/      - QWERTY + 拼音引擎                   │
 │   └── Settings/      - 安全配置存储                         │
 ├─────────────────────────────────────────────────────────────┤
-│   TypelessUI (Swift Package)                                │
+│   EchoUI (Swift Package)                                │
 │   └── 共享 SwiftUI 组件                                     │
 ├─────────────────────────────────────────────────────────────┤
 │   iOS 应用 + 键盘扩展                                       │
@@ -219,11 +219,11 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/Typeless.git
-   cd Typeless
+   git clone https://github.com/YOUR_USERNAME/Echo.git
+   cd Echo
    ```
 
-2. **生成 Xcode 项目**（如果 `Typeless.xcodeproj` 不存在）
+2. **生成 Xcode 项目**（如果 `Echo.xcodeproj` 不存在）
    ```bash
    brew install xcodegen
    xcodegen generate
@@ -231,14 +231,14 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 3. **在 Xcode 中打开**
    ```bash
-   open Typeless.xcodeproj
+   open Echo.xcodeproj
    ```
 
 4. **配置签名**
    - 选择项目 → Signing & Capabilities → 选择你的开发者团队
 
 5. **构建运行**
-   - 目标: `Typeless`
+   - 目标: `Echo`
    - 设备: iPhone 模拟器或真机
    - 快捷键: `⌘R`
 
@@ -246,8 +246,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 1. 前往 **设置 → 通用 → 键盘 → 键盘**
 2. 点击 **添加新键盘**
-3. 选择 **Typeless**
-4. 点击 **Typeless** 并开启 **允许完全访问权限**
+3. 选择 **Echo**
+4. 点击 **Echo** 并开启 **允许完全访问权限**
 
 ### 开发计划
 
@@ -261,10 +261,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ```bash
 # 运行单元测试（75+ 测试用例）
-cd Packages/TypelessCore && swift test
+cd Packages/EchoCore && swift test
 
 # 构建 UI 包
-cd Packages/TypelessUI && swift build
+cd Packages/EchoUI && swift build
 ```
 
 ### 贡献

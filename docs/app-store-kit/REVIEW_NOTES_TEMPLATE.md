@@ -4,8 +4,8 @@
 
 Hello App Review Team,
 
-Thank you for reviewing Typeless.
-Typeless is a voice input product that records audio only after explicit user action, transcribes speech to text, and inserts text into the currently focused text field.
+Thank you for reviewing Echo.
+Echo is a voice input product that records audio only after explicit user action, transcribes speech to text, and inserts text into the currently focused text field.
 
 ## How to test
 1. Launch the app.

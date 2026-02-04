@@ -3,7 +3,7 @@
 > 注意：此模板用于产品准备，不构成法律意见。上线前建议请律师或合规顾问复核。
 
 ## 1. 我们是谁
-Typeless（以下简称“我们”）提供语音输入与文本转换服务。
+Echo（以下简称“我们”）提供语音输入与文本转换服务。
 
 ## 2. 我们收集哪些数据
 根据你启用的功能，我们可能处理以下数据：
@@ -47,5 +47,5 @@ Typeless（以下简称“我们”）提供语音输入与文本转换服务。
 
 ## 11. 联系我们
 - Email: 使用你在 App Store Connect 中配置的联系邮箱
-- Website: https://github.com/guixiang123124/Typeless
+- Website: https://github.com/guixiang123124/Echo
 - 生效日期: 2026-02-04

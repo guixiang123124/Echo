@@ -13,7 +13,7 @@
 
 ## macOS 提交流程
 1. 在 App Store Connect 创建 macOS App 记录
-2. 绑定 `com.typeless.mac`
+2. 绑定 `com.echo.mac`
 3. Archive macOS Release 包并上传
 4. 选择 build 并填写元数据
 5. 填写权限说明、审核备注（重点讲热键与辅助功能用途）

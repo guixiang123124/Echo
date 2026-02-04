@@ -1,7 +1,7 @@
 # iOS App Store Metadata (Final | English)
 
 ## App Name (<=30)
-Typeless Voice Input
+Echo Voice Input
 
 ## Subtitle (<=30)
 Speak, Transcribe, Insert
@@ -13,9 +13,9 @@ voice input,speech to text,dictation,keyboard,transcription,AI writing,Whisper,p
 Tap to start, tap to stop, then your speech is inserted as text in seconds.
 
 ## Description (Ready to paste)
-Typeless is a voice input app designed for fast, high-frequency text entry.
+Echo is a voice input app designed for fast, high-frequency text entry.
 
-Speak naturally, stop recording, and Typeless converts your speech to text and inserts it into your current text field.
+Speak naturally, stop recording, and Echo converts your speech to text and inserts it into your current text field.
 
 Great for:
 - Messaging

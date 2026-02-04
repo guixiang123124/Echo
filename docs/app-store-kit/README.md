@@ -1,4 +1,4 @@
-# Typeless App Store 上架资料包（统一目录）
+# Echo App Store 上架资料包（统一目录）
 
 你需要的所有说明清单和 Markdown 都在这个文件夹里。
 

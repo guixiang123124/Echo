@@ -1,7 +1,7 @@
 # macOS App Store Metadata (Final | English)
 
 ## App Name (<=30)
-Typeless Voice Input
+Echo Voice Input
 
 ## Subtitle (<=30)
 Global hotkey dictation
@@ -13,7 +13,7 @@ voice input,speech to text,dictation,hotkey,macOS,transcription,Whisper,producti
 Start recording, stop recording, and your speech appears in the active text field.
 
 ## Description (Ready to paste)
-Typeless is a macOS voice input assistant for fast text entry.
+Echo is a macOS voice input assistant for fast text entry.
 
 Place the cursor in any text field, then:
 1. Start recording
