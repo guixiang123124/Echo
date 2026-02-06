@@ -9,10 +9,10 @@
 - Category: Productivity
 
 ## 链接信息
-- Website URL: https://guixiang123124.github.io/Typeless/
-- Support URL: https://guixiang123124.github.io/Typeless/support.html
-- Marketing URL: https://guixiang123124.github.io/Typeless/
-- Privacy Policy URL: https://guixiang123124.github.io/Typeless/privacy.html
+- Website URL: https://guixiang123124.github.io/Echo/
+- Support URL: https://guixiang123124.github.io/Echo/support.html
+- Marketing URL: https://guixiang123124.github.io/Echo/
+- Privacy Policy URL: https://guixiang123124.github.io/Echo/privacy.html
 
 ## 审核联系信息建议
 - Name: Xianggui

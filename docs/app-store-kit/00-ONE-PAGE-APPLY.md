@@ -11,21 +11,21 @@
 - iOS Keyboard Extension Bundle ID: com.xianggui.echo.keyboard
 - App Group ID: group.com.xianggui.echo.shared
 - Support Email: support@fashionflow.ai
-- Website URL: https://guixiang123124.github.io/Typeless/
-- Support URL: https://guixiang123124.github.io/Typeless/support.html
-- Marketing URL: https://guixiang123124.github.io/Typeless/
-- Privacy Policy URL: https://guixiang123124.github.io/Typeless/privacy.html
+- Website URL: https://guixiang123124.github.io/Echo/
+- Support URL: https://guixiang123124.github.io/Echo/support.html
+- Marketing URL: https://guixiang123124.github.io/Echo/
+- Privacy Policy URL: https://guixiang123124.github.io/Echo/privacy.html
 
 ## 1. 先开通 GitHub Pages（用于官网/隐私/支持链接）
-1. 打开 GitHub 仓库 `guixiang123124/Typeless`
+1. 打开 GitHub 仓库 `guixiang123124/Echo`
 2. 进入 `Settings` → `Pages`
 3. Source 选择 `Deploy from a branch`
 4. Branch 选 `main`，Folder 选 `/docs`
 5. 保存后等待 1~3 分钟
 6. 访问以下地址确认可打开：
-   - https://guixiang123124.github.io/Typeless/
-   - https://guixiang123124.github.io/Typeless/privacy.html
-   - https://guixiang123124.github.io/Typeless/support.html
+   - https://guixiang123124.github.io/Echo/
+   - https://guixiang123124.github.io/Echo/privacy.html
+   - https://guixiang123124.github.io/Echo/support.html
 
 ## 2. Apple Developer Program（必须本人完成）
 1. 确认 Apple ID 已开启 2FA
@@ -75,4 +75,3 @@
 - 支付 Apple Developer Program 年费
 - App Store Connect 税务与银行信息
 - 最终点击“提交审核”
-

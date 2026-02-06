@@ -47,5 +47,5 @@ Echo（以下简称“我们”）提供语音输入与文本转换服务。
 
 ## 11. 联系我们
 - Email: support@fashionflow.ai
-- Website: https://guixiang123124.github.io/Typeless/
+- Website: https://guixiang123124.github.io/Echo/
 - 生效日期: 2026-02-06
