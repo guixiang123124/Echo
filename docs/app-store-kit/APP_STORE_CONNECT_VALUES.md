@@ -5,7 +5,7 @@
 - App Name (EN): Echo Voice Input
 - iOS Bundle ID: com.xianggui.echo.app
 - macOS Bundle ID: com.echo.mac
-- iOS Keyboard Extension Bundle ID: com.xianggui.echo.keyboard
+- iOS Keyboard Extension Bundle ID: com.xianggui.echo.app.keyboard
 - Category: Productivity
 
 ## 链接信息

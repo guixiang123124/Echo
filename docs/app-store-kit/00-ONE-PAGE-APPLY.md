@@ -8,7 +8,7 @@
 - Category: Productivity
 - iOS Bundle ID: com.xianggui.echo.app
 - macOS Bundle ID: com.echo.mac
-- iOS Keyboard Extension Bundle ID: com.xianggui.echo.keyboard
+- iOS Keyboard Extension Bundle ID: com.xianggui.echo.app.keyboard
 - App Group ID: group.com.xianggui.echo.shared
 - Support Email: support@fashionflow.ai
 - Website URL: https://guixiang123124.github.io/Echo/
@@ -36,7 +36,7 @@
 1. 在 Developer Portal 创建 App ID（iOS）：
    - Bundle ID: `com.xianggui.echo.app`
 2. 创建 App ID（Keyboard Extension）：
-   - Bundle ID: `com.xianggui.echo.keyboard`
+   - Bundle ID: `com.xianggui.echo.app.keyboard`
 3. 创建 App Group：
    - `group.com.xianggui.echo.shared`
 
@@ -47,7 +47,7 @@
    - Team 选择你的开发者 Team
    - Capabilities 勾选 `App Groups`，选择 `group.com.xianggui.echo.shared`
 3. 选择 Target `EchoKeyboard`：
-   - Bundle Identifier = `com.xianggui.echo.keyboard`
+   - Bundle Identifier = `com.xianggui.echo.app.keyboard`
    - Team 同上
    - App Groups 同上
 4. 选择 macOS Target（如 EchoMac）：
