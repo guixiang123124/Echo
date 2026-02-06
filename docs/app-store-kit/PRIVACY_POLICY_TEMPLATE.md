@@ -46,6 +46,6 @@ Echo（以下简称“我们”）提供语音输入与文本转换服务。
 我们可能更新本政策，并在产品或官网公布最新版本。
 
 ## 11. 联系我们
-- Email: 使用你在 App Store Connect 中配置的联系邮箱
-- Website: https://github.com/guixiang123124/Echo
-- 生效日期: 2026-02-04
+- Email: support@fashionflow.ai
+- Website: https://guixiang123124.github.io/Typeless/
+- 生效日期: 2026-02-06

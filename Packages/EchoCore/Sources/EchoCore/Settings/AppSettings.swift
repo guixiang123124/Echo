@@ -2,7 +2,7 @@ import Foundation
 
 /// Central app settings manager using UserDefaults with App Groups support
 public final class AppSettings: @unchecked Sendable {
-    public static let appGroupIdentifier = "group.com.echo.shared"
+    public static let appGroupIdentifier = "group.com.xianggui.echo.shared"
 
     private let defaults: UserDefaults
 
@@ -32,6 +32,32 @@ public final class AppSettings: @unchecked Sendable {
     public var correctionEnabled: Bool {
         get { defaults.bool(forKey: Keys.correctionEnabled, default: true) }
         set { defaults.set(newValue, forKey: Keys.correctionEnabled) }
+    }
+
+    /// Allow homophone fixes during Auto Edit
+    public var correctionHomophonesEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionHomophones, default: true) }
+        set { defaults.set(newValue, forKey: Keys.correctionHomophones) }
+    }
+
+    /// Allow punctuation fixes during Auto Edit
+    public var correctionPunctuationEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionPunctuation, default: true) }
+        set { defaults.set(newValue, forKey: Keys.correctionPunctuation) }
+    }
+
+    /// Allow formatting/segmentation fixes during Auto Edit
+    public var correctionFormattingEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionFormatting, default: true) }
+        set { defaults.set(newValue, forKey: Keys.correctionFormatting) }
+    }
+
+    public var correctionOptions: CorrectionOptions {
+        CorrectionOptions(
+            enableHomophones: correctionHomophonesEnabled,
+            enablePunctuation: correctionPunctuationEnabled,
+            enableFormatting: correctionFormattingEnabled
+        )
     }
 
     /// Currently selected correction provider ID
@@ -80,6 +106,9 @@ public final class AppSettings: @unchecked Sendable {
         static let preferStreaming = "echo.asr.streaming"
         static let correctionEnabled = "echo.correction.enabled"
         static let selectedCorrectionProvider = "echo.correction.selected"
+        static let correctionHomophones = "echo.correction.homophones"
+        static let correctionPunctuation = "echo.correction.punctuation"
+        static let correctionFormatting = "echo.correction.formatting"
         static let defaultInputMode = "echo.keyboard.mode"
         static let hapticFeedback = "echo.keyboard.haptic"
         static let autoCapitalization = "echo.keyboard.autocap"

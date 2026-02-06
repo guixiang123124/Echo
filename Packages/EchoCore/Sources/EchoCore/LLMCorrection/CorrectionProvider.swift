@@ -19,11 +19,13 @@ public protocol CorrectionProvider: Sendable {
     ///   - rawText: The raw transcription from ASR
     ///   - context: Recent conversation context for better correction
     ///   - confidence: Per-word confidence scores from ASR
+    ///   - options: Which correction types are allowed
     /// - Returns: Corrected text with details of changes made
     func correct(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) async throws -> CorrectionResult
 }
 

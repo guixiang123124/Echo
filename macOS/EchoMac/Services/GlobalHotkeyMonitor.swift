@@ -156,7 +156,7 @@ public final class GlobalHotkeyMonitor: ObservableObject {
             handleModifierKey(
                 flags: flags,
                 keyCode: keyCode,
-                targetKeyCode: kVK_RightOption,
+                targetKeyCodes: [kVK_RightOption, kVK_Option],
                 flagToCheck: .maskAlternate
             )
 
@@ -164,7 +164,7 @@ public final class GlobalHotkeyMonitor: ObservableObject {
             handleModifierKey(
                 flags: flags,
                 keyCode: keyCode,
-                targetKeyCode: kVK_Option,
+                targetKeyCodes: [kVK_Option, kVK_RightOption],
                 flagToCheck: .maskAlternate
             )
 
@@ -172,7 +172,7 @@ public final class GlobalHotkeyMonitor: ObservableObject {
             handleModifierKey(
                 flags: flags,
                 keyCode: keyCode,
-                targetKeyCode: kVK_RightCommand,
+                targetKeyCodes: [kVK_RightCommand, kVK_Command],
                 flagToCheck: .maskCommand
             )
 
@@ -219,11 +219,17 @@ public final class GlobalHotkeyMonitor: ObservableObject {
     private func handleModifierKey(
         flags: CGEventFlags,
         keyCode: Int64,
-        targetKeyCode: Int,
+        targetKeyCodes: [Int],
         flagToCheck: CGEventFlags
     ) {
-        // Check if this is the specific key we want
-        guard keyCode == targetKeyCode else { return }
+        if currentHotkeyPressed, !flags.contains(flagToCheck) {
+            currentHotkeyPressed = false
+            handler?(.released)
+            return
+        }
+
+        // Check if this is a target key we want
+        guard targetKeyCodes.contains(Int(keyCode)) else { return }
 
         let isPressed = flags.contains(flagToCheck)
 

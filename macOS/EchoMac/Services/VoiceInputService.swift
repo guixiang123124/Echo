@@ -28,8 +28,6 @@ public final class VoiceInputService: ObservableObject {
     private var audioUpdateTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
     private var activeProvider: (any ASRProvider)?
-    private var cachedWhisperAPIKey: String?
-    private var cachedCorrectionAPIKeys: [String: String] = [:]
 
     // MARK: - Initialization
 
@@ -160,7 +158,8 @@ public final class VoiceInputService: ObservableObject {
                     let pipeline = CorrectionPipeline(provider: correctionProvider)
                     let correction = try await pipeline.process(
                         transcription: transcription,
-                        context: context
+                        context: context,
+                        options: settings.autoEditOptions
                     )
                     result = correction.correctedText
                 } catch {
@@ -255,6 +254,7 @@ public final class VoiceInputService: ObservableObject {
     }
 
     // MARK: - Audio Level Monitoring
+    private var smoothedLevel: CGFloat = 0
 
     private func startAudioLevelMonitoring() {
         audioUpdateTask = Task {
@@ -271,6 +271,7 @@ public final class VoiceInputService: ObservableObject {
     private func stopAudioLevelMonitoring() {
         audioUpdateTask?.cancel()
         audioUpdateTask = nil
+        smoothedLevel = 0
         audioLevels = Array(repeating: 0, count: 30)
     }
 
@@ -297,9 +298,11 @@ public final class VoiceInputService: ObservableObject {
     }
 
     private func updateAudioLevels(with newLevel: CGFloat) {
+        let alpha: CGFloat = 0.22
+        smoothedLevel = (smoothedLevel * (1 - alpha)) + (newLevel * alpha)
         var levels = audioLevels
         levels.removeFirst()
-        levels.append(newLevel)
+        levels.append(smoothedLevel)
         audioLevels = levels
     }
 
@@ -312,19 +315,35 @@ public final class VoiceInputService: ObservableObject {
     // MARK: - Provider Resolution
 
     private func resolveASRProvider() -> (any ASRProvider)? {
-        if cachedWhisperAPIKey == nil {
-            cachedWhisperAPIKey = try? keyStore.retrieve(for: "openai_whisper")
+        switch settings.selectedASRProvider {
+        case "volcano":
+            guard let appId = try? keyStore.retrieve(for: "volcano_app_id"),
+                  let accessKey = try? keyStore.retrieve(for: "volcano_access_key"),
+                  !appId.isEmpty,
+                  !accessKey.isEmpty else {
+                return nil
+            }
+            return VolcanoASRProvider(appId: appId, accessKey: accessKey)
+        case "aliyun":
+            guard let appKey = try? keyStore.retrieve(for: "aliyun_app_key"),
+                  let token = try? keyStore.retrieve(for: "aliyun_token"),
+                  !appKey.isEmpty,
+                  !token.isEmpty else {
+                return nil
+            }
+            return AliyunASRProvider(appKey: appKey, token: token)
+        default:
+            guard let apiKey = try? keyStore.retrieve(for: "openai_whisper"),
+                  !apiKey.isEmpty else {
+                return nil
+            }
+            return OpenAIWhisperProvider(
+                keyStore: keyStore,
+                language: whisperLanguageCode(from: settings.asrLanguage),
+                apiKey: apiKey,
+                model: settings.openAITranscriptionModel
+            )
         }
-        guard let apiKey = cachedWhisperAPIKey, !apiKey.isEmpty else {
-            return nil
-        }
-
-        let provider = OpenAIWhisperProvider(
-            keyStore: keyStore,
-            language: whisperLanguageCode(from: settings.asrLanguage),
-            apiKey: apiKey
-        )
-        return provider
     }
 
     private func whisperLanguageCode(from setting: String) -> String? {
@@ -346,17 +365,16 @@ public final class VoiceInputService: ObservableObject {
         let provider: any CorrectionProvider
         switch settings.selectedCorrectionProvider {
         case "openai_gpt":
-            if cachedCorrectionAPIKeys["openai_gpt"] == nil {
-                cachedCorrectionAPIKeys["openai_gpt"] = try? keyStore.retrieve(for: "openai_gpt")
-            }
             provider = OpenAICorrectionProvider(
                 keyStore: keyStore,
-                apiKey: cachedCorrectionAPIKeys["openai_gpt"]
+                apiKey: try? keyStore.retrieve(for: "openai_gpt")
             )
         case "claude":
             provider = ClaudeCorrectionProvider(keyStore: keyStore)
         case "doubao":
             provider = DoubaoCorrectionProvider(keyStore: keyStore)
+        case "qwen":
+            provider = QwenCorrectionProvider(keyStore: keyStore)
         default:
             return nil
         }
@@ -379,7 +397,7 @@ public enum VoiceInputError: LocalizedError {
         case .permissionDenied(let reason):
             return "Permission denied: \(reason)"
         case .noASRProvider:
-            return "OpenAI Whisper is not configured. Add your API key in Settings."
+            return "ASR provider is not configured. Add your API credentials in Settings."
         case .recordingFailed:
             return "Failed to record audio"
         case .transcriptionFailed:

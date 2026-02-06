@@ -9,21 +9,24 @@
 - Linked to user: No（若无账户体系）
 - Used for tracking: No
 - Purpose: App Functionality
+ - Notes: 用于云端 ASR 转写
 
 ### User Content（转写文本）
 - Collected: Yes
 - Linked to user: No（若无账户体系）
 - Used for tracking: No
 - Purpose: App Functionality
+ - Notes: 可用于自动润色（如启用 AI Edit）
 
 ### Diagnostics（错误日志）
-- Collected: Optional（若仅本地则可填 No）
+- Collected: No（若仅本地则可填 No）
 - Linked to user: No
 - Used for tracking: No
 - Purpose: Diagnostics
 
 ## Third-Party Processing
 - If using cloud ASR/LLM providers, declare external processing in privacy policy.
+ - 本应用包含云端 ASR 与可选 LLM 处理，需在隐私政策中披露。
 
 ## Tracking
 - Tracking: No（前提是没有广告追踪或跨 App 追踪）

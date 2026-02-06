@@ -1,21 +1,26 @@
 import Foundation
 
-/// LLM correction provider using Anthropic Claude API
-public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Sendable {
-    public let id = "claude"
-    public let displayName = "Claude"
+/// LLM correction provider using Alibaba Cloud Qwen (OpenAI-compatible) API
+public final class QwenCorrectionProvider: CorrectionProvider, @unchecked Sendable {
+    public let id = "qwen"
+    public let displayName = "Alibaba Qwen"
     public let requiresNetwork = true
 
     private let keyStore: SecureKeyStore
-    private let apiEndpoint = "https://api.anthropic.com/v1/messages"
-    private let model = "claude-sonnet-4-20250514"
+    private let apiKeyOverride: String?
+    private let apiEndpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    private let model = "qwen-plus"
 
-    public init(keyStore: SecureKeyStore = SecureKeyStore()) {
+    public init(keyStore: SecureKeyStore = SecureKeyStore(), apiKey: String? = nil) {
         self.keyStore = keyStore
+        self.apiKeyOverride = apiKey
     }
 
     public var isAvailable: Bool {
-        keyStore.hasKey(for: id)
+        if let apiKeyOverride, !apiKeyOverride.isEmpty {
+            return true
+        }
+        return keyStore.hasKey(for: id)
     }
 
     public func correct(
@@ -24,7 +29,7 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
         confidence: [WordConfidence],
         options: CorrectionOptions
     ) async throws -> CorrectionResult {
-        guard let apiKey = try keyStore.retrieve(for: id) else {
+        guard let apiKey = try (apiKeyOverride ?? keyStore.retrieve(for: id)) else {
             throw CorrectionError.apiKeyMissing
         }
 
@@ -32,22 +37,25 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
 
         let requestBody: [String: Any] = [
             "model": model,
-            "max_tokens": 1024,
             "messages": [
+                [
+                    "role": "system",
+                    "content": systemPrompt(options: options)
+                ],
                 [
                     "role": "user",
                     "content": prompt
                 ]
             ],
-            "system": systemPrompt(options: options)
+            "temperature": 0.1,
+            "max_tokens": 1024
         ]
 
         let jsonData = try JSONSerialization.data(withJSONObject: requestBody)
 
         var request = URLRequest(url: URL(string: apiEndpoint)!)
         request.httpMethod = "POST"
-        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = jsonData
         request.timeoutInterval = 10
@@ -67,7 +75,7 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
 
     private func systemPrompt(options: CorrectionOptions) -> String {
         var prompt = """
-        You are a speech-to-text error correction assistant. Fix transcription errors while preserving meaning and style.
+        You are a speech-to-text error correction assistant. Your job is to fix transcription errors while preserving meaning and style.
 
         Rules:
         1. Only fix clear errors. Do not change meaning or style.
@@ -122,13 +130,14 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
 
     private func parseResponse(data: Data, originalText: String) throws -> CorrectionResult {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let firstBlock = content.first,
-              let text = firstBlock["text"] as? String else {
+              let choices = json["choices"] as? [[String: Any]],
+              let firstChoice = choices.first,
+              let message = firstChoice["message"] as? [String: Any],
+              let correctedText = message["content"] as? String else {
             throw CorrectionError.correctionFailed("Failed to parse API response")
         }
 
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return CorrectionResult(
             originalText: originalText,

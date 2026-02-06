@@ -32,6 +32,22 @@ struct EchoMacApp: App {
                 .environmentObject(settings)
                 .environmentObject(diagnostics)
         }
+
+        Window("Echo Home", id: "echo-home") {
+            EchoHomeWindowView(settings: settings)
+                .environmentObject(appState)
+                .environmentObject(permissionManager)
+                .environmentObject(settings)
+                .environmentObject(diagnostics)
+        }
+
+        Window("Echo History", id: "echo-history") {
+            RecordingHistoryView()
+                .environmentObject(appState)
+                .environmentObject(permissionManager)
+                .environmentObject(settings)
+                .environmentObject(diagnostics)
+        }
     }
 
     /// Menu bar icon that changes based on recording state

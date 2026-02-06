@@ -10,6 +10,8 @@ struct MenuBarView: View {
     @EnvironmentObject var diagnostics: DiagnosticsState
 
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     @State private var testResult: String = ""
     @State private var isTestingMic: Bool = false
@@ -69,7 +71,7 @@ struct MenuBarView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(appState.recordingState.statusMessage)
                         .font(.headline)
-                    Text(settings.hotkeyType.shortDescription)
+                    Text(settings.hotkeyHint)
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -415,14 +417,14 @@ struct MenuBarView: View {
                 get: { settings.correctionEnabled },
                 set: { settings.correctionEnabled = $0 }
             )) {
-                Label("AI Correction", systemImage: "wand.and.stars")
+                Label("Auto Edit", systemImage: "wand.and.stars")
             }
             .toggleStyle(.switch)
             .controlSize(.small)
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
 
-            Text(settings.correctionEnabled ? "Mode: Whisper + Rewrite" : "Mode: Whisper only")
+            Text(settings.correctionEnabled ? "Mode: Whisper + Auto Edit" : "Mode: Whisper only")
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .padding(.horizontal, 16)
@@ -540,7 +542,10 @@ struct MenuBarView: View {
             }
 
             Button {
-                (NSApplication.shared.delegate as? AppDelegate)?.showHomeWindow()
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    openHomeWindow()
+                }
             } label: {
                 HStack {
                     Image(systemName: "house")
@@ -554,7 +559,10 @@ struct MenuBarView: View {
 
             // Settings button
             Button {
-                (NSApplication.shared.delegate as? AppDelegate)?.showHistoryWindow()
+                dismiss()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    openHistoryWindow()
+                }
             } label: {
                 HStack {
                     Image(systemName: "clock.arrow.circlepath")
@@ -568,6 +576,7 @@ struct MenuBarView: View {
 
             // Settings button
             Button {
+                dismiss()
                 openSettings()
             } label: {
                 HStack {
@@ -602,5 +611,21 @@ struct MenuBarView: View {
             .buttonStyle(.plain)
             .keyboardShortcut("q", modifiers: .command)
         }
+    }
+
+    private func openHomeWindow() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: "echo-home")
+    }
+
+    private func openHistoryWindow() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        openWindow(id: "echo-history")
     }
 }

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private let diagnostics = DiagnosticsState.shared
     private var lastExternalApp: NSRunningApplication?
+    private var silenceMonitorTask: Task<Void, Never>?
 
     // Services
     private var voiceInputService: VoiceInputService?
@@ -122,10 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self else { return }
             switch event {
             case .pressed:
-                self.diagnostics.recordHotkeyEvent("Pressed")
-                self.toggleRecordingFromHotkey()
+                self.handleHotkeyEvent(.pressed)
             case .released:
-                self.diagnostics.recordHotkeyEvent("Released")
+                self.handleHotkeyEvent(.released)
             }
         }
     }
@@ -143,7 +143,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         captureInsertionTarget()
 
         let appState = AppState.shared
-        guard appState.recordingState == .idle else { return }
+        switch appState.recordingState {
+        case .idle, .error:
+            break
+        default:
+            return
+        }
 
         Task { @MainActor in
             // Update state
@@ -162,10 +167,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Start recording
             do {
                 try await voiceInputService?.startRecording()
+                startSilenceMonitorIfNeeded()
             } catch {
                 print("❌ Failed to start recording: \(error)")
                 diagnostics.recordError(error.localizedDescription)
                 appState.recordingState = .error(error.localizedDescription)
+                // Reset after a short delay so the UI isn't stuck in error state
+                Task {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    await MainActor.run {
+                        appState.recordingState = .idle
+                        hideRecordingPanel()
+                    }
+                }
             }
         }
     }
@@ -173,6 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func hotkeyReleased() {
         print("🎤 Hotkey released - stopping recording")
         diagnostics.log("Recording stop requested")
+        stopSilenceMonitor()
 
         let appState = AppState.shared
         guard appState.recordingState == .listening else { return }
@@ -259,6 +274,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private func handleHotkeyEvent(_ event: GlobalHotkeyMonitor.HotkeyEvent) {
+        diagnostics.recordHotkeyEvent(event == .pressed ? "Pressed" : "Released")
+
+        if settings.hotkeyType == .doubleCommand {
+            if event == .pressed {
+                hotkeyPressed()
+            } else {
+                hotkeyReleased()
+            }
+            return
+        }
+
+        switch settings.effectiveRecordingMode {
+        case .holdToTalk:
+            if event == .pressed {
+                hotkeyPressed()
+            } else {
+                hotkeyReleased()
+            }
+        case .toggleToTalk, .handsFree:
+            if event == .pressed {
+                toggleRecordingFromHotkey()
+            }
+        }
+    }
+
+    // MARK: - Hands-Free Silence Monitor
+
+    private func startSilenceMonitorIfNeeded() {
+        stopSilenceMonitor()
+
+        guard settings.effectiveRecordingMode == .handsFree,
+              settings.handsFreeAutoStopEnabled else {
+            return
+        }
+
+        silenceMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            let silenceDuration = settings.handsFreeSilenceDuration
+            let threshold = settings.handsFreeSilenceThreshold
+            let minimumDuration = settings.handsFreeMinimumDuration
+            let startTime = Date()
+            var lastHeard = Date()
+            let gracePeriod: TimeInterval = 0.4
+
+            while !Task.isCancelled {
+                if await MainActor.run(body: { AppState.shared.recordingState }) != .listening {
+                    return
+                }
+
+                let levels = await MainActor.run { self.voiceInputService?.audioLevels ?? [] }
+                let recent = levels.suffix(6)
+                let avg = recent.reduce(0, +) / CGFloat(max(recent.count, 1))
+
+                if Double(avg) > threshold {
+                    lastHeard = Date()
+                }
+
+                let elapsed = Date().timeIntervalSince(startTime)
+                if elapsed > gracePeriod,
+                   elapsed >= minimumDuration,
+                   Date().timeIntervalSince(lastHeard) >= silenceDuration {
+                    await MainActor.run {
+                        self.diagnostics.log("Auto-stop: silence \(String(format: "%.1f", silenceDuration))s")
+                        if self.settings.playSoundEffects {
+                            NSSound(named: "Ping")?.play()
+                        }
+                        self.hotkeyReleased()
+                    }
+                    return
+                }
+
+                try? await Task.sleep(for: .milliseconds(120))
+            }
+        }
+    }
+
+    private func stopSilenceMonitor() {
+        silenceMonitorTask?.cancel()
+        silenceMonitorTask = nil
+    }
+
     // MARK: - Focus Management
 
     private func captureInsertionTarget() {
@@ -297,10 +394,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Position at bottom-center so the indicator stays close to where users type.
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
-            let windowWidth: CGFloat = 420
-            let windowHeight: CGFloat = 108
+            let windowWidth: CGFloat = 240
+            let windowHeight: CGFloat = 44
             let x = screenFrame.midX - windowWidth / 2
-            let y = screenFrame.minY + 44
+            let y = screenFrame.minY + 56
             window.setFrame(NSRect(x: x, y: y, width: windowWidth, height: windowHeight), display: true)
         }
 
@@ -316,8 +413,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - History Window
 
     func showHomeWindow() {
+        ensureAppVisibleForWindow()
         if let window = homeWindow {
+            window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             NSApp.activate(ignoringOtherApps: true)
             return
         }
@@ -333,15 +433,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.minSize = NSSize(width: 920, height: 620)
         window.isReleasedWhenClosed = false
         window.delegate = self
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window.tabbingMode = .disallowed
 
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         homeWindow = window
     }
 
     func showHistoryWindow() {
+        ensureAppVisibleForWindow()
         if let window = historyWindow {
             window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
             return
         }
 
@@ -357,6 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
 
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
         historyWindow = window
     }
 
@@ -367,6 +473,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else if window == historyWindow {
             historyWindow = nil
         }
+        restoreMenuBarOnlyIfNeeded()
+    }
+
+    // MARK: - Activation Policy
+
+    private func ensureAppVisibleForWindow() {
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func restoreMenuBarOnlyIfNeeded() {
+        guard homeWindow == nil, historyWindow == nil else { return }
+        if NSApp.activationPolicy() != .accessory {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
 
@@ -374,7 +497,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 struct RecordingPillView: View {
     @ObservedObject var appState: AppState
-    @State private var spin = false
     @State private var shimmer = false
 
     private var isProcessing: Bool {
@@ -388,61 +510,21 @@ struct RecordingPillView: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 36, style: .continuous)
+            Capsule()
                 .fill(backgroundGradient)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 36, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.24), lineWidth: 1)
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.28), radius: 22, y: 10)
+                .shadow(color: Color.black.opacity(0.22), radius: 16, y: 7)
 
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: iconName)
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
-                        .rotationEffect(.degrees(isProcessing && spin ? 360 : 0))
-                        .animation(
-                            isProcessing
-                                ? .linear(duration: 1.0).repeatForever(autoreverses: false)
-                                : .default,
-                            value: spin
-                        )
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(titleText)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white)
-
-                    if appState.recordingState == .listening {
-                        PillWaveformView(levels: appState.audioLevels)
-                            .frame(height: 20)
-                    } else if isProcessing {
-                        processingLine
-                    } else if case .error(let message) = appState.recordingState {
-                        Text(message)
-                            .font(.system(size: 12))
-                            .lineLimit(1)
-                            .foregroundStyle(Color.white.opacity(0.84))
-                    } else {
-                        Text("Ready when you are")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.white.opacity(0.84))
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            content
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
         }
-        .frame(width: 420, height: 108)
+        .frame(width: 240, height: 44)
+        .clipShape(Capsule())
         .onAppear {
-            spin = true
             shimmer = true
         }
     }
@@ -452,9 +534,8 @@ struct RecordingPillView: View {
         case .listening:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.10, green: 0.35, blue: 0.92),
-                    Color(red: 0.17, green: 0.65, blue: 0.88),
-                    Color(red: 0.24, green: 0.76, blue: 0.56)
+                    Color(red: 0.12, green: 0.14, blue: 0.18),
+                    Color(red: 0.10, green: 0.16, blue: 0.22)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -462,9 +543,8 @@ struct RecordingPillView: View {
         case .transcribing, .correcting, .inserting:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.19, green: 0.18, blue: 0.43),
-                    Color(red: 0.37, green: 0.22, blue: 0.66),
-                    Color(red: 0.58, green: 0.33, blue: 0.78)
+                    Color(red: 0.12, green: 0.12, blue: 0.14),
+                    Color(red: 0.08, green: 0.08, blue: 0.10)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -481,8 +561,8 @@ struct RecordingPillView: View {
         case .idle:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.17, green: 0.28, blue: 0.45),
-                    Color(red: 0.16, green: 0.44, blue: 0.56)
+                    Color(red: 0.14, green: 0.14, blue: 0.16),
+                    Color(red: 0.12, green: 0.12, blue: 0.14)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -490,84 +570,176 @@ struct RecordingPillView: View {
         }
     }
 
-    private var titleText: String {
-        switch appState.recordingState {
-        case .listening:
-            return "Listening"
-        case .transcribing, .correcting, .inserting:
-            return "Transcribe & Rewrite"
-        case .error:
-            return "Couldn’t Process Audio"
-        case .idle:
-            return "Ready"
+    private var content: some View {
+        Group {
+            switch appState.recordingState {
+            case .listening:
+                ListeningPillContent(levels: appState.audioLevels)
+            case .transcribing, .correcting, .inserting:
+                ThinkingSweepView(text: "Thinking", isAnimating: shimmer)
+            case .error(let message):
+                Text(message)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .foregroundStyle(Color.white.opacity(0.9))
+            case .idle:
+                Text("Ready")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.9))
+            }
         }
     }
+}
 
-    private var iconName: String {
-        switch appState.recordingState {
-        case .listening:
-            return "mic.fill"
-        case .transcribing, .correcting, .inserting:
-            return "arrow.triangle.2.circlepath"
-        case .error:
-            return "exclamationmark.triangle.fill"
-        case .idle:
-            return "mic"
+struct ListeningPillContent: View {
+    let levels: [CGFloat]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SymmetricBarsView(levels: levels, reverseWeights: false)
+                .frame(width: 60, height: 18)
+            Text("Listening")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(0.92))
+            SymmetricBarsView(levels: levels, reverseWeights: true)
+                .frame(width: 60, height: 18)
         }
     }
+}
 
-    private var processingLine: some View {
+struct SymmetricBarsView: View {
+    let levels: [CGFloat]
+    let reverseWeights: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            let count = 8
+            let barWidth: CGFloat = 4
+            let spacing: CGFloat = 3
+            let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
+            let startX = (size.width - totalWidth) / 2
+            let midY = size.height / 2
+            let maxHeight = size.height
+
+            let samples = normalizedLevels(count: count)
+            let gradient = Gradient(colors: [Color.cyan.opacity(0.9), Color.blue.opacity(0.85)])
+
+            for index in 0..<count {
+                let level = samples[index]
+                let progress = CGFloat(index) / CGFloat(max(1, count - 1))
+                let weight = reverseWeights ? (0.35 + 0.65 * (1 - progress)) : (0.35 + 0.65 * progress)
+                let height = max(4, level * weight * maxHeight)
+                let x = startX + CGFloat(index) * (barWidth + spacing)
+                let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
+                let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
+                context.fill(path, with: .linearGradient(gradient, startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.minX, y: rect.maxY)))
+            }
+        }
+        .drawingGroup()
+    }
+
+    private func normalizedLevels(count: Int) -> [CGFloat] {
+        let trimmed = Array(levels.suffix(count))
+        if trimmed.count >= count {
+            return trimmed.map { max(0.08, min($0, 1.0)) }
+        }
+        let padding = Array(repeating: CGFloat(0.08), count: count - trimmed.count)
+        return padding + trimmed.map { max(0.08, min($0, 1.0)) }
+    }
+}
+
+struct ThinkingSweepView: View {
+    let text: String
+    let isAnimating: Bool
+    @State private var sweep = false
+
+    var body: some View {
         GeometryReader { geometry in
-            ZStack(alignment: .leading) {
+            ZStack {
                 Capsule()
-                    .fill(Color.white.opacity(0.15))
-                    .frame(height: 9)
+                    .fill(Color.white.opacity(0.05))
 
                 Capsule()
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.15),
-                                Color.white.opacity(0.95),
-                                Color.white.opacity(0.15)
+                                Color.white.opacity(0.05),
+                                Color.white.opacity(0.35),
+                                Color.white.opacity(0.05)
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .frame(width: geometry.size.width * 0.42, height: 9)
-                    .offset(x: shimmer ? geometry.size.width * 0.55 : -geometry.size.width * 0.2)
+                    .frame(width: geometry.size.width * 0.5)
+                    .offset(x: sweep ? geometry.size.width : -geometry.size.width * 0.6)
                     .animation(
-                        .easeInOut(duration: 1.15).repeatForever(autoreverses: false),
-                        value: shimmer
+                        .linear(duration: 1.15).repeatForever(autoreverses: false),
+                        value: sweep
                     )
+
+                HStack(spacing: 6) {
+                    ThinkingDotsView()
+                        .frame(width: 28, height: 10)
+                    Text(text)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                    ThinkingDotsView()
+                        .frame(width: 28, height: 10)
+                }
             }
         }
-        .frame(height: 9)
+        .frame(height: 22)
+        .onAppear { sweep = isAnimating }
     }
 }
 
-struct PillWaveformView: View {
-    let levels: [CGFloat]
-
+struct ThinkingDotsView: View {
     var body: some View {
-        GeometryReader { geometry in
-            let samples = levels.suffix(18)
-            HStack(spacing: 3) {
-                ForEach(Array(samples.enumerated()), id: \.offset) { _, level in
-                    Capsule()
-                        .fill(Color.white.opacity(0.94))
-                        .frame(width: 4, height: barHeight(for: level, maxHeight: geometry.size.height))
+        TimelineView(.animation) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in
+                let count = 4
+                let spacing: CGFloat = 4
+                let radius: CGFloat = 2.2
+                let totalWidth = CGFloat(count) * radius * 2 + CGFloat(count - 1) * spacing
+                let startX = (size.width - totalWidth) / 2
+                let centerY = size.height / 2
+
+                for index in 0..<count {
+                    let phase = time * 3 + Double(index) * 0.6
+                    let pulse = 0.6 + 0.4 * ((sin(phase) + 1) / 2)
+                    let alpha = 0.35 + 0.55 * ((sin(phase) + 1) / 2)
+                    let r = radius * pulse
+                    let x = startX + CGFloat(index) * (radius * 2 + spacing) + radius - r
+                    let rect = CGRect(x: x, y: centerY - r, width: r * 2, height: r * 2)
+                    context.fill(Path(ellipseIn: rect), with: .color(Color.cyan.opacity(alpha)))
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .animation(.easeInOut(duration: 0.08), value: levels)
         }
     }
+}
 
-    private func barHeight(for level: CGFloat, maxHeight: CGFloat) -> CGFloat {
-        let normalized = max(0.08, min(level, 1.0))
-        return max(4, normalized * maxHeight)
+struct WaveformLineView: Shape {
+    var samples: [CGFloat]
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard samples.count > 1 else { return path }
+
+        let midY = rect.midY
+        let stepX = rect.width / CGFloat(samples.count - 1)
+
+        path.move(to: CGPoint(x: rect.minX, y: midY))
+
+        for (index, level) in samples.enumerated() {
+            let x = rect.minX + CGFloat(index) * stepX
+            let amplitude = max(0.05, min(level, 1.0)) * rect.height * 0.45
+            let y = midY - amplitude
+            path.addLine(to: CGPoint(x: x, y: y))
+        }
+
+        return path
     }
 }
 
@@ -609,7 +781,7 @@ private final class HomeDashboardViewModel: ObservableObject {
     @Published var isLoading = false
 
     var totalMinutes: Int {
-        Int(entries.reduce(0) { $0 + $1.duration } / 60.0)
+        max(0, Int(entries.reduce(0) { $0 + $1.duration } / 60.0))
     }
 
     var totalWords: Int {
@@ -618,6 +790,17 @@ private final class HomeDashboardViewModel: ObservableObject {
 
     var totalSessions: Int {
         entries.count
+    }
+
+    var averageWPM: Int {
+        guard totalMinutes > 0 else { return 0 }
+        return max(0, Int(Double(totalWords) / Double(totalMinutes)))
+    }
+
+    var timeSavedMinutes: Int {
+        // Rough estimate against a 180 WPM typing baseline
+        guard totalWords > 0 else { return 0 }
+        return max(0, Int(Double(totalWords) / 180.0))
     }
 
     func refresh() {
@@ -633,97 +816,157 @@ private final class HomeDashboardViewModel: ObservableObject {
 
 struct EchoHomeWindowView: View {
     @ObservedObject var settings: MacAppSettings
+    @Environment(\.openSettings) private var openSettings
     @StateObject private var model = HomeDashboardViewModel()
     @State private var selectedSection: HomeSection = .home
     @State private var newTerm: String = ""
+    @State private var dictionaryFilter: DictionaryFilter = .all
+    @State private var retentionOption: HistoryRetention = .forever
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            detail
+        ZStack {
+            EchoHomeTheme.background
+                .ignoresSafeArea()
+
+            HStack(spacing: 0) {
+                sidebar
+                Divider().opacity(0.4)
+                detail
+            }
         }
-        .frame(minWidth: 920, minHeight: 620)
-        .onAppear { model.refresh() }
+        .frame(minWidth: 1080, minHeight: 720)
+        .onAppear {
+            model.refresh()
+            retentionOption = HistoryRetention.from(days: settings.historyRetentionDays)
+        }
+        .onChange(of: retentionOption) { _, newValue in
+            settings.historyRetentionDays = newValue.days
+        }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
             model.refresh()
         }
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Echo")
-                    .font(.system(size: 32, weight: .bold))
-                Text("Speak naturally, write perfectly")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.bottom, 6)
-
-            ForEach(HomeSection.allCases) { section in
-                Button {
-                    selectedSection = section
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: section.icon)
-                        Text(section.title)
-                            .fontWeight(.semibold)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .fill(selectedSection == section ? Color.accentColor.opacity(0.2) : Color.clear)
-                    )
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(EchoHomeTheme.accent.opacity(0.18))
+                        .frame(width: 38, height: 38)
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(EchoHomeTheme.accent)
                 }
-                .buttonStyle(.plain)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Echo")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                    Text("Pro Trial")
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule().fill(EchoHomeTheme.accent.opacity(0.15))
+                        )
+                }
+
+                Spacer()
             }
 
-            Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(HomeSection.allCases) { section in
+                    Button {
+                        selectedSection = section
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: section.icon)
+                                .font(.system(size: 14, weight: .semibold))
+                            Text(section.title)
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(selectedSection == section ? EchoHomeTheme.accent : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(selectedSection == section ? EchoHomeTheme.accentSoft : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Quick Controls")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Toggle("AI Correction", isOn: Binding(
+
+                Toggle("Auto Edit", isOn: Binding(
                     get: { settings.correctionEnabled },
                     set: { settings.correctionEnabled = $0 }
                 ))
-                .toggleStyle(.switch)
 
                 Toggle("Show Recording Pill", isOn: Binding(
                     get: { settings.showRecordingPanel },
                     set: { settings.showRecordingPanel = $0 }
                 ))
-                .toggleStyle(.switch)
+            }
+            .toggleStyle(.switch)
+
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pro Trial")
+                    .font(.headline)
+                Text("5 of 30 days used")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ProgressView(value: 5, total: 30)
+                    .tint(EchoHomeTheme.accent)
+
+                Button("Upgrade") {}
+                    .buttonStyle(.borderedProminent)
+                    .tint(EchoHomeTheme.accent)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(EchoHomeTheme.cardBackground)
+            )
+
+            HStack(spacing: 12) {
+                Button(action: {}) {
+                    Image(systemName: "bubble.left.and.bubble.right")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                Button(action: {}) {
+                    Image(systemName: "tray")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                Button(action: { openSettings() }) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
+                Spacer()
             }
         }
         .padding(20)
-        .frame(width: 250)
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(nsColor: .windowBackgroundColor),
-                    Color.accentColor.opacity(0.05)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .frame(width: 260)
+        .background(EchoHomeTheme.sidebarBackground)
     }
 
     @ViewBuilder
     private var detail: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color.accentColor.opacity(0.09),
-                    Color.clear
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            EchoHomeTheme.contentBackground
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -743,46 +986,79 @@ struct EchoHomeWindowView: View {
 
     private var homeContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Home")
-                .font(.system(size: 40, weight: .bold))
-            Text("Your speech typing command center.")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                HomeMetricCard(title: "Total dictation time", value: "\(model.totalMinutes) min", icon: "clock")
-                HomeMetricCard(title: "Words transcribed", value: "\(max(model.totalWords, settings.totalWordsTranscribed))", icon: "mic")
-                HomeMetricCard(title: "Sessions", value: "\(model.totalSessions)", icon: "waveform.path.ecg")
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Pipeline")
-                    .font(.headline)
-                Text(settings.correctionEnabled
-                    ? "Whisper transcription + optional AI rewrite enabled"
-                    : "Whisper-only transcription enabled (raw output)")
-                    .font(.subheadline)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Speak naturally, write perfectly — in any app")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                Text("\(settings.hotkeyHint). Speak naturally and release to insert your words.")
+                    .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
-            )
+
+            LazyVGrid(columns: [
+                GridItem(.flexible(), spacing: 14),
+                GridItem(.flexible(), spacing: 14)
+            ], spacing: 14) {
+                PersonalizationCard(progress: 0.0)
+                StatCard(title: "Total dictation time", value: "\(model.totalMinutes) min", icon: "clock")
+                StatCard(title: "Words dictated", value: "\(max(model.totalWords, settings.totalWordsTranscribed))", icon: "mic.fill")
+                StatCard(title: "Time saved", value: "\(model.timeSavedMinutes) min", icon: "bolt.fill")
+                StatCard(title: "Average dictation speed", value: "\(model.averageWPM) WPM", icon: "speedometer")
+                StatCard(title: "Sessions", value: "\(model.totalSessions)", icon: "waveform.path.ecg")
+            }
+
+            HStack(spacing: 14) {
+                PromoCard(
+                    title: "Refer friends",
+                    detail: "Get $5 credit for every invite.",
+                    actionTitle: "Invite friends",
+                    tint: EchoHomeTheme.blueTint
+                )
+                PromoCard(
+                    title: "Affiliate program",
+                    detail: "Earn 25% recurring commission.",
+                    actionTitle: "Join now",
+                    tint: EchoHomeTheme.peachTint
+                )
+            }
         }
     }
 
     private var historyContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("History")
-                    .font(.system(size: 34, weight: .bold))
-                Spacer()
-                Button("Refresh") {
-                    model.refresh()
+            Text("History")
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Keep history")
+                            .font(.headline)
+                        Text("How long do you want to keep your dictation history on your device?")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Picker("", selection: $retentionOption) {
+                        ForEach(HistoryRetention.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.secondary)
+                    Text("Your data stays private. Dictations are stored only on this device.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(EchoHomeTheme.cardBackground)
+            )
 
             if model.isLoading {
                 ProgressView()
@@ -793,56 +1069,57 @@ struct EchoHomeWindowView: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 12)
             } else {
-                ForEach(model.entries.prefix(40)) { entry in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Text(entry.createdAt.formatted(.dateTime.month().day().hour().minute()))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(String(format: "%.1fs", entry.duration))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(entry.status.capitalized)
-                                .font(.caption2)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(entry.status == "success" ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
-                                )
-                        }
-
-                        if let finalText = entry.transcriptFinal, !finalText.isEmpty {
-                            Text(finalText)
-                                .font(.body)
-                        } else if let rawText = entry.transcriptRaw, !rawText.isEmpty {
-                            Text(rawText)
-                                .font(.body)
-                                .foregroundStyle(.secondary)
-                        } else if let error = entry.error, !error.isEmpty {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
+                VStack(spacing: 0) {
+                    ForEach(model.entries.prefix(80)) { entry in
+                        HistoryRow(entry: entry)
+                        Divider().opacity(0.6)
                     }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
-                    )
                 }
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(EchoHomeTheme.cardBackground)
+                )
             }
         }
     }
 
     private var dictionaryContent: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Dictionary")
-                .font(.system(size: 34, weight: .bold))
-            Text("Add custom words to keep names and terminology stable during rewriting.")
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Dictionary")
+                    .font(.system(size: 30, weight: .bold, design: .rounded))
+                Spacer()
+                Button("New word") {
+                    // Focus stays in the add field below
+                }
+                .buttonStyle(.borderedProminent)
+            }
+
+            HStack(spacing: 8) {
+                ForEach(DictionaryFilter.allCases) { filter in
+                    Button(filter.title) { dictionaryFilter = filter }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(
+                            Capsule().fill(dictionaryFilter == filter ? EchoHomeTheme.accentSoft : EchoHomeTheme.cardBackground)
+                        )
+                }
+                Spacer()
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search", text: .constant(""))
+                        .textFieldStyle(.plain)
+                        .frame(width: 180)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(EchoHomeTheme.cardBackground)
+                )
+            }
 
             HStack(spacing: 8) {
                 TextField("Add new term", text: $newTerm)
@@ -857,30 +1134,77 @@ struct EchoHomeWindowView: View {
                 .disabled(newTerm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            if settings.customTerms.isEmpty {
-                Text("No custom terms yet.")
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-            } else {
-                ForEach(settings.customTerms, id: \.self) { term in
-                    HStack {
-                        Text(term)
-                        Spacer()
-                        Button("Remove") {
-                            settings.removeCustomTerm(term)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.red)
-                    }
-                    .padding(.vertical, 6)
-                    Divider()
+            let filteredTerms = filteredDictionaryTerms
+
+            if filteredTerms.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No words yet")
+                        .font(.headline)
+                    Text("Echo remembers unique names and terms you add here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, minHeight: 260)
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(EchoHomeTheme.cardBackground)
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(filteredTerms, id: \.self) { term in
+                        HStack {
+                            Text(term)
+                            Spacer()
+                            Button("Remove") {
+                                settings.removeCustomTerm(term)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.red)
+                        }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 14)
+                        Divider().opacity(0.6)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(EchoHomeTheme.cardBackground)
+                )
             }
+        }
+    }
+
+    private var filteredDictionaryTerms: [String] {
+        switch dictionaryFilter {
+        case .all, .manual:
+            return settings.customTerms
+        case .autoAdded:
+            return []
         }
     }
 }
 
-private struct HomeMetricCard: View {
+private enum EchoHomeTheme {
+    static let background = Color(red: 0.97, green: 0.97, blue: 0.98)
+    static let sidebarBackground = Color(red: 0.95, green: 0.95, blue: 0.97)
+    static let cardBackground = Color.white
+    static let accent = Color(red: 0.23, green: 0.46, blue: 0.95)
+    static let accentSoft = Color(red: 0.88, green: 0.92, blue: 0.99)
+    static let blueTint = Color(red: 0.86, green: 0.93, blue: 0.99)
+    static let peachTint = Color(red: 0.99, green: 0.93, blue: 0.89)
+
+    static let contentBackground = LinearGradient(
+        colors: [
+            Color.white.opacity(0.9),
+            Color.white.opacity(0.92),
+            Color(red: 0.98, green: 0.98, blue: 0.99)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+private struct StatCard: View {
     let title: String
     let value: String
     let icon: String
@@ -888,9 +1212,9 @@ private struct HomeMetricCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Image(systemName: icon)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(EchoHomeTheme.accent)
             Text(value)
-                .font(.system(size: 30, weight: .bold))
+                .font(.system(size: 24, weight: .bold, design: .rounded))
             Text(title)
                 .foregroundStyle(.secondary)
                 .font(.subheadline)
@@ -899,8 +1223,164 @@ private struct HomeMetricCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
+                .fill(EchoHomeTheme.cardBackground)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, y: 6)
         )
+    }
+}
+
+private struct PersonalizationCard: View {
+    let progress: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Overall personalization")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.1), lineWidth: 12)
+                    Circle()
+                        .trim(from: 0, to: max(0.01, progress))
+                        .stroke(EchoHomeTheme.accent, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                    Text("\(Int(progress * 100))%")
+                        .font(.title2.bold())
+                }
+                .frame(width: 96, height: 96)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("View report")
+                        .font(.caption)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(EchoHomeTheme.accentSoft))
+                    Text("Your data stays private.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(EchoHomeTheme.cardBackground)
+                .shadow(color: Color.black.opacity(0.04), radius: 10, y: 6)
+        )
+    }
+}
+
+private struct PromoCard: View {
+    let title: String
+    let detail: String
+    let actionTitle: String
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+            Text(detail)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button(actionTitle) {}
+                .buttonStyle(.bordered)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(tint)
+        )
+    }
+}
+
+private struct HistoryRow: View {
+    let entry: RecordingStore.RecordingEntry
+
+    private var timeText: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter.string(from: entry.createdAt)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Text(timeText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 6) {
+                if let finalText = entry.transcriptFinal, !finalText.isEmpty {
+                    Text(finalText)
+                        .font(.system(size: 14))
+                } else if let rawText = entry.transcriptRaw, !rawText.isEmpty {
+                    Text(rawText)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                } else if let error = entry.error, !error.isEmpty {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("No transcription available.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+}
+
+private enum DictionaryFilter: String, CaseIterable, Identifiable {
+    case all
+    case autoAdded
+    case manual
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .autoAdded: return "Auto-added"
+        case .manual: return "Manually-added"
+        }
+    }
+}
+
+private enum HistoryRetention: String, CaseIterable, Identifiable {
+    case sevenDays
+    case thirtyDays
+    case forever
+
+    var id: String { rawValue }
+    var days: Int {
+        switch self {
+        case .sevenDays: return 7
+        case .thirtyDays: return 30
+        case .forever: return 36500
+        }
+    }
+    var title: String {
+        switch self {
+        case .sevenDays: return "7 days"
+        case .thirtyDays: return "30 days"
+        case .forever: return "Forever"
+        }
+    }
+
+    static func from(days: Int) -> HistoryRetention {
+        switch days {
+        case 30: return .thirtyDays
+        case 7: return .sevenDays
+        default: return .forever
+        }
     }
 }
 

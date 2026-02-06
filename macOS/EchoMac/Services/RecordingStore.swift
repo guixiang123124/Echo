@@ -38,7 +38,10 @@ public actor RecordingStore {
     private let databaseURL: URL
     private var db: OpaquePointer?
     private var lastCleanup: Date?
-    private let retentionDays: Int = 7
+    private var retentionDays: Int {
+        let stored = UserDefaults.standard.integer(forKey: "echo.history.retentionDays")
+        return stored == 0 ? 7 : stored
+    }
 
     private init() {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!

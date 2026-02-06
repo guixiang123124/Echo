@@ -3,6 +3,7 @@
 你需要的所有说明清单和 Markdown 都在这个文件夹里。
 
 ## 先按这个顺序执行
+0. `00-ONE-PAGE-APPLY.md`（单文件完整流程）
 1. `01-account-and-legal-checklist.md`
 2. `03-signing-and-build.md`
 3. `04-app-store-connect-submission.md`

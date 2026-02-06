@@ -26,20 +26,21 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
     public func correct(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) async throws -> CorrectionResult {
         guard let apiKey = try (apiKeyOverride ?? keyStore.retrieve(for: id)) else {
             throw CorrectionError.apiKeyMissing
         }
 
-        let prompt = buildPrompt(rawText: rawText, context: context, confidence: confidence)
+        let prompt = buildPrompt(rawText: rawText, context: context, confidence: confidence, options: options)
 
         let requestBody: [String: Any] = [
             "model": model,
             "messages": [
                 [
                     "role": "system",
-                    "content": systemPrompt
+                    "content": systemPrompt(options: options)
                 ],
                 [
                     "role": "user",
@@ -72,27 +73,45 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
 
     // MARK: - Private
 
-    private var systemPrompt: String {
-        """
-        You are a speech-to-text error correction assistant. Your job is to fix transcription errors, \
-        especially Chinese homophone errors (同音字), punctuation, and grammar issues.
+    private func systemPrompt(options: CorrectionOptions) -> String {
+        var prompt = """
+        You are a speech-to-text error correction assistant. Your job is to fix transcription errors while preserving meaning and style.
 
         Rules:
         1. Only fix clear errors. Do not change meaning or style.
-        2. Pay special attention to Chinese homophones (的/得/地, 在/再, 做/作, etc.)
-        3. Add proper punctuation if missing.
-        4. Fix sentence segmentation if needed.
-        5. Return ONLY the corrected text, nothing else.
-        6. If the text is already correct, return it unchanged.
+        2. Return ONLY the corrected text, nothing else.
+        3. If the text is already correct, return it unchanged.
         """
+
+        if options.enableHomophones {
+            prompt += "\n4. Pay special attention to Chinese homophones (的/得/地, 在/再, 做/作, etc.)."
+        } else {
+            prompt += "\n4. Do NOT change words based on homophones."
+        }
+
+        if options.enablePunctuation {
+            prompt += "\n5. Add or fix punctuation where clearly missing or wrong."
+        } else {
+            prompt += "\n5. Do NOT add or change punctuation."
+        }
+
+        if options.enableFormatting {
+            prompt += "\n6. Improve sentence segmentation or formatting only when it is clearly needed."
+        } else {
+            prompt += "\n6. Do NOT change formatting or sentence segmentation."
+        }
+
+        return prompt
     }
 
     private func buildPrompt(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) -> String {
-        var prompt = "Please correct this speech-to-text transcription:\n\n"
+        var prompt = "Please correct this speech-to-text transcription.\n"
+        prompt += "Allowed fixes: \(options.summary).\n\n"
         prompt += "Text: \(rawText)\n"
 
         let contextInfo = context.formatForPrompt()

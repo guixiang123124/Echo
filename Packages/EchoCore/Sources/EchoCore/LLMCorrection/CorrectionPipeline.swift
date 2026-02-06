@@ -23,10 +23,11 @@ public actor CorrectionPipeline {
     /// Run the full 3-stage correction pipeline
     public func process(
         transcription: TranscriptionResult,
-        context: ConversationContext
+        context: ConversationContext,
+        options: CorrectionOptions = .default
     ) async throws -> CorrectionResult {
         // Stage 1: Pre-Detection
-        let needsCorrection = preDetect(transcription: transcription)
+        let needsCorrection = preDetect(transcription: transcription, options: options)
 
         guard needsCorrection else {
             return .unchanged(transcription.text)
@@ -36,7 +37,8 @@ public actor CorrectionPipeline {
         let rawResult = try await provider.correct(
             rawText: transcription.text,
             context: context,
-            confidence: transcription.wordConfidences
+            confidence: transcription.wordConfidences,
+            options: options
         )
 
         // Stage 3: Verification
@@ -48,14 +50,17 @@ public actor CorrectionPipeline {
     // MARK: - Stage 1: Pre-Detection
 
     /// Determine if the transcription needs LLM correction
-    private func preDetect(transcription: TranscriptionResult) -> Bool {
+    private func preDetect(transcription: TranscriptionResult, options: CorrectionOptions) -> Bool {
+        guard options.isEnabled else { return false }
+
         // Always correct if there are low-confidence words
         if !transcription.lowConfidenceWords.isEmpty {
             return true
         }
 
         // Always correct Chinese text (homophones are common)
-        if transcription.language == .chinese || transcription.language == .mixed {
+        if options.enableHomophones,
+           transcription.language == .chinese || transcription.language == .mixed {
             return true
         }
 

@@ -20,20 +20,21 @@ public final class DoubaoCorrectionProvider: CorrectionProvider, @unchecked Send
     public func correct(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) async throws -> CorrectionResult {
         guard let apiKey = try keyStore.retrieve(for: id) else {
             throw CorrectionError.apiKeyMissing
         }
 
-        let prompt = buildPrompt(rawText: rawText, context: context, confidence: confidence)
+        let prompt = buildPrompt(rawText: rawText, context: context, confidence: confidence, options: options)
 
         let requestBody: [String: Any] = [
             "model": "doubao-pro-32k",
             "messages": [
                 [
                     "role": "system",
-                    "content": systemPrompt
+                    "content": systemPrompt(options: options)
                 ],
                 [
                     "role": "user",
@@ -66,27 +67,51 @@ public final class DoubaoCorrectionProvider: CorrectionProvider, @unchecked Send
 
     // MARK: - Private
 
-    private var systemPrompt: String {
-        """
-        你是一个语音转文字纠错助手。你的任务是修正语音识别中的错误，\
-        特别是中文同音字错误、标点符号和语法问题。
+    private func systemPrompt(options: CorrectionOptions) -> String {
+        var prompt = """
+        你是一个语音转文字纠错助手。你的任务是在保持原意和风格的前提下修正识别错误。
 
         规则：
         1. 只修正明确的错误，不要改变原文的意思或风格。
-        2. 特别注意同音字纠正（的/得/地、在/再、做/作等）
-        3. 补充遗漏的标点符号。
-        4. 修正句子分割问题。
-        5. 只返回修正后的文本，不要返回任何其他内容。
-        6. 如果文本已经正确，原样返回。
+        2. 只返回修正后的文本，不要返回任何其他内容。
+        3. 如果文本已经正确，原样返回。
         """
+
+        if options.enableHomophones {
+            prompt += "\n4. 特别注意中文同音字纠正（的/得/地、在/再、做/作等）。"
+        } else {
+            prompt += "\n4. 不要根据同音字修改用词。"
+        }
+
+        if options.enablePunctuation {
+            prompt += "\n5. 补充或修正明显缺失/错误的标点符号。"
+        } else {
+            prompt += "\n5. 不要添加或修改标点。"
+        }
+
+        if options.enableFormatting {
+            prompt += "\n6. 必要时优化句子分割或格式，但仅在明显需要时进行。"
+        } else {
+            prompt += "\n6. 不要改变格式或句子分割。"
+        }
+
+        return prompt
     }
 
     private func buildPrompt(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) -> String {
-        var prompt = "请修正以下语音识别文本：\n\n"
+        let allowedTypes = [
+            options.enableHomophones ? "同音字" : nil,
+            options.enablePunctuation ? "标点" : nil,
+            options.enableFormatting ? "格式/分句" : nil
+        ].compactMap { $0 }
+
+        var prompt = "请修正以下语音识别文本。\n"
+        prompt += "允许的修正类型：\(allowedTypes.isEmpty ? "无" : allowedTypes.joined(separator: "、"))。\n\n"
         prompt += "文本：\(rawText)\n"
 
         let contextInfo = context.formatForPrompt()

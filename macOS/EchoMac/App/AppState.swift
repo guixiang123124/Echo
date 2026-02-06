@@ -33,9 +33,9 @@ public final class AppState: ObservableObject {
             case .listening:
                 return "Listening..."
             case .transcribing:
-                return "Transcribe & Rewrite..."
+                return "Transcribe & Edit..."
             case .correcting:
-                return "Transcribe & Rewrite..."
+                return "Transcribe & Edit..."
             case .inserting:
                 return "Inserting..."
             case .error(let message):

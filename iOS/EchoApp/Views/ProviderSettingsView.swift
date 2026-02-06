@@ -10,6 +10,15 @@ struct ProviderSettingsView: View {
             + AvailableProviders.correctionProviders.filter(\.requiresApiKey)
     }
 
+    private var extraKeyIds: [String] {
+        [
+            "volcano_app_id",
+            "volcano_access_key",
+            "aliyun_app_key",
+            "aliyun_token"
+        ]
+    }
+
     var body: some View {
         List {
             Section {
@@ -20,11 +29,29 @@ struct ProviderSettingsView: View {
 
             Section("Speech Recognition Providers") {
                 ForEach(AvailableProviders.asrProviders.filter(\.requiresApiKey)) { provider in
-                    apiKeyRow(for: provider)
+                    if provider.id == "volcano" {
+                        keyPairRow(
+                            title: provider.displayName,
+                            firstLabel: "App ID",
+                            firstKeyId: "volcano_app_id",
+                            secondLabel: "Access Key",
+                            secondKeyId: "volcano_access_key"
+                        )
+                    } else if provider.id == "aliyun" {
+                        keyPairRow(
+                            title: provider.displayName,
+                            firstLabel: "App Key",
+                            firstKeyId: "aliyun_app_key",
+                            secondLabel: "Token",
+                            secondKeyId: "aliyun_token"
+                        )
+                    } else {
+                        apiKeyRow(for: provider)
+                    }
                 }
             }
 
-            Section("AI Correction Providers") {
+            Section("Auto Edit Providers") {
                 ForEach(AvailableProviders.correctionProviders.filter(\.requiresApiKey)) { provider in
                     apiKeyRow(for: provider)
                 }
@@ -88,6 +115,11 @@ struct ProviderSettingsView: View {
                 apiKeys[provider.id] = (try? keyStore.retrieve(for: provider.id)) ?? ""
             }
         }
+        for keyId in extraKeyIds {
+            if keyStore.hasKey(for: keyId) {
+                apiKeys[keyId] = (try? keyStore.retrieve(for: keyId)) ?? ""
+            }
+        }
     }
 
     private func saveKey(for providerId: String) {
@@ -98,5 +130,47 @@ struct ProviderSettingsView: View {
     private func removeKey(for providerId: String) {
         try? keyStore.delete(for: providerId)
         apiKeys[providerId] = nil
+    }
+
+    private func keyPairRow(
+        title: String,
+        firstLabel: String,
+        firstKeyId: String,
+        secondLabel: String,
+        secondKeyId: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.body)
+
+            HStack {
+                Text(firstLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Enter \(firstLabel)", text: binding(for: firstKeyId))
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") {
+                    saveKey(for: firstKeyId)
+                }
+                .font(.caption)
+                .disabled((apiKeys[firstKeyId] ?? "").isEmpty)
+            }
+
+            HStack {
+                Text(secondLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("Enter \(secondLabel)", text: binding(for: secondKeyId))
+                    .font(.caption)
+                    .textFieldStyle(.roundedBorder)
+                Button("Save") {
+                    saveKey(for: secondKeyId)
+                }
+                .font(.caption)
+                .disabled((apiKeys[secondKeyId] ?? "").isEmpty)
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

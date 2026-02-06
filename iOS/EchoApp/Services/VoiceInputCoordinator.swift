@@ -110,7 +110,8 @@ public actor VoiceInputCoordinator {
             let context = await contextStore.currentContext()
             let correctionResult = try await pipeline.process(
                 transcription: transcription,
-                context: context
+                context: context,
+                options: settings.correctionOptions
             )
             return correctionResult.correctedText
         } catch {

@@ -24,7 +24,7 @@ struct SettingsWindowView: View {
 
             CorrectionSettingsTab()
                 .tabItem {
-                    Label("AI Editing", systemImage: "sparkles")
+                    Label("Auto Edit", systemImage: "sparkles")
                 }
                 .environmentObject(settings)
 
@@ -59,7 +59,52 @@ struct GeneralSettingsView: View {
                 }
                 .pickerStyle(.menu)
 
-                Text("Press once to start recording, press again to transcribe")
+                Text(settings.hotkeyHint)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Recording Mode") {
+                Picker("Mode", selection: $settings.recordingMode) {
+                    ForEach(MacAppSettings.RecordingMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                Text(settings.recordingMode.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Hands-Free Auto Stop") {
+                Toggle("Stop on Silence", isOn: $settings.handsFreeAutoStopEnabled)
+
+                HStack {
+                    Text("Silence duration")
+                    Spacer()
+                    Text("\(settings.handsFreeSilenceDuration, specifier: "%.1f")s")
+                        .foregroundColor(.secondary)
+                }
+                Slider(value: $settings.handsFreeSilenceDuration, in: 0.6...3.0, step: 0.1)
+
+                HStack {
+                    Text("Silence threshold")
+                    Spacer()
+                    Text("\(settings.handsFreeSilenceThreshold, specifier: "%.02f")")
+                        .foregroundColor(.secondary)
+                }
+                Slider(value: $settings.handsFreeSilenceThreshold, in: 0.02...0.2, step: 0.01)
+
+                HStack {
+                    Text("Minimum recording")
+                    Spacer()
+                    Text("\(settings.handsFreeMinimumDuration, specifier: "%.1f")s")
+                        .foregroundColor(.secondary)
+                }
+                Slider(value: $settings.handsFreeMinimumDuration, in: 0.5...2.5, step: 0.1)
+
+                Text("Lower threshold is more sensitive to quiet speech.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -87,18 +132,98 @@ struct ASRSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Speech Recognition") {
-                HStack {
-                    Text("Provider")
-                    Spacer()
-                    Text("OpenAI Whisper")
+            Section("Pipeline Presets") {
+                Picker(
+                    "Preset",
+                    selection: Binding(
+                        get: { settings.pipelinePreset },
+                        set: { settings.pipelinePreset = $0 }
+                    )
+                ) {
+                    ForEach(MacAppSettings.PipelinePreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(settings.pipelinePreset.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Section("Speech Recognition (ASR)") {
+                Picker("Speech Recognition Provider", selection: $settings.selectedASRProvider) {
+                    Text("OpenAI Transcribe").tag("openai_whisper")
+                    Text("Volcano Engine (ByteDance)").tag("volcano")
+                    Text("Alibaba Cloud NLS").tag("aliyun")
+                }
+                .pickerStyle(.menu)
+
+                if settings.selectedASRProvider == "volcano" {
+                    ProviderKeyRow(
+                        label: "Volcano App ID",
+                        providerId: "volcano_app_id"
+                    )
+
+                    ProviderKeyRow(
+                        label: "Volcano Access Key",
+                        providerId: "volcano_access_key"
+                    )
+
+                    Text("Volcano requires both App ID and Access Key.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if settings.selectedASRProvider == "aliyun" {
+                    ProviderKeyRow(
+                        label: "Alibaba App Key",
+                        providerId: "aliyun_app_key"
+                    )
+
+                    ProviderKeyRow(
+                        label: "Alibaba Token",
+                        providerId: "aliyun_token"
+                    )
+
+                    Text("Alibaba NLS tokens expire; refresh the token when it changes.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else {
+                    ProviderKeyRow(
+                        label: "OpenAI API Key",
+                        providerId: "openai_whisper"
+                    )
+
+                    Picker("Transcription Model", selection: $settings.openAITranscriptionModel) {
+                        Text("Whisper-1 (default)").tag("whisper-1")
+                        Text("GPT-4o Transcribe").tag("gpt-4o-transcribe")
+                        Text("GPT-4o Mini Transcribe").tag("gpt-4o-mini-transcribe")
+                    }
+                    .pickerStyle(.menu)
+
+                    Text("All OpenAI transcription models use the same API key.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Text("Auto Edit uses a separate model configured below.")
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
+            }
 
-                ProviderKeyRow(
-                    label: "OpenAI API Key",
-                    providerId: "openai_whisper"
-                )
+            Section("Auto Edit (Optional)") {
+                Toggle("Enable Auto Edit", isOn: $settings.correctionEnabled)
+
+                Picker("Provider", selection: $settings.selectedCorrectionProvider) {
+                    Text("OpenAI GPT-4o").tag("openai_gpt")
+                    Text("Claude").tag("claude")
+                    Text("Doubao").tag("doubao")
+                    Text("Alibaba Qwen").tag("qwen")
+                }
+                .pickerStyle(.menu)
+
+                Text("Fine-grained options are available in the Auto Edit tab.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
 
             Section("Language") {
@@ -126,14 +251,32 @@ struct CorrectionSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("AI Editing") {
-                Toggle("Enable AI Text Editing", isOn: $settings.correctionEnabled)
+            Section("Auto Edit Pipeline") {
+                Toggle("Enable Auto Edit", isOn: $settings.correctionEnabled)
+                Text("Fixes homophones, punctuation, and formatting based on context.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
                 if settings.correctionEnabled {
+                    HStack(spacing: 8) {
+                        ForEach(AutoEditQuickMode.allCases) { mode in
+                            Button(mode.title) {
+                                applyQuickMode(mode)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
+
+                    Toggle("Fix Homophones", isOn: $settings.correctionHomophonesEnabled)
+                    Toggle("Fix Punctuation", isOn: $settings.correctionPunctuationEnabled)
+                    Toggle("Fix Formatting", isOn: $settings.correctionFormattingEnabled)
+
                     Picker("AI Provider", selection: $settings.selectedCorrectionProvider) {
                         Text("OpenAI GPT-4o").tag("openai_gpt")
                         Text("Claude").tag("claude")
                         Text("豆包").tag("doubao")
+                        Text("Alibaba Qwen").tag("qwen")
                     }
                     .pickerStyle(.menu)
 
@@ -162,8 +305,53 @@ struct CorrectionSettingsTab: View {
             return "Claude API Key"
         case "doubao":
             return "Doubao API Key"
+        case "qwen":
+            return "Qwen API Key"
         default:
             return "OpenAI API Key"
+        }
+    }
+
+    private func applyQuickMode(_ mode: AutoEditQuickMode) {
+        switch mode {
+        case .balanced:
+            settings.correctionHomophonesEnabled = true
+            settings.correctionPunctuationEnabled = true
+            settings.correctionFormattingEnabled = true
+        case .homophonesOnly:
+            settings.correctionHomophonesEnabled = true
+            settings.correctionPunctuationEnabled = false
+            settings.correctionFormattingEnabled = false
+        case .punctuationOnly:
+            settings.correctionHomophonesEnabled = false
+            settings.correctionPunctuationEnabled = true
+            settings.correctionFormattingEnabled = false
+        case .formattingOnly:
+            settings.correctionHomophonesEnabled = false
+            settings.correctionPunctuationEnabled = false
+            settings.correctionFormattingEnabled = true
+        }
+    }
+}
+
+private enum AutoEditQuickMode: String, CaseIterable, Identifiable {
+    case balanced
+    case homophonesOnly
+    case punctuationOnly
+    case formattingOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .balanced:
+            return "Balanced"
+        case .homophonesOnly:
+            return "Homophones"
+        case .punctuationOnly:
+            return "Punctuation"
+        case .formattingOnly:
+            return "Formatting"
         }
     }
 }

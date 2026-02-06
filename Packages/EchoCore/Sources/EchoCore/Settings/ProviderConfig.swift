@@ -84,6 +84,13 @@ public enum AvailableProviders {
             type: .asr,
             isEnabled: false,
             requiresApiKey: true
+        ),
+        ProviderConfig(
+            id: "aliyun",
+            displayName: "Alibaba Cloud NLS (阿里云)",
+            type: .asr,
+            isEnabled: false,
+            requiresApiKey: true
         )
     ]
 
@@ -105,6 +112,13 @@ public enum AvailableProviders {
         ProviderConfig(
             id: "doubao",
             displayName: "Doubao (豆包)",
+            type: .correction,
+            isEnabled: false,
+            requiresApiKey: true
+        ),
+        ProviderConfig(
+            id: "qwen",
+            displayName: "Alibaba Qwen",
             type: .correction,
             isEnabled: false,
             requiresApiKey: true

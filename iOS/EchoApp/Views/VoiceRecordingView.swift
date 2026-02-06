@@ -5,56 +5,49 @@ import EchoUI
 
 struct VoiceRecordingView: View {
     @StateObject private var viewModel = VoiceRecordingViewModel()
+    @State private var textInput: String = ""
+    @State private var lastCommittedText: String = ""
+    @State private var showSettings = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                Spacer()
-
-                // Transcription result
-                TranscriptionOverlay(
-                    text: viewModel.transcribedText,
-                    isProcessing: viewModel.isProcessing
-                )
-                .padding(.horizontal)
-
-                // Waveform
-                WaveformView(
-                    levels: viewModel.audioLevels,
-                    isActive: viewModel.isRecording
-                )
-                .frame(height: 60)
-                .padding(.horizontal, 40)
-
-                // Status text
-                Text(viewModel.statusText)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                // Voice button
-                VoiceButton(isRecording: viewModel.isRecording) {
-                    Task {
-                        await viewModel.toggleRecording()
-                    }
-                }
+            VStack(spacing: 16) {
+                TextEditor(text: $textInput)
+                    .font(.system(size: 20))
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color(.systemBackground))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(Color(.systemGray4), lineWidth: 1)
+                    )
+                    .frame(minHeight: 180)
+                    .focused($isFocused)
+                    .onTapGesture { isFocused = true }
 
                 Spacer()
-
-                // Info text
-                if viewModel.transcribedText.isEmpty && !viewModel.isRecording {
-                    VStack(spacing: 8) {
-                        Text("Tap the microphone to start speaking")
-                            .font(.headline)
-                        Text("Your speech will be transcribed and corrected using AI")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 40)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
+            .navigationTitle("Echo")
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    KeyboardAccessoryBar(
+                        isRecording: viewModel.isRecording,
+                        isProcessing: viewModel.isProcessing,
+                        audioLevels: viewModel.audioLevels,
+                        onToggleRecording: {
+                            Task { await viewModel.toggleRecording() }
+                        },
+                        onOpenSettings: {
+                            showSettings = true
+                        }
+                    )
                 }
             }
-            .navigationTitle("Echo")
             .alert("Error", isPresented: $viewModel.showError) {
                 Button("OK") { viewModel.showError = false }
             } message: {
@@ -63,6 +56,21 @@ struct VoiceRecordingView: View {
         }
         .onOpenURL { url in
             handleDeepLink(url)
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
+        .onChange(of: viewModel.transcribedText) { _, newValue in
+            guard !newValue.isEmpty,
+                  !viewModel.isRecording,
+                  !viewModel.isProcessing,
+                  newValue != lastCommittedText else { return }
+            lastCommittedText = newValue
+            if textInput.isEmpty {
+                textInput = newValue
+            } else {
+                textInput += " " + newValue
+            }
         }
     }
 
@@ -94,6 +102,7 @@ final class VoiceRecordingViewModel: ObservableObject {
     private let contextStore = ContextMemoryStore()
     private var isKeyboardMode = false
     private var recordingTask: Task<Void, Never>?
+    private var smoothedLevel: CGFloat = 0
 
     func toggleRecording() async {
         if isRecording {
@@ -174,7 +183,14 @@ final class VoiceRecordingViewModel: ObservableObject {
         if transcribedText.isEmpty {
             statusText = "No speech detected"
         } else if !isProcessing {
-            deliverResult()
+            statusText = "Thinking..."
+            isProcessing = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(650))
+                self.isProcessing = false
+                self.statusText = "Ready"
+                self.deliverResult()
+            }
         }
     }
 
@@ -208,7 +224,8 @@ final class VoiceRecordingViewModel: ObservableObject {
             do {
                 let corrected = try await pipeline.process(
                     transcription: result,
-                    context: context
+                    context: context,
+                    options: settings.correctionOptions
                 )
                 finalText = corrected.correctedText
             } catch {
@@ -238,14 +255,186 @@ final class VoiceRecordingViewModel: ObservableObject {
     }
 
     private func appendAudioLevel(_ level: CGFloat) {
+        let alpha: CGFloat = 0.22
+        smoothedLevel = (smoothedLevel * (1 - alpha)) + (level * alpha)
         var levels = audioLevels
         levels.removeFirst()
-        levels.append(level)
+        levels.append(smoothedLevel)
         audioLevels = levels
     }
 
     private func showErrorMessage(_ message: String) {
         errorMessage = message
         showError = true
+    }
+}
+
+// MARK: - Keyboard Accessory UI
+
+struct KeyboardAccessoryBar: View {
+    let isRecording: Bool
+    let isProcessing: Bool
+    let audioLevels: [CGFloat]
+    let onToggleRecording: () -> Void
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color(.systemGray))
+            }
+
+            Spacer()
+
+            Button(action: onToggleRecording) {
+                DictationPill(isRecording: isRecording, isProcessing: isProcessing, audioLevels: audioLevels)
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(Color(.systemGray5))
+    }
+}
+
+struct DictationPill: View {
+    let isRecording: Bool
+    let isProcessing: Bool
+    let audioLevels: [CGFloat]
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(Color(.systemGray6))
+                .overlay(
+                    Capsule()
+                        .stroke(Color(.systemGray4), lineWidth: 1)
+                )
+
+            if isRecording {
+                ListeningPillContent(levels: audioLevels)
+                    .padding(.horizontal, 10)
+            } else if isProcessing {
+                ThinkingPillContent()
+                    .padding(.horizontal, 10)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(.systemGray))
+                    Text("点击说话")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color(.systemGray))
+                }
+            }
+        }
+        .frame(width: 200, height: 32)
+    }
+}
+
+struct ListeningPillContent: View {
+    let levels: [CGFloat]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            SymmetricBarsView(levels: levels, reverseWeights: false)
+                .frame(width: 42, height: 16)
+            VStack(spacing: 1) {
+                Text("正在倾听 点击结束")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(.label))
+                Text("你的方言 也能听懂")
+                    .font(.system(size: 9, weight: .regular))
+                    .foregroundStyle(Color(.secondaryLabel))
+            }
+            SymmetricBarsView(levels: levels, reverseWeights: true)
+                .frame(width: 42, height: 16)
+        }
+    }
+}
+
+struct SymmetricBarsView: View {
+    let levels: [CGFloat]
+    let reverseWeights: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            let count = 8
+            let barWidth: CGFloat = 3
+            let spacing: CGFloat = 2
+            let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
+            let startX = (size.width - totalWidth) / 2
+            let midY = size.height / 2
+            let maxHeight = size.height
+
+            let samples = normalizedLevels(count: count)
+            let gradient = Gradient(colors: [Color.cyan.opacity(0.9), Color.blue.opacity(0.85)])
+
+            for index in 0..<count {
+                let level = samples[index]
+                let progress = CGFloat(index) / CGFloat(max(1, count - 1))
+                let weight = reverseWeights ? (0.35 + 0.65 * (1 - progress)) : (0.35 + 0.65 * progress)
+                let height = max(3, level * weight * maxHeight)
+                let x = startX + CGFloat(index) * (barWidth + spacing)
+                let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
+                let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
+                context.fill(path, with: .linearGradient(gradient, startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.minX, y: rect.maxY)))
+            }
+        }
+        .drawingGroup()
+    }
+
+    private func normalizedLevels(count: Int) -> [CGFloat] {
+        let trimmed = Array(levels.suffix(count))
+        if trimmed.count >= count {
+            return trimmed.map { max(0.08, min($0, 1.0)) }
+        }
+        let padding = Array(repeating: CGFloat(0.08), count: count - trimmed.count)
+        return padding + trimmed.map { max(0.08, min($0, 1.0)) }
+    }
+}
+
+struct ThinkingPillContent: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            ThinkingDotsView()
+                .frame(width: 22, height: 10)
+            Text("识别中")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(.secondaryLabel))
+            ThinkingDotsView()
+                .frame(width: 22, height: 10)
+        }
+    }
+}
+
+struct ThinkingDotsView: View {
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in
+                let count = 4
+                let spacing: CGFloat = 3
+                let radius: CGFloat = 2.0
+                let totalWidth = CGFloat(count) * radius * 2 + CGFloat(count - 1) * spacing
+                let startX = (size.width - totalWidth) / 2
+                let centerY = size.height / 2
+
+                for index in 0..<count {
+                    let phase = time * 3 + Double(index) * 0.6
+                    let pulse = 0.6 + 0.4 * ((sin(phase) + 1) / 2)
+                    let alpha = 0.35 + 0.55 * ((sin(phase) + 1) / 2)
+                    let r = radius * pulse
+                    let x = startX + CGFloat(index) * (radius * 2 + spacing) + radius - r
+                    let rect = CGRect(x: x, y: centerY - r, width: r * 2, height: r * 2)
+                    context.fill(Path(ellipseIn: rect), with: .color(Color.cyan.opacity(alpha)))
+                }
+            }
+        }
     }
 }

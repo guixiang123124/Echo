@@ -12,15 +12,18 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
     private let language: String?
     private let apiKeyOverride: String?
     private let apiEndpoint = "https://api.openai.com/v1/audio/transcriptions"
+    private let model: String
 
     public init(
         keyStore: SecureKeyStore = SecureKeyStore(),
         language: String? = nil,
-        apiKey: String? = nil
+        apiKey: String? = nil,
+        model: String = "whisper-1"
     ) {
         self.keyStore = keyStore
         self.language = language
         self.apiKeyOverride = apiKey
+        self.model = model
     }
 
     public var isAvailable: Bool {
@@ -62,12 +65,13 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
         // Add model field
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
-        body.append("whisper-1\r\n")
+        body.append("\(model)\r\n")
 
-        // Add response format field (verbose JSON for word timestamps)
+        // Add response format field
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
-        body.append("verbose_json\r\n")
+        let responseFormat = responseFormatForModel(model)
+        body.append("\(responseFormat)\r\n")
 
         // Add language field if specified
         if let language {
@@ -145,6 +149,13 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
             isFinal: true,
             wordConfidences: wordConfidences
         )
+    }
+
+    private func responseFormatForModel(_ model: String) -> String {
+        if model.hasPrefix("gpt-4o-transcribe") || model.hasPrefix("gpt-4o-mini-transcribe") {
+            return "json"
+        }
+        return "verbose_json"
     }
 
 }

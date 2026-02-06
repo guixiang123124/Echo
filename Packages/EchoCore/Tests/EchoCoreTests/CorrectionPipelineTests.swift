@@ -13,7 +13,8 @@ struct MockCorrectionProvider: CorrectionProvider, @unchecked Sendable {
     func correct(
         rawText: String,
         context: ConversationContext,
-        confidence: [WordConfidence]
+        confidence: [WordConfidence],
+        options: CorrectionOptions
     ) async throws -> CorrectionResult {
         CorrectionResult(
             originalText: rawText,

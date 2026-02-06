@@ -5,6 +5,10 @@ struct SettingsView: View {
     @State private var settings = AppSettings()
     @State private var selectedASR: String = ""
     @State private var correctionEnabled = true
+    @State private var correctionHomophonesEnabled = true
+    @State private var correctionPunctuationEnabled = true
+    @State private var correctionFormattingEnabled = true
+    @State private var autoEditQuickMode: AutoEditQuickMode = .balanced
     @State private var selectedCorrection: String = ""
     @State private var hapticEnabled = true
 
@@ -25,14 +29,39 @@ struct SettingsView: View {
                     ))
                 }
 
-                // LLM Correction Section
-                Section("AI Correction") {
-                    Toggle("Enable Correction", isOn: $correctionEnabled)
+                // Auto Edit Section
+                Section("Auto Edit") {
+                    Toggle("Enable Auto Edit", isOn: $correctionEnabled)
                         .onChange(of: correctionEnabled) { _, newValue in
                             settings.correctionEnabled = newValue
                         }
 
                     if correctionEnabled {
+                        Picker("Quick Mode", selection: $autoEditQuickMode) {
+                            ForEach(AutoEditQuickMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: autoEditQuickMode) { _, newValue in
+                            applyQuickMode(newValue)
+                        }
+
+                        Toggle("Fix Homophones", isOn: $correctionHomophonesEnabled)
+                            .onChange(of: correctionHomophonesEnabled) { _, newValue in
+                                settings.correctionHomophonesEnabled = newValue
+                            }
+
+                        Toggle("Fix Punctuation", isOn: $correctionPunctuationEnabled)
+                            .onChange(of: correctionPunctuationEnabled) { _, newValue in
+                                settings.correctionPunctuationEnabled = newValue
+                            }
+
+                        Toggle("Fix Formatting", isOn: $correctionFormattingEnabled)
+                            .onChange(of: correctionFormattingEnabled) { _, newValue in
+                                settings.correctionFormattingEnabled = newValue
+                            }
+
                         Picker("Provider", selection: $selectedCorrection) {
                             ForEach(AvailableProviders.correctionProviders) { provider in
                                 Text(provider.displayName).tag(provider.id)
@@ -90,6 +119,10 @@ struct SettingsView: View {
             .onAppear {
                 selectedASR = settings.selectedASRProvider
                 correctionEnabled = settings.correctionEnabled
+                correctionHomophonesEnabled = settings.correctionHomophonesEnabled
+                correctionPunctuationEnabled = settings.correctionPunctuationEnabled
+                correctionFormattingEnabled = settings.correctionFormattingEnabled
+                autoEditQuickMode = resolveQuickMode()
                 selectedCorrection = settings.selectedCorrectionProvider
                 hapticEnabled = settings.hapticFeedbackEnabled
             }
@@ -99,6 +132,66 @@ struct SettingsView: View {
             .onChange(of: selectedCorrection) { _, newValue in
                 settings.selectedCorrectionProvider = newValue
             }
+        }
+    }
+
+    private func applyQuickMode(_ mode: AutoEditQuickMode) {
+        switch mode {
+        case .balanced:
+            correctionHomophonesEnabled = true
+            correctionPunctuationEnabled = true
+            correctionFormattingEnabled = true
+        case .homophonesOnly:
+            correctionHomophonesEnabled = true
+            correctionPunctuationEnabled = false
+            correctionFormattingEnabled = false
+        case .punctuationOnly:
+            correctionHomophonesEnabled = false
+            correctionPunctuationEnabled = true
+            correctionFormattingEnabled = false
+        case .formattingOnly:
+            correctionHomophonesEnabled = false
+            correctionPunctuationEnabled = false
+            correctionFormattingEnabled = true
+        }
+
+        settings.correctionHomophonesEnabled = correctionHomophonesEnabled
+        settings.correctionPunctuationEnabled = correctionPunctuationEnabled
+        settings.correctionFormattingEnabled = correctionFormattingEnabled
+    }
+
+    private func resolveQuickMode() -> AutoEditQuickMode {
+        let homophones = correctionHomophonesEnabled
+        let punctuation = correctionPunctuationEnabled
+        let formatting = correctionFormattingEnabled
+
+        if homophones && punctuation && formatting { return .balanced }
+        if homophones && !punctuation && !formatting { return .homophonesOnly }
+        if punctuation && !homophones && !formatting { return .punctuationOnly }
+        if formatting && !homophones && !punctuation { return .formattingOnly }
+
+        return .balanced
+    }
+}
+
+private enum AutoEditQuickMode: String, CaseIterable, Identifiable {
+    case balanced
+    case homophonesOnly
+    case punctuationOnly
+    case formattingOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .balanced:
+            return "Balanced"
+        case .homophonesOnly:
+            return "Homophones"
+        case .punctuationOnly:
+            return "Punctuation"
+        case .formattingOnly:
+            return "Formatting"
         }
     }
 }
