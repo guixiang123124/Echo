@@ -12,6 +12,10 @@
 		10E7CE68E1706EB4A44E2435 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = F95664E71CD1BBEF13B0A623 /* EchoCore */; };
 		11F1E4AF37B042C50B123085 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE679EEE3D1B592BDB2575F3 /* KeyboardViewController.swift */; };
 		13EFD688437B9302D44440DD /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210A74478C858A7A367C2CB2 /* MainView.swift */; };
+		B0B1C2D3E4F5061728394A5B /* EchoHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */; };
+		B0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */; };
+		B0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */; };
+		B0B1C2D3E4F5061728394A5E /* EchoAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */; };
 		14B6870AE108A3F8FE9E738B /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 837BCAB508DE49771AD6E478 /* EchoCore */; };
 		175FD424CC8B140CC7E257AC /* AppGroupBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C6FADA443E43D2F0DC52D5 /* AppGroupBridge.swift */; };
 		1D5DDBD8FDFE6C7E7FE0A4C3 /* EchoUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2AA64A8E783C9FD7E0F49240 /* EchoUI */; };
@@ -75,6 +79,10 @@
 		FA140E071E1DA6D4B90B09CA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1531B09ACCDB79FC2FC49B15 /* VoiceInputCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputCoordinator.swift; sourceTree = "<group>"; };
 		210A74478C858A7A367C2CB2 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHomeView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHistoryView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoDictionaryView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoAccountView.swift; sourceTree = "<group>"; };
 		2746BE2EFD003FB5C59B8952 /* GlobalHotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyMonitor.swift; sourceTree = "<group>"; };
 		282D61BCB4384740A670C946 /* VoiceInputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputService.swift; sourceTree = "<group>"; };
 		2AA94C54579B51AE4E016C68 /* VoiceRecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordingView.swift; sourceTree = "<group>"; };
@@ -263,6 +271,10 @@
 			isa = PBXGroup;
 			children = (
 				210A74478C858A7A367C2CB2 /* MainView.swift */,
+				A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */,
+				A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */,
+				A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */,
+				A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */,
 				8CDFA00DF51DB7720485465F /* ProviderSettingsView.swift */,
 				9D1E2B1AF62213AEC4E3E3B2 /* SettingsView.swift */,
 				2AA94C54579B51AE4E016C68 /* VoiceRecordingView.swift */,
@@ -408,6 +420,10 @@
 				175FD424CC8B140CC7E257AC /* AppGroupBridge.swift in Sources */,
 				24F347E37A9B3035D7DC65DF /* CorrectionProviderResolver.swift in Sources */,
 				13EFD688437B9302D44440DD /* MainView.swift in Sources */,
+				B0B1C2D3E4F5061728394A5B /* EchoHomeView.swift in Sources */,
+				B0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift in Sources */,
+				B0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift in Sources */,
+				B0B1C2D3E4F5061728394A5E /* EchoAccountView.swift in Sources */,
 				A41F66B3A885D3BFDF50C747 /* ProviderSettingsView.swift in Sources */,
 				B62A80AD64EE33EAC221B019 /* SettingsView.swift in Sources */,
 				60DE7BB9335D038A2E034E58 /* EchoApp.swift in Sources */,
