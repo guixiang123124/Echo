@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import EchoCore
 
 /// Application delegate for handling app lifecycle and global hotkey setup
 @MainActor
@@ -21,6 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let settings = MacAppSettings.shared
     private let permissionManager = PermissionManager.shared
     private lazy var hotkeyMonitor = GlobalHotkeyMonitor(settings: settings)
+    private let authSession = EchoAuthSession.shared
+    private let cloudSync = CloudSyncService.shared
 
     // MARK: - App Lifecycle
 
@@ -30,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Initialize services
         voiceInputService = VoiceInputService(settings: settings)
         textInserter = TextInserter()
+
+        authSession.start()
+        cloudSync.configureIfNeeded()
+        cloudSync.setEnabled(settings.cloudSyncEnabled)
+        cloudSync.updateAuthState(user: authSession.user)
 
         // Bind voice input state to app state for UI
         if let voiceInputService {
@@ -86,6 +94,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 guard let self else { return }
                 self.permissionManager.checkAllPermissions()
                 self.startHotkeyMonitoring()
+            }
+            .store(in: &cancellables)
+
+        authSession.$user
+            .sink { [weak self] user in
+                guard let self else { return }
+                self.cloudSync.updateAuthState(user: user)
+                if let user {
+                    self.settings.currentUserId = user.uid
+                    let name = user.displayName ?? user.email ?? user.phoneNumber ?? "Echo User"
+                    self.settings.userDisplayName = name
+                    Task { await RecordingStore.shared.migrateUser(from: self.settings.localUserId, to: user.uid) }
+                } else {
+                    self.settings.switchToLocalUser()
+                }
             }
             .store(in: &cancellables)
 
@@ -516,13 +539,13 @@ struct RecordingPillView: View {
                     Capsule()
                         .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.22), radius: 16, y: 7)
+                .shadow(color: Color.black.opacity(0.18), radius: 12, y: 5)
 
             content
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
         }
-        .frame(width: 240, height: 44)
+        .frame(width: 200, height: 34)
         .clipShape(Capsule())
         .onAppear {
             shimmer = true
@@ -595,14 +618,14 @@ struct ListeningPillContent: View {
     let levels: [CGFloat]
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             SymmetricBarsView(levels: levels, reverseWeights: false)
-                .frame(width: 60, height: 18)
+                .frame(width: 52, height: 14)
             Text("Listening")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.92))
             SymmetricBarsView(levels: levels, reverseWeights: true)
-                .frame(width: 60, height: 18)
+                .frame(width: 52, height: 14)
         }
     }
 }
@@ -612,27 +635,39 @@ struct SymmetricBarsView: View {
     let reverseWeights: Bool
 
     var body: some View {
-        Canvas { context, size in
-            let count = 8
-            let barWidth: CGFloat = 4
-            let spacing: CGFloat = 3
-            let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
-            let startX = (size.width - totalWidth) / 2
-            let midY = size.height / 2
-            let maxHeight = size.height
+        TimelineView(.animation) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            Canvas { context, size in
+                let count = 14
+                let barWidth: CGFloat = 2.4
+                let spacing: CGFloat = 2.2
+                let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
+                let startX = (size.width - totalWidth) / 2
+                let midY = size.height / 2
+                let maxHeight = size.height
 
-            let samples = normalizedLevels(count: count)
-            let gradient = Gradient(colors: [Color.cyan.opacity(0.9), Color.blue.opacity(0.85)])
+                let samples = normalizedLevels(count: count)
+                let gradient = Gradient(colors: [Color.cyan.opacity(0.9), Color.blue.opacity(0.9)])
 
-            for index in 0..<count {
-                let level = samples[index]
-                let progress = CGFloat(index) / CGFloat(max(1, count - 1))
-                let weight = reverseWeights ? (0.35 + 0.65 * (1 - progress)) : (0.35 + 0.65 * progress)
-                let height = max(4, level * weight * maxHeight)
-                let x = startX + CGFloat(index) * (barWidth + spacing)
-                let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
-                let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
-                context.fill(path, with: .linearGradient(gradient, startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.minX, y: rect.maxY)))
+                for index in 0..<count {
+                    let base = samples[index]
+                    let progress = CGFloat(index) / CGFloat(max(1, count - 1))
+                    let weight = reverseWeights ? (0.45 + 0.55 * (1 - progress)) : (0.45 + 0.55 * progress)
+                    let phase = time * 3.2 + Double(index) * 0.7
+                    let wave = 0.65 + 0.35 * ((sin(phase) + 1) / 2)
+                    let height = max(2.6, pow(base * wave * weight, 0.8) * maxHeight)
+                    let x = startX + CGFloat(index) * (barWidth + spacing)
+                    let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
+                    let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
+                    context.fill(
+                        path,
+                        with: .linearGradient(
+                            gradient,
+                            startPoint: CGPoint(x: rect.minX, y: rect.minY),
+                            endPoint: CGPoint(x: rect.minX, y: rect.maxY)
+                        )
+                    )
+                }
             }
         }
         .drawingGroup()
@@ -641,10 +676,10 @@ struct SymmetricBarsView: View {
     private func normalizedLevels(count: Int) -> [CGFloat] {
         let trimmed = Array(levels.suffix(count))
         if trimmed.count >= count {
-            return trimmed.map { max(0.08, min($0, 1.0)) }
+            return trimmed.map { max(0.12, min($0, 1.0)) }
         }
-        let padding = Array(repeating: CGFloat(0.08), count: count - trimmed.count)
-        return padding + trimmed.map { max(0.08, min($0, 1.0)) }
+        let padding = Array(repeating: CGFloat(0.12), count: count - trimmed.count)
+        return padding + trimmed.map { max(0.12, min($0, 1.0)) }
     }
 }
 
@@ -680,12 +715,12 @@ struct ThinkingSweepView: View {
 
                 HStack(spacing: 6) {
                     ThinkingDotsView()
-                        .frame(width: 28, height: 10)
+                        .frame(width: 24, height: 8)
                     Text(text)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.white.opacity(0.92))
                     ThinkingDotsView()
-                        .frame(width: 28, height: 10)
+                        .frame(width: 24, height: 8)
                 }
             }
         }
@@ -779,6 +814,7 @@ private enum HomeSection: String, CaseIterable, Identifiable {
 private final class HomeDashboardViewModel: ObservableObject {
     @Published var entries: [RecordingStore.RecordingEntry] = []
     @Published var isLoading = false
+    @Published var storageInfo: RecordingStore.StorageInfo?
 
     var totalMinutes: Int {
         max(0, Int(entries.reduce(0) { $0 + $1.duration } / 60.0))
@@ -803,13 +839,14 @@ private final class HomeDashboardViewModel: ObservableObject {
         return max(0, Int(Double(totalWords) / 180.0))
     }
 
-    func refresh() {
-        Task { await reload() }
+    func refresh(userId: String?) {
+        Task { await reload(userId: userId) }
     }
 
-    private func reload() async {
+    private func reload(userId: String?) async {
         isLoading = true
-        entries = await RecordingStore.shared.fetchRecent(limit: 300)
+        entries = await RecordingStore.shared.fetchRecent(limit: 300, userId: userId)
+        storageInfo = await RecordingStore.shared.storageInfo()
         isLoading = false
     }
 }
@@ -817,11 +854,14 @@ private final class HomeDashboardViewModel: ObservableObject {
 struct EchoHomeWindowView: View {
     @ObservedObject var settings: MacAppSettings
     @Environment(\.openSettings) private var openSettings
+    @EnvironmentObject var authSession: EchoAuthSession
+    @EnvironmentObject var cloudSync: CloudSyncService
     @StateObject private var model = HomeDashboardViewModel()
     @State private var selectedSection: HomeSection = .home
     @State private var newTerm: String = ""
     @State private var dictionaryFilter: DictionaryFilter = .all
     @State private var retentionOption: HistoryRetention = .forever
+    @State private var showAuthSheet = false
 
     var body: some View {
         ZStack {
@@ -836,14 +876,24 @@ struct EchoHomeWindowView: View {
         }
         .frame(minWidth: 1080, minHeight: 720)
         .onAppear {
-            model.refresh()
+            model.refresh(userId: settings.currentUserId)
             retentionOption = HistoryRetention.from(days: settings.historyRetentionDays)
         }
         .onChange(of: retentionOption) { _, newValue in
             settings.historyRetentionDays = newValue.days
         }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
-            model.refresh()
+            model.refresh(userId: settings.currentUserId)
+        }
+        .onChange(of: settings.currentUserId) { _, newValue in
+            model.refresh(userId: newValue)
+        }
+        // The Home UI uses a Typeless-style light theme with explicit light backgrounds.
+        // Force light color scheme so system text colors stay readable even if macOS is in Dark Mode.
+        .environment(\.colorScheme, .light)
+        .sheet(isPresented: $showAuthSheet) {
+            AuthSheetView()
+                .environmentObject(authSession)
         }
     }
 
@@ -873,6 +923,25 @@ struct EchoHomeWindowView: View {
 
                 Spacer()
             }
+
+            Button {
+                showAuthSheet = true
+            } label: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(authSession.isSignedIn ? authSession.displayName : "Sign in")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(authSession.isSignedIn ? "Cloud sync enabled" : "Sign in to sync history")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(EchoHomeTheme.cardBackground)
+                )
+            }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(HomeSection.allCases) { section in
@@ -999,6 +1068,12 @@ struct EchoHomeWindowView: View {
                 GridItem(.flexible(), spacing: 14)
             ], spacing: 14) {
                 PersonalizationCard(progress: 0.0)
+                SyncStatusCard(
+                    storageInfo: model.storageInfo,
+                    syncStatus: cloudSync.status,
+                    isSignedIn: authSession.isSignedIn,
+                    displayName: authSession.displayName
+                )
                 StatCard(title: "Total dictation time", value: "\(model.totalMinutes) min", icon: "clock")
                 StatCard(title: "Words dictated", value: "\(max(model.totalWords, settings.totalWordsTranscribed))", icon: "mic.fill")
                 StatCard(title: "Time saved", value: "\(model.timeSavedMinutes) min", icon: "bolt.fill")
@@ -1268,6 +1343,87 @@ private struct PersonalizationCard: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(EchoHomeTheme.cardBackground)
                 .shadow(color: Color.black.opacity(0.04), radius: 10, y: 6)
+        )
+    }
+}
+
+private struct SyncStatusCard: View {
+    let storageInfo: RecordingStore.StorageInfo?
+    let syncStatus: CloudSyncService.Status
+    let isSignedIn: Bool
+    let displayName: String
+
+    private var statusText: String {
+        switch syncStatus {
+        case .idle:
+            return "Idle"
+        case .disabled(let reason):
+            return reason
+        case .syncing:
+            return "Syncing..."
+        case .synced(let date):
+            let formatter = DateFormatter()
+            formatter.dateStyle = .none
+            formatter.timeStyle = .short
+            return "Synced at \(formatter.string(from: date))"
+        case .error(let message):
+            return "Sync error: \(message)"
+        }
+    }
+
+    private var statusColor: Color {
+        switch syncStatus {
+        case .error:
+            return .red
+        case .disabled:
+            return .secondary
+        case .syncing:
+            return .blue
+        case .synced:
+            return .green
+        case .idle:
+            return .secondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "icloud.and.arrow.up")
+                    .foregroundStyle(EchoHomeTheme.accent)
+                Text("Database & Sync")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(isSignedIn ? "Signed in as \(displayName)" : "Not signed in")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                Text(statusText)
+                    .font(.caption)
+                    .foregroundStyle(statusColor)
+            }
+
+            if let storageInfo {
+                Text("Local records: \(storageInfo.entryCount)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(storageInfo.databaseURL.lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(EchoHomeTheme.cardBackground)
+                .shadow(color: Color.black.opacity(0.05), radius: 10, y: 6)
         )
     }
 }
