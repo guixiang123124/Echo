@@ -20,10 +20,17 @@ if [[ -z "${DERIVED_DIR}" ]]; then
   exit 1
 fi
 
-APP_SRC="${DERIVED_DIR}/Build/Products/Debug/EchoMac.app"
+APP_SRC="${DERIVED_DIR}/Build/Products/Debug/Echo.app"
 if [[ ! -d "${APP_SRC}" ]]; then
-  echo "EchoMac.app not found at:"
-  echo "  ${APP_SRC}"
+  # Backwards-compat: older builds used EchoMac.app as product name.
+  APP_SRC="${DERIVED_DIR}/Build/Products/Debug/EchoMac.app"
+fi
+
+if [[ ! -d "${APP_SRC}" ]]; then
+  echo "Echo.app not found in DerivedData."
+  echo "Expected one of:"
+  echo "  ${DERIVED_DIR}/Build/Products/Debug/Echo.app"
+  echo "  ${DERIVED_DIR}/Build/Products/Debug/EchoMac.app"
   echo "Build the EchoMac scheme in Xcode (Debug) first, then re-run this script."
   exit 1
 fi
@@ -39,4 +46,3 @@ echo "Installed:"
 echo "  ${APP_DEST}"
 
 open "${APP_DEST}"
-

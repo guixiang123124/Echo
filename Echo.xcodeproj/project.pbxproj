@@ -475,22 +475,23 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		1C0D88E4BF5F2F850A3B4D54 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
-				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
-				SDKROOT = macosx;
+			1C0D88E4BF5F2F850A3B4D54 /* Release */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
+					COMBINE_HIDPI_IMAGES = YES;
+					"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
+					ENABLE_HARDENED_RUNTIME = YES;
+					INFOPLIST_FILE = macOS/EchoMac/Info.plist;
+					LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+					MACOSX_DEPLOYMENT_TARGET = 14.0;
+					PRODUCT_NAME = Echo;
+					PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
+					SDKROOT = macosx;
+				};
+				name = Release;
 			};
-			name = Release;
-		};
 		64DA68B5AB3695AEBC1E9E48 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -604,22 +605,23 @@
 			};
 			name = Debug;
 		};
-		B52EB92A829E66393107CCDA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
-				"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
-				ENABLE_HARDENED_RUNTIME = YES;
-				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
-				SDKROOT = macosx;
+			B52EB92A829E66393107CCDA /* Debug */ = {
+				isa = XCBuildConfiguration;
+				buildSettings = {
+					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+					CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
+					COMBINE_HIDPI_IMAGES = YES;
+					"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
+					ENABLE_HARDENED_RUNTIME = YES;
+					INFOPLIST_FILE = macOS/EchoMac/Info.plist;
+					LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+					MACOSX_DEPLOYMENT_TARGET = 14.0;
+					PRODUCT_NAME = Echo;
+					PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
+					SDKROOT = macosx;
+				};
+				name = Debug;
 			};
-			name = Debug;
-		};
 		BBFF3AC7386C73BA9373735F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {

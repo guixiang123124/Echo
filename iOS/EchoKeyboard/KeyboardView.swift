@@ -13,10 +13,10 @@ struct KeyboardView: View {
         VStack(spacing: 0) {
             KeyboardTopBar(
                 onOpenSettings: {
-                    VoiceInputTrigger.openMainAppForSettings(from: state.viewController)
+                    openMainAppSettings()
                 },
                 onTriggerVoice: {
-                    VoiceInputTrigger.openMainAppForVoice(from: state.viewController)
+                    openMainAppVoice()
                 },
                 onCollapse: {
                     (state.viewController as? UIInputViewController)?.dismissKeyboard()
@@ -42,6 +42,13 @@ struct KeyboardView: View {
         }
         .frame(height: keyboardHeight)
         .background(EchoTheme.keyboardBackground)
+        .overlay(alignment: .top) {
+            if state.toastVisible, let message = state.toastMessage {
+                KeyboardToast(message: message)
+                    .padding(.top, 6)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
     }
 
     @ViewBuilder
@@ -114,7 +121,7 @@ struct KeyboardView: View {
 
         case .triggerVoiceInput:
             if hapticEnabled { state.haptic.specialKeyTap() }
-            VoiceInputTrigger.openMainAppForVoice(from: state.viewController)
+            openMainAppVoice()
 
         case .triggerEmoji:
             if hapticEnabled { state.haptic.specialKeyTap() }
@@ -124,6 +131,32 @@ struct KeyboardView: View {
 
         case .dismissKeyboard:
             (state.viewController as? UIInputViewController)?.dismissKeyboard()
+        }
+    }
+
+    private func openMainAppVoice() {
+        guard state.hasFullAccess else {
+            state.showToast("Enable Full Access to use voice input")
+            return
+        }
+
+        VoiceInputTrigger.openMainAppForVoice(from: state.viewController) { success in
+            if !success {
+                state.showToast("Couldn't open Echo. Open the app and try again.")
+            }
+        }
+    }
+
+    private func openMainAppSettings() {
+        guard state.hasFullAccess else {
+            state.showToast("Enable Full Access to open Echo settings")
+            return
+        }
+
+        VoiceInputTrigger.openMainAppForSettings(from: state.viewController) { success in
+            if !success {
+                state.showToast("Couldn't open Echo. Open the app and try again.")
+            }
         }
     }
 
@@ -227,5 +260,23 @@ private struct KeyboardTopBar: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(EchoTheme.keyboardSurface)
+    }
+}
+
+private struct KeyboardToast: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.black.opacity(0.82))
+            )
+            .shadow(color: Color.black.opacity(0.18), radius: 10, y: 6)
+            .padding(.horizontal, 10)
     }
 }

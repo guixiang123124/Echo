@@ -70,6 +70,8 @@ class KeyboardState: ObservableObject {
     @Published var shiftState: ShiftState = .lowercased
     @Published var pinyinCandidates: [PinyinCandidate] = []
     @Published var pinyinInput: String = ""
+    @Published var toastMessage: String?
+    @Published var toastVisible: Bool = false
 
     let pinyinEngine = PinyinEngine()
     let actionHandler = KeyboardActionHandler()
@@ -78,9 +80,31 @@ class KeyboardState: ObservableObject {
 
     /// Reference to the view controller for opening URLs
     weak var viewController: UIViewController?
+    private var toastTask: Task<Void, Never>?
 
     init() {
         let savedMode = settings.defaultInputMode
         inputMode = savedMode == "pinyin" ? .pinyin : .english
+    }
+
+    var hasFullAccess: Bool {
+        (viewController as? UIInputViewController)?.hasFullAccess ?? false
+    }
+
+    func showToast(_ message: String, duration: TimeInterval = 1.8) {
+        toastTask?.cancel()
+        toastTask = Task { @MainActor in
+            withAnimation(.easeOut(duration: 0.15)) {
+                toastMessage = message
+                toastVisible = true
+            }
+
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            withAnimation(.easeIn(duration: 0.15)) {
+                toastVisible = false
+            }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            toastMessage = nil
+        }
     }
 }
