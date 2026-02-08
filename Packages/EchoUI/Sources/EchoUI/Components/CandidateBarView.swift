@@ -21,8 +21,8 @@ public struct CandidateBarView: View {
 
     private var barBackground: Color {
         colorScheme == .dark
-            ? Color.white.opacity(0.08)
-            : Color.gray.opacity(0.1)
+            ? EchoTheme.keyboardSurface
+            : EchoTheme.keyboardSurface
     }
 
     public var body: some View {
@@ -32,7 +32,7 @@ public struct CandidateBarView: View {
                 HStack {
                     Text(pinyinInput)
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.blue)
+                        .foregroundColor(EchoTheme.accent)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 4)
                     Spacer()

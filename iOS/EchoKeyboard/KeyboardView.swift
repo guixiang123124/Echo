@@ -11,6 +11,18 @@ struct KeyboardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            KeyboardTopBar(
+                onOpenSettings: {
+                    VoiceInputTrigger.openMainAppForSettings(from: state.viewController)
+                },
+                onTriggerVoice: {
+                    VoiceInputTrigger.openMainAppForVoice(from: state.viewController)
+                },
+                onCollapse: {
+                    (state.viewController as? UIInputViewController)?.dismissKeyboard()
+                }
+            )
+
             // Candidate bar (for Pinyin mode)
             if state.inputMode == .pinyin && !state.pinyinCandidates.isEmpty {
                 CandidateBarView(
@@ -24,11 +36,12 @@ struct KeyboardView: View {
 
             // Keyboard layout
             keyboardContent
-                .padding(.horizontal, 3)
-                .padding(.vertical, 4)
-                .background(Color(.systemGray5))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(EchoTheme.keyboardBackground)
         }
         .frame(height: keyboardHeight)
+        .background(EchoTheme.keyboardBackground)
     }
 
     @ViewBuilder
@@ -53,7 +66,8 @@ struct KeyboardView: View {
 
     private var keyboardHeight: CGFloat {
         let hasCandidates = state.inputMode == .pinyin && !state.pinyinCandidates.isEmpty
-        return hasCandidates ? 300 : 260
+        let base: CGFloat = hasCandidates ? 300 : 260
+        return base + 44
     }
 
     private func handleKeyAction(_ action: KeyboardAction) {
@@ -109,7 +123,7 @@ struct KeyboardView: View {
             onNextKeyboard()
 
         case .dismissKeyboard:
-            break
+            (state.viewController as? UIInputViewController)?.dismissKeyboard()
         }
     }
 
@@ -160,5 +174,58 @@ struct KeyboardView: View {
         }
         state.pinyinInput = ""
         state.pinyinCandidates = []
+    }
+}
+
+// MARK: - Top Bar
+
+private struct KeyboardTopBar: View {
+    let onOpenSettings: () -> Void
+    let onTriggerVoice: () -> Void
+    let onCollapse: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle().fill(EchoTheme.keySecondaryBackground)
+                    )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(action: onTriggerVoice) {
+                EchoDictationPill(
+                    isRecording: false,
+                    isProcessing: false,
+                    levels: [],
+                    tipText: nil,
+                    width: 150,
+                    height: 30
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(action: onCollapse) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle().fill(EchoTheme.keySecondaryBackground)
+                    )
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(EchoTheme.keyboardSurface)
     }
 }

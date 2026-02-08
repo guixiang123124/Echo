@@ -1,8 +1,11 @@
 import SwiftUI
 import EchoCore
+import AuthenticationServices
 
 struct SettingsView: View {
     @State private var settings = AppSettings()
+    @StateObject private var authSession = EchoAuthSession.shared
+    @State private var showAuthSheet = false
     @State private var selectedASR: String = ""
     @State private var correctionEnabled = true
     @State private var correctionHomophonesEnabled = true
@@ -15,6 +18,43 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("Account") {
+                    if !authSession.isConfigured {
+                        Text("Firebase not configured. Add GoogleService-Info.plist to enable sign-in and sync.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    if authSession.isSignedIn {
+                        HStack {
+                            Text("Signed in")
+                            Spacer()
+                            Text(authSession.displayName)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Sign in to sync history across devices.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("Sync History to Cloud", isOn: Binding(
+                        get: { settings.cloudSyncEnabled },
+                        set: { newValue in
+                            settings.cloudSyncEnabled = newValue
+                            CloudSyncService.shared.setEnabled(newValue)
+                        }
+                    ))
+
+                    Button(authSession.isSignedIn ? "Switch User" : "Sign In") {
+                        showAuthSheet = true
+                    }
+
+                    if authSession.isSignedIn {
+                        Button("Sign Out") { authSession.signOut() }
+                            .foregroundStyle(.red)
+                    }
+                }
+
                 // ASR Provider Section
                 Section("Speech Recognition") {
                     Picker("Provider", selection: $selectedASR) {
@@ -133,6 +173,10 @@ struct SettingsView: View {
                 settings.selectedCorrectionProvider = newValue
             }
         }
+        .sheet(isPresented: $showAuthSheet) {
+            AuthSheetView()
+                .environmentObject(authSession)
+        }
     }
 
     private func applyQuickMode(_ mode: AutoEditQuickMode) {
@@ -194,6 +238,105 @@ private enum AutoEditQuickMode: String, CaseIterable, Identifiable {
             return "Formatting"
         }
     }
+}
+
+// MARK: - Auth Sheet (iOS)
+
+struct AuthSheetView: View {
+    @EnvironmentObject var authSession: EchoAuthSession
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var mode: AuthMode = .email
+    @State private var email = ""
+    @State private var password = ""
+    @State private var phoneNumber = ""
+    @State private var smsCode = ""
+    @State private var currentNonce: String?
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Sign in") {
+                    Picker("", selection: $mode) {
+                        Text("Email").tag(AuthMode.email)
+                        Text("Phone").tag(AuthMode.phone)
+                    }
+                    .pickerStyle(.segmented)
+
+                    switch mode {
+                    case .email:
+                        TextField("Email", text: $email)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        SecureField("Password", text: $password)
+
+                        HStack {
+                            Button("Sign In") {
+                                Task { await authSession.signIn(email: email, password: password) }
+                            }
+                            Button("Create Account") {
+                                Task { await authSession.signUp(email: email, password: password) }
+                            }
+                        }
+                    case .phone:
+                        TextField("+1 555 123 4567", text: $phoneNumber)
+                            .keyboardType(.phonePad)
+                        Button("Send Code") {
+                            Task { await authSession.startPhoneVerification(phoneNumber) }
+                        }
+
+                        TextField("Verification code", text: $smsCode)
+                            .keyboardType(.numberPad)
+                        Button("Verify") {
+                            Task { await authSession.verifyPhoneCode(smsCode) }
+                        }
+                    }
+                }
+
+                Section {
+                    SignInWithAppleButton(.signIn) { request in
+                        let nonce = NonceHelper.randomNonce()
+                        currentNonce = nonce
+                        request.requestedScopes = [.fullName, .email]
+                        request.nonce = NonceHelper.sha256(nonce)
+                    } onCompletion: { result in
+                        switch result {
+                        case .success(let auth):
+                            guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
+                                  let nonce = currentNonce else { return }
+                            Task { await authSession.signInWithApple(credential: credential, nonce: nonce) }
+                        case .failure(let error):
+                            authSession.errorMessage = error.localizedDescription
+                        }
+                    }
+                    .frame(height: 44)
+                }
+
+                if authSession.isLoading {
+                    ProgressView()
+                }
+
+                if let error = authSession.errorMessage, !error.isEmpty {
+                    Text(error)
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                }
+            }
+            .navigationTitle("Account")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+
+private enum AuthMode: String, CaseIterable, Identifiable {
+    case email
+    case phone
+
+    var id: String { rawValue }
 }
 
 // MARK: - Keyboard Setup Guide

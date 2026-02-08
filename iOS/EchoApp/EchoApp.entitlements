@@ -6,5 +6,7 @@
 	<array>
 		<string>group.com.xianggui.echo.shared</string>
 	</array>
+	<key>com.apple.developer.applesignin</key>
+	<string>Default</string>
 </dict>
 </plist>

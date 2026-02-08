@@ -876,25 +876,32 @@ struct EchoHomeWindowView: View {
         }
         .frame(minWidth: 1080, minHeight: 720)
         .onAppear {
-            model.refresh(userId: settings.currentUserId)
+            model.refresh(userId: effectiveUserId)
             retentionOption = HistoryRetention.from(days: settings.historyRetentionDays)
         }
         .onChange(of: retentionOption) { _, newValue in
             settings.historyRetentionDays = newValue.days
         }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
-            model.refresh(userId: settings.currentUserId)
+            model.refresh(userId: effectiveUserId)
         }
-        .onChange(of: settings.currentUserId) { _, newValue in
-            model.refresh(userId: newValue)
+        .onChange(of: settings.currentUserId) { _, _ in
+            model.refresh(userId: effectiveUserId)
+        }
+        .onChange(of: authSession.userId) { _, _ in
+            model.refresh(userId: effectiveUserId)
         }
         // The Home UI uses a Typeless-style light theme with explicit light backgrounds.
-        // Force light color scheme so system text colors stay readable even if macOS is in Dark Mode.
-        .environment(\.colorScheme, .light)
+        // Force light mode so `.primary` stays readable even if macOS is in Dark Mode.
+        .preferredColorScheme(.light)
         .sheet(isPresented: $showAuthSheet) {
             AuthSheetView()
                 .environmentObject(authSession)
         }
+    }
+
+    private var effectiveUserId: String? {
+        authSession.userId ?? settings.currentUserId
     }
 
     private var sidebar: some View {

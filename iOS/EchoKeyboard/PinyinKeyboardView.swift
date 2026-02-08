@@ -10,9 +10,9 @@ struct PinyinKeyboardView: View {
     var body: some View {
         let rows = KeyboardLayout.pinyinRows(shift: shiftState)
 
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     ForEach(row) { key in
                         KeyboardKeyView(key: key, onPress: onKeyPress)
                             .frame(maxWidth: maxWidth(for: key))
@@ -40,9 +40,9 @@ struct NumberKeyboardView: View {
     var body: some View {
         let rows = KeyboardLayout.numberRows()
 
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     ForEach(row) { key in
                         KeyboardKeyView(key: key, onPress: onKeyPress)
                     }
@@ -59,9 +59,9 @@ struct SymbolKeyboardView: View {
     var body: some View {
         let rows = KeyboardLayout.symbolRows()
 
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     ForEach(row) { key in
                         KeyboardKeyView(key: key, onPress: onKeyPress)
                     }

@@ -10,6 +10,8 @@ struct EchoMacApp: App {
     @StateObject private var permissionManager = PermissionManager.shared
     @StateObject private var settings = MacAppSettings.shared
     @StateObject private var diagnostics = DiagnosticsState.shared
+    @StateObject private var authSession = EchoAuthSession.shared
+    @StateObject private var cloudSync = CloudSyncService.shared
 
     var body: some Scene {
         // Menu Bar Extra - the main UI
@@ -19,6 +21,8 @@ struct EchoMacApp: App {
                 .environmentObject(permissionManager)
                 .environmentObject(settings)
                 .environmentObject(diagnostics)
+                .environmentObject(authSession)
+                .environmentObject(cloudSync)
         } label: {
             menuBarIcon
         }
@@ -31,6 +35,8 @@ struct EchoMacApp: App {
                 .environmentObject(permissionManager)
                 .environmentObject(settings)
                 .environmentObject(diagnostics)
+                .environmentObject(authSession)
+                .environmentObject(cloudSync)
         }
 
         Window("Echo Home", id: "echo-home") {
@@ -39,6 +45,8 @@ struct EchoMacApp: App {
                 .environmentObject(permissionManager)
                 .environmentObject(settings)
                 .environmentObject(diagnostics)
+                .environmentObject(authSession)
+                .environmentObject(cloudSync)
         }
 
         Window("Echo History", id: "echo-history") {
@@ -47,6 +55,8 @@ struct EchoMacApp: App {
                 .environmentObject(permissionManager)
                 .environmentObject(settings)
                 .environmentObject(diagnostics)
+                .environmentObject(authSession)
+                .environmentObject(cloudSync)
         }
     }
 

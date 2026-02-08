@@ -2,7 +2,7 @@
 import Foundation
 
 /// Service for capturing audio from the microphone using AVAudioEngine
-public final class AudioCaptureService: Sendable {
+public final class AudioCaptureService: @unchecked Sendable {
     public enum State: Sendable, Equatable {
         case idle
         case recording
@@ -16,6 +16,9 @@ public final class AudioCaptureService: Sendable {
     private let audioStream: AsyncStream<AudioChunk>
     private let audioContinuation: AsyncStream<AudioChunk>.Continuation
     private let format: AudioStreamFormat
+    #if os(iOS)
+    private var audioSessionConfigured = false
+    #endif
 
     public init(format: AudioStreamFormat = .default) {
         self.engine = AVAudioEngine()
@@ -56,6 +59,9 @@ public final class AudioCaptureService: Sendable {
 
     /// Start capturing audio from the microphone
     public func startRecording() throws {
+        #if os(iOS)
+        try configureAudioSessionIfNeeded()
+        #endif
         if engine.isRunning {
             engine.stop()
         }
@@ -63,8 +69,12 @@ public final class AudioCaptureService: Sendable {
         engine.reset()
 
         let inputNode = engine.inputNode
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-        engine.prepare()
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+
+        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
+            stateContinuation.yield(.error("No available audio input format"))
+            throw ASRError.audioFormatUnsupported
+        }
 
         guard let targetFormat = AudioFormatHelper.avFormat(from: format) else {
             stateContinuation.yield(.error("Unsupported audio format"))
@@ -79,12 +89,13 @@ public final class AudioCaptureService: Sendable {
         inputNode.installTap(
             onBus: 0,
             bufferSize: 1024,
-            format: inputFormat
+            format: nil
         ) { [weak self] buffer, _ in
             guard let self else { return }
             self.processAudioBuffer(buffer, converter: converter, targetFormat: targetFormat)
         }
 
+        engine.prepare()
         try engine.start()
         stateContinuation.yield(.recording)
     }
@@ -93,8 +104,23 @@ public final class AudioCaptureService: Sendable {
     public func stopRecording() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        #endif
         stateContinuation.yield(.idle)
     }
+
+    #if os(iOS)
+    private func configureAudioSessionIfNeeded() throws {
+        let session = AVAudioSession.sharedInstance()
+        if !audioSessionConfigured {
+            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .defaultToSpeaker])
+            try session.setPreferredSampleRate(format.sampleRate)
+            audioSessionConfigured = true
+        }
+        try session.setActive(true, options: [.notifyOthersOnDeactivation])
+    }
+    #endif
 
     // MARK: - Private
 

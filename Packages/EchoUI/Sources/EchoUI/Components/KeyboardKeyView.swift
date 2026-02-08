@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 import EchoCore
 
 /// View for a single keyboard key
@@ -8,6 +9,7 @@ public struct KeyboardKeyView: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var isPressed = false
+    @State private var didLongPress = false
 
     public init(key: KeyboardKey, onPress: @escaping (KeyboardAction) -> Void) {
         self.key = key
@@ -15,16 +17,41 @@ public struct KeyboardKeyView: View {
     }
 
     public var body: some View {
-        Button {
-            onPress(key.action)
-        } label: {
-            keyContent
-                .frame(maxWidth: .infinity, minHeight: 42)
-                .background(backgroundColor)
-                .cornerRadius(5)
-                .shadow(color: .black.opacity(0.15), radius: 0, y: 1)
+        if key.action == .space {
+            Button {
+                if !didLongPress {
+                    onPress(key.action)
+                }
+            } label: {
+                keyContent
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background(backgroundColor)
+                    .cornerRadius(10)
+                    .shadow(color: EchoTheme.keyShadow, radius: 0, y: 1)
+            }
+            .buttonStyle(KeyPressButtonStyle())
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.35)
+                    .onEnded { _ in
+                        didLongPress = true
+                        onPress(.voice)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            didLongPress = false
+                        }
+                    }
+            )
+        } else {
+            Button {
+                onPress(key.action)
+            } label: {
+                keyContent
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background(backgroundColor)
+                    .cornerRadius(10)
+                    .shadow(color: EchoTheme.keyShadow, radius: 0, y: 1)
+            }
+            .buttonStyle(KeyPressButtonStyle())
         }
-        .buttonStyle(KeyPressButtonStyle())
     }
 
     @ViewBuilder
@@ -48,7 +75,7 @@ public struct KeyboardKeyView: View {
         case .voice:
             Image(systemName: "mic.fill")
                 .font(.system(size: 18))
-                .foregroundColor(.blue)
+                .foregroundColor(EchoTheme.accent)
 
         case .globe:
             Image(systemName: "globe")
@@ -70,13 +97,9 @@ public struct KeyboardKeyView: View {
     private var backgroundColor: Color {
         switch key.action {
         case .character, .space:
-            return colorScheme == .dark
-                ? Color.white.opacity(0.2)
-                : Color.white.opacity(0.95)
+            return EchoTheme.keyBackground
         default:
-            return colorScheme == .dark
-                ? Color.white.opacity(0.12)
-                : Color.gray.opacity(0.3)
+            return EchoTheme.keySecondaryBackground
         }
     }
 

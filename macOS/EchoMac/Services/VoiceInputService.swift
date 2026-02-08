@@ -22,6 +22,7 @@ public final class VoiceInputService: ObservableObject {
     private let keyStore: SecureKeyStore
     private let contextStore: ContextMemoryStore
     private let recordingStore: RecordingStore
+    private let authSession = EchoAuthSession.shared
 
     // Audio buffer for transcription
     private var audioChunks: [AudioChunk] = []
@@ -177,17 +178,16 @@ public final class VoiceInputService: ObservableObject {
             finalTranscription = result
             finalTranscriptValue = result
 
-            Task {
-                await recordingStore.saveRecording(
-                    audio: combinedChunk,
-                    asrProviderId: provider.id,
-                    asrProviderName: provider.displayName,
-                    correctionProviderId: correctionProviderId,
-                    transcriptRaw: rawTranscript,
-                    transcriptFinal: finalTranscriptValue,
-                    error: nil
-                )
-            }
+            await recordingStore.saveRecording(
+                audio: combinedChunk,
+                asrProviderId: provider.id,
+                asrProviderName: provider.displayName,
+                correctionProviderId: correctionProviderId,
+                transcriptRaw: rawTranscript,
+                transcriptFinal: finalTranscriptValue,
+                error: nil,
+                userId: authSession.userId ?? settings.currentUserId
+            )
             return result
         } catch {
             let errorString = error.localizedDescription
@@ -203,17 +203,16 @@ public final class VoiceInputService: ObservableObject {
                     duration: totalDuration
                 )
 
-                Task {
-                    await recordingStore.saveRecording(
-                        audio: combinedChunk,
-                        asrProviderId: fallbackProviderId,
-                        asrProviderName: fallbackProviderName,
-                        correctionProviderId: correctionProviderId,
-                        transcriptRaw: rawTranscript,
-                        transcriptFinal: finalTranscriptValue,
-                        error: errorString
-                    )
-                }
+                await recordingStore.saveRecording(
+                    audio: combinedChunk,
+                    asrProviderId: fallbackProviderId,
+                    asrProviderName: fallbackProviderName,
+                    correctionProviderId: correctionProviderId,
+                    transcriptRaw: rawTranscript,
+                    transcriptFinal: finalTranscriptValue,
+                    error: errorString,
+                    userId: authSession.userId ?? settings.currentUserId
+                )
             }
             errorMessage = "Transcription failed: \(error.localizedDescription)"
             throw error

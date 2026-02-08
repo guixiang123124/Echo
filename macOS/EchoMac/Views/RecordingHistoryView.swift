@@ -8,18 +8,20 @@ final class RecordingHistoryViewModel: ObservableObject {
     @Published var entries: [RecordingStore.RecordingEntry] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
+    @Published var storageInfo: RecordingStore.StorageInfo?
 
     private var player: AVAudioPlayer?
 
-    func load() {
-        Task { await reload() }
+    func load(userId: String) {
+        Task { await reload(userId: userId) }
     }
 
-    func reload() async {
+    func reload(userId: String) async {
         isLoading = true
         errorMessage = nil
-        let items = await RecordingStore.shared.fetchRecent(limit: 200)
+        let items = await RecordingStore.shared.fetchRecent(limit: 200, userId: userId)
         entries = items
+        storageInfo = await RecordingStore.shared.storageInfo()
         isLoading = false
     }
 
@@ -41,6 +43,7 @@ final class RecordingHistoryViewModel: ObservableObject {
 
 struct RecordingHistoryView: View {
     @StateObject private var model = RecordingHistoryViewModel()
+    @EnvironmentObject var settings: MacAppSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,9 +67,12 @@ struct RecordingHistoryView: View {
             }
         }
         .frame(minWidth: 680, minHeight: 520)
-        .onAppear { model.load() }
+        .onAppear { model.load(userId: settings.currentUserId) }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
-            model.load()
+            model.load(userId: settings.currentUserId)
+        }
+        .onChange(of: settings.currentUserId) { _, newValue in
+            model.load(userId: newValue)
         }
     }
 
@@ -84,11 +90,32 @@ struct RecordingHistoryView: View {
             Spacer()
 
             Button("Refresh") {
-                model.load()
+                model.load(userId: settings.currentUserId)
             }
             .buttonStyle(.bordered)
         }
         .padding()
+        .overlay(alignment: .bottomLeading) {
+            if let info = model.storageInfo {
+                HStack(spacing: 8) {
+                    Text("Storage (\(info.entryCount))")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    Text(info.databaseURL.path)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Reveal") {
+                        NSWorkspace.shared.activateFileViewerSelecting([info.databaseURL])
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 10)
+            }
+        }
     }
 
     private var emptyState: some View {

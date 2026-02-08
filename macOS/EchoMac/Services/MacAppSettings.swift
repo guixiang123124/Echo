@@ -29,6 +29,10 @@ public final class MacAppSettings: ObservableObject {
         static let handsFreeSilenceThreshold = "handsFreeSilenceThreshold"
         static let handsFreeMinimumDuration = "handsFreeMinimumDuration"
         static let historyRetentionDays = "echo.history.retentionDays"
+        static let userId = "echo.user.id"
+        static let userDisplayName = "echo.user.displayName"
+        static let localUserId = "echo.user.localId"
+        static let cloudSyncEnabled = "echo.cloud.sync.enabled"
     }
 
     // MARK: - Hotkey Types
@@ -213,6 +217,18 @@ public final class MacAppSettings: ObservableObject {
         if defaults.object(forKey: Keys.historyRetentionDays) == nil {
             defaults.set(7, forKey: Keys.historyRetentionDays)
         }
+        if defaults.object(forKey: Keys.userId) == nil {
+            defaults.set(UUID().uuidString, forKey: Keys.userId)
+        }
+        if defaults.object(forKey: Keys.localUserId) == nil {
+            defaults.set(UUID().uuidString, forKey: Keys.localUserId)
+        }
+        if defaults.object(forKey: Keys.userDisplayName) == nil {
+            defaults.set("Local User", forKey: Keys.userDisplayName)
+        }
+        if defaults.object(forKey: Keys.cloudSyncEnabled) == nil {
+            defaults.set(true, forKey: Keys.cloudSyncEnabled)
+        }
     }
 
     // MARK: - Hotkey Settings
@@ -228,6 +244,42 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue.rawValue, forKey: Keys.hotkeyType)
+        }
+    }
+
+    // MARK: - User Profile
+
+    public var currentUserId: String {
+        get {
+            defaults.string(forKey: Keys.userId) ?? UUID().uuidString
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.userId)
+        }
+    }
+
+    public var localUserId: String {
+        get {
+            defaults.string(forKey: Keys.localUserId) ?? UUID().uuidString
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.localUserId)
+        }
+    }
+
+    public func switchToLocalUser() {
+        currentUserId = localUserId
+        userDisplayName = "Local User"
+    }
+
+    public var userDisplayName: String {
+        get {
+            defaults.string(forKey: Keys.userDisplayName) ?? "Local User"
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.userDisplayName)
         }
     }
 
@@ -392,6 +444,16 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.playSound)
+        }
+    }
+
+    // MARK: - Cloud Sync
+
+    public var cloudSyncEnabled: Bool {
+        get { defaults.bool(forKey: Keys.cloudSyncEnabled) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.cloudSyncEnabled)
         }
     }
 

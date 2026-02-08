@@ -6,6 +6,7 @@ import EchoCore
 class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardView>?
     private let keyboardState = KeyboardState()
+    private var lastInsertedTranscription: String?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -53,7 +54,11 @@ class KeyboardViewController: UIInputViewController {
     private func checkForPendingTranscription() {
         let bridge = AppGroupBridge()
         if let transcription = bridge.receivePendingTranscription() {
-            textDocumentProxy.insertText(transcription)
+            let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            guard trimmed != lastInsertedTranscription else { return }
+            lastInsertedTranscription = trimmed
+            textDocumentProxy.insertText(trimmed)
         }
     }
 }

@@ -1,11 +1,14 @@
 import SwiftUI
 import EchoCore
+import AuthenticationServices
 
 /// Main settings window view with tab navigation
 struct SettingsWindowView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var permissionManager: PermissionManager
     @EnvironmentObject var settings: MacAppSettings
+    @EnvironmentObject var authSession: EchoAuthSession
+    @EnvironmentObject var cloudSync: CloudSyncService
 
     var body: some View {
         TabView {
@@ -15,6 +18,8 @@ struct SettingsWindowView: View {
                 }
                 .environmentObject(settings)
                 .environmentObject(permissionManager)
+                .environmentObject(authSession)
+                .environmentObject(cloudSync)
 
             ASRSettingsTab()
                 .tabItem {
@@ -48,6 +53,9 @@ struct SettingsWindowView: View {
 struct GeneralSettingsView: View {
     @EnvironmentObject var settings: MacAppSettings
     @EnvironmentObject var permissionManager: PermissionManager
+    @EnvironmentObject var authSession: EchoAuthSession
+    @EnvironmentObject var cloudSync: CloudSyncService
+    @State private var showAuthSheet = false
 
     var body: some View {
         Form {
@@ -119,9 +127,69 @@ struct GeneralSettingsView: View {
                 Toggle("Play Sound on Start/Stop", isOn: $settings.playSoundEffects)
                 Toggle("Show Recording Indicator", isOn: $settings.showRecordingPanel)
             }
+
+            Section("Account") {
+                if !authSession.isConfigured {
+                    Text("Firebase not configured. Add GoogleService-Info.plist to enable sign-in and sync.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                if authSession.isSignedIn {
+                    HStack {
+                        Text("Signed in")
+                        Spacer()
+                        Text(authSession.displayName)
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("Sign in to sync history across devices.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Toggle("Sync History to Cloud", isOn: Binding(
+                    get: { settings.cloudSyncEnabled },
+                    set: { newValue in
+                        settings.cloudSyncEnabled = newValue
+                        cloudSync.setEnabled(newValue)
+                    }
+                ))
+
+                Button(authSession.isSignedIn ? "Switch User" : "Sign In") {
+                    showAuthSheet = true
+                }
+                .buttonStyle(.bordered)
+
+                if authSession.isSignedIn {
+                    Button("Sign Out") {
+                        authSession.signOut()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                TextField("Display name", text: $settings.userDisplayName)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Text("User ID")
+                    Spacer()
+                    Text(settings.currentUserId)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                Text("Records are stored locally and tagged to this user.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
         .formStyle(.grouped)
         .padding()
+        .sheet(isPresented: $showAuthSheet) {
+            AuthSheetView()
+                .environmentObject(authSession)
+        }
     }
 }
 
@@ -559,4 +627,110 @@ struct AboutSettingsTab: View {
         .environmentObject(AppState())
         .environmentObject(PermissionManager())
         .environmentObject(MacAppSettings())
+}
+
+// MARK: - Auth Sheet
+
+struct AuthSheetView: View {
+    @EnvironmentObject var authSession: EchoAuthSession
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var mode: AuthMode = .email
+    @State private var email = ""
+    @State private var password = ""
+    @State private var currentNonce: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Sign in to Echo")
+                    .font(.title2.bold())
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            Picker("", selection: $mode) {
+                Text("Email").tag(AuthMode.email)
+                Text("Phone").tag(AuthMode.phone)
+            }
+            .pickerStyle(.segmented)
+
+            switch mode {
+            case .email:
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField("Email", text: $email)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("Password", text: $password)
+                        .textFieldStyle(.roundedBorder)
+
+                    HStack(spacing: 12) {
+                        Button("Sign In") {
+                            Task { await authSession.signIn(email: email, password: password) }
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Create Account") {
+                            Task { await authSession.signUp(email: email, password: password) }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            case .phone:
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Phone sign-in is available on iOS.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            SignInWithAppleButton(.signIn) { request in
+                let nonce = NonceHelper.randomNonce()
+                currentNonce = nonce
+                request.requestedScopes = [.fullName, .email]
+                request.nonce = NonceHelper.sha256(nonce)
+            } onCompletion: { result in
+                switch result {
+                case .success(let auth):
+                    guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
+                          let nonce = currentNonce else { return }
+                    Task { await authSession.signInWithApple(credential: credential, nonce: nonce) }
+                case .failure(let error):
+                    authSession.errorMessage = error.localizedDescription
+                }
+            }
+            .frame(height: 36)
+
+            if authSession.isLoading {
+                ProgressView()
+            }
+
+            if let error = authSession.errorMessage, !error.isEmpty {
+                Text(error)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+
+            if authSession.isSignedIn {
+                Divider()
+                HStack {
+                    Text("Signed in as \(authSession.displayName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Sign Out") {
+                        authSession.signOut()
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
+private enum AuthMode: String, CaseIterable, Identifiable {
+    case email
+    case phone
+
+    var id: String { rawValue }
 }

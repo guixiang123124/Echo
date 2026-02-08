@@ -69,5 +69,8 @@ iOSInjectionProject/
 *.tmp
 *.temp
 
+# Local design scratchpad (generated icon experiments, etc.)
+Resources/
+
 # Claude Code (optional - remove if you want to track .claude config)
 # .claude/

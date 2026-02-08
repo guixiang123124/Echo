@@ -4,25 +4,31 @@ import EchoCore
 import EchoUI
 
 struct VoiceRecordingView: View {
+    let startForKeyboard: Bool
+
     @StateObject private var viewModel = VoiceRecordingViewModel()
     @State private var textInput: String = ""
     @State private var lastCommittedText: String = ""
     @State private var showSettings = false
     @FocusState private var isFocused: Bool
 
+    init(startForKeyboard: Bool = false) {
+        self.startForKeyboard = startForKeyboard
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
                 TextEditor(text: $textInput)
-                    .font(.system(size: 20))
+                    .font(.system(size: 18))
                     .padding(12)
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color(.systemBackground))
+                            .fill(EchoTheme.keyboardSurface)
                     )
                     .overlay(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(Color(.systemGray4), lineWidth: 1)
+                            .stroke(EchoTheme.pillStroke, lineWidth: 1)
                     )
                     .frame(minHeight: 180)
                     .focused($isFocused)
@@ -39,11 +45,15 @@ struct VoiceRecordingView: View {
                         isRecording: viewModel.isRecording,
                         isProcessing: viewModel.isProcessing,
                         audioLevels: viewModel.audioLevels,
+                        tipText: viewModel.tipText,
                         onToggleRecording: {
                             Task { await viewModel.toggleRecording() }
                         },
                         onOpenSettings: {
                             showSettings = true
+                        },
+                        onDismissKeyboard: {
+                            isFocused = false
                         }
                     )
                 }
@@ -53,9 +63,6 @@ struct VoiceRecordingView: View {
             } message: {
                 Text(viewModel.errorMessage)
             }
-        }
-        .onOpenURL { url in
-            handleDeepLink(url)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -72,13 +79,10 @@ struct VoiceRecordingView: View {
                 textInput += " " + newValue
             }
         }
-    }
-
-    private func handleDeepLink(_ url: URL) {
-        guard url.scheme == "echo",
-              url.host == "voice" else { return }
-
-        Task {
+        .background(EchoTheme.keyboardBackground)
+        .ignoresSafeArea()
+        .task {
+            guard startForKeyboard else { return }
             await viewModel.startRecordingForKeyboard()
         }
     }
@@ -93,13 +97,17 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var transcribedText = ""
     @Published var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     @Published var statusText = "Ready"
+    @Published var tipText = ACodeTaglines.random()
     @Published var showError = false
     @Published var errorMessage = ""
 
-    private let audioService = AudioCaptureService()
-    private let speechProvider = AppleLegacySpeechProvider()
+    private var audioService = AudioCaptureService()
     private let settings = AppSettings()
+    private let keyStore = SecureKeyStore()
     private let contextStore = ContextMemoryStore()
+    private let authSession = EchoAuthSession.shared
+    private var capturedChunks: [AudioChunk] = []
+    private var activeASRProvider: (any ASRProvider)?
     private var isKeyboardMode = false
     private var recordingTask: Task<Void, Never>?
     private var smoothedLevel: CGFloat = 0
@@ -113,6 +121,10 @@ final class VoiceRecordingViewModel: ObservableObject {
     }
 
     func startRecording() async {
+        errorMessage = ""
+        showError = false
+        capturedChunks = []
+
         // Request microphone permission
         let micGranted = await audioService.requestPermission()
         guard micGranted else {
@@ -120,77 +132,151 @@ final class VoiceRecordingViewModel: ObservableObject {
             return
         }
 
-        // Request speech recognition permission
-        let speechStatus = await speechProvider.requestAuthorization()
-        guard speechStatus == .authorized else {
-            showErrorMessage("Speech recognition permission is required.")
+        // Resolve ASR provider based on Settings.
+        guard let provider = resolveASRProvider() else {
+            showErrorMessage("Speech recognition is not configured. Add your API key in Settings > API Keys.")
             return
+        }
+        activeASRProvider = provider
+
+        // Apple Speech requires explicit authorization.
+        if provider.id == "apple_speech" {
+            if let appleProvider = provider as? AppleLegacySpeechProvider {
+                let speechStatus = await appleProvider.requestAuthorization()
+                guard speechStatus == .authorized else {
+                    showErrorMessage("Speech recognition permission is required.")
+                    activeASRProvider = nil
+                    return
+                }
+            }
         }
 
         // Start audio capture
         do {
+            // Recreate per session to avoid stale AVAudioEngine state.
+            audioService = AudioCaptureService()
             try audioService.startRecording()
         } catch {
             showErrorMessage("Failed to start recording: \(error.localizedDescription)")
+            activeASRProvider = nil
             return
         }
 
         isRecording = true
+        isProcessing = false
         statusText = "Listening..."
         transcribedText = ""
+        tipText = ACodeTaglines.random()
 
-        // Start ASR streaming
-        let stream = speechProvider.startStreaming()
-
-        // Launch concurrent tasks for feeding audio and processing results
+        // Collect audio + update audio levels while recording.
         recordingTask = Task { [weak self] in
             guard let self else { return }
-
-            await withTaskGroup(of: Void.self) { group in
-                // Feed audio chunks to ASR provider + update audio levels
-                group.addTask { [weak self] in
-                    guard let self else { return }
-                    for await chunk in self.audioService.audioChunks {
-                        try? await self.speechProvider.feedAudio(chunk)
-                        let level = AudioLevelCalculator.rmsLevel(from: chunk)
-                        await self.appendAudioLevel(level)
-                    }
-                }
-
-                // Process ASR results
-                group.addTask { [weak self] in
-                    for await result in stream {
-                        await MainActor.run {
-                            self?.transcribedText = result.text
-                            if result.isFinal {
-                                self?.handleFinalTranscription(result)
-                            }
-                        }
-                    }
+            for await chunk in self.audioService.audioChunks {
+                guard !Task.isCancelled else { break }
+                await MainActor.run {
+                    self.capturedChunks.append(chunk)
+                    let level = AudioLevelCalculator.rmsLevel(from: chunk)
+                    self.appendAudioLevel(level)
                 }
             }
         }
     }
 
     func stopRecording() async {
+        let provider = activeASRProvider
+        activeASRProvider = nil
+
         audioService.stopRecording()
-        _ = try? await speechProvider.stopStreaming()
         recordingTask?.cancel()
         recordingTask = nil
         isRecording = false
         audioLevels = Array(repeating: 0, count: 30)
 
-        if transcribedText.isEmpty {
-            statusText = "No speech detected"
-        } else if !isProcessing {
-            statusText = "Thinking..."
-            isProcessing = true
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(650))
-                self.isProcessing = false
-                self.statusText = "Ready"
-                self.deliverResult()
+        // Give the tap a moment to flush in-flight buffers.
+        for _ in 0..<4 where capturedChunks.isEmpty {
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+
+        guard let provider else {
+            statusText = "Ready"
+            return
+        }
+
+        guard !capturedChunks.isEmpty else {
+            statusText = "No audio data recorded"
+            showErrorMessage("No audio data recorded")
+            return
+        }
+
+        statusText = "Thinking..."
+        isProcessing = true
+
+        let combinedData = capturedChunks.reduce(Data()) { $0 + $1.data }
+        let totalDuration = capturedChunks.reduce(0) { $0 + $1.duration }
+        let format = capturedChunks.first?.format ?? .default
+
+        let combinedChunk = AudioChunk(
+            data: combinedData,
+            format: format,
+            duration: totalDuration
+        )
+
+        do {
+            // Transcribe
+            let transcription = try await provider.transcribe(audio: combinedChunk)
+            let rawText = transcription.text
+            var finalText = rawText
+
+            // Auto Edit (optional)
+            let correctionProviderId = settings.correctionEnabled ? settings.selectedCorrectionProvider : nil
+            if settings.correctionEnabled,
+               let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider) {
+                statusText = "Correcting..."
+                do {
+                    let pipeline = CorrectionPipeline(provider: correctionProvider)
+                    let context = await contextStore.currentContext()
+                    let corrected = try await pipeline.process(
+                        transcription: transcription,
+                        context: context,
+                        options: settings.correctionOptions
+                    )
+                    finalText = corrected.correctedText
+                } catch {
+                    finalText = rawText
+                }
             }
+
+            await contextStore.addTranscription(finalText)
+
+            await RecordingStore.shared.saveRecording(
+                audio: combinedChunk,
+                asrProviderId: provider.id,
+                asrProviderName: provider.displayName,
+                correctionProviderId: correctionProviderId,
+                transcriptRaw: rawText,
+                transcriptFinal: finalText,
+                error: nil,
+                userId: authSession.userId
+            )
+
+            transcribedText = finalText
+            isProcessing = false
+            statusText = "Ready"
+            deliverResult()
+        } catch {
+            await RecordingStore.shared.saveRecording(
+                audio: combinedChunk,
+                asrProviderId: provider.id,
+                asrProviderName: provider.displayName,
+                correctionProviderId: nil,
+                transcriptRaw: nil,
+                transcriptFinal: nil,
+                error: error.localizedDescription,
+                userId: authSession.userId
+            )
+            isProcessing = false
+            statusText = "Ready"
+            showErrorMessage("Could not process audio: \(error.localizedDescription)")
         }
     }
 
@@ -199,58 +285,42 @@ final class VoiceRecordingViewModel: ObservableObject {
         await startRecording()
     }
 
-    // MARK: - Private
-
-    private func handleFinalTranscription(_ result: TranscriptionResult) {
-        guard !result.text.isEmpty else { return }
-
-        let correctionProvider = CorrectionProviderResolver.resolve(
-            for: settings.selectedCorrectionProvider
-        )
-
-        guard settings.correctionEnabled, let provider = correctionProvider else {
-            deliverResult()
-            return
-        }
-
-        isProcessing = true
-        statusText = "Correcting..."
-
-        Task {
-            let pipeline = CorrectionPipeline(provider: provider)
-            let context = await contextStore.currentContext()
-
-            let finalText: String
-            do {
-                let corrected = try await pipeline.process(
-                    transcription: result,
-                    context: context,
-                    options: settings.correctionOptions
-                )
-                finalText = corrected.correctedText
-            } catch {
-                // Fallback to raw transcription on correction failure
-                finalText = result.text
-            }
-
-            await contextStore.addTranscription(finalText)
-
-            await MainActor.run {
-                self.transcribedText = finalText
-                self.isProcessing = false
-                self.statusText = "Ready"
-                self.deliverResult()
-            }
-        }
-    }
-
     private func deliverResult() {
+        guard !transcribedText.isEmpty else { return }
         if isKeyboardMode {
             settings.pendingTranscription = transcribedText
             isKeyboardMode = false
             statusText = "Sent to keyboard"
         } else {
             statusText = "Ready"
+        }
+    }
+
+    private func resolveASRProvider() -> (any ASRProvider)? {
+        switch settings.selectedASRProvider {
+        case "apple_speech":
+            let provider = AppleLegacySpeechProvider(localeIdentifier: nil)
+            return provider.isAvailable ? provider : nil
+        case "aliyun":
+            guard let appKey = try? keyStore.retrieve(for: "aliyun_app_key"),
+                  let token = try? keyStore.retrieve(for: "aliyun_token"),
+                  !appKey.isEmpty,
+                  !token.isEmpty else {
+                return nil
+            }
+            return AliyunASRProvider(appKey: appKey, token: token)
+        case "volcano":
+            guard let appId = try? keyStore.retrieve(for: "volcano_app_id"),
+                  let accessKey = try? keyStore.retrieve(for: "volcano_access_key"),
+                  !appId.isEmpty,
+                  !accessKey.isEmpty else {
+                return nil
+            }
+            return VolcanoASRProvider(appId: appId, accessKey: accessKey)
+        default:
+            // Default to OpenAI Whisper (batch transcription)
+            let provider = OpenAIWhisperProvider(keyStore: keyStore)
+            return provider.isAvailable ? provider : nil
         }
     }
 
@@ -275,166 +345,65 @@ struct KeyboardAccessoryBar: View {
     let isRecording: Bool
     let isProcessing: Bool
     let audioLevels: [CGFloat]
+    let tipText: String
     let onToggleRecording: () -> Void
     let onOpenSettings: () -> Void
+    let onDismissKeyboard: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onOpenSettings) {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color(.systemGray))
-            }
-
-            Spacer()
-
-            Button(action: onToggleRecording) {
-                DictationPill(isRecording: isRecording, isProcessing: isProcessing, audioLevels: audioLevels)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(EchoTheme.keySecondaryBackground))
             }
             .buttonStyle(.plain)
 
             Spacer()
+
+            Button(action: onToggleRecording) {
+                EchoDictationPill(
+                    isRecording: isRecording,
+                    isProcessing: isProcessing,
+                    levels: audioLevels,
+                    tipText: tipText,
+                    width: 210,
+                    height: 32
+                )
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(action: onDismissKeyboard) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(EchoTheme.keySecondaryBackground))
+            }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(Color(.systemGray5))
+        .background(EchoTheme.keyboardSurface)
     }
 }
 
-struct DictationPill: View {
-    let isRecording: Bool
-    let isProcessing: Bool
-    let audioLevels: [CGFloat]
+enum ACodeTaglines {
+    private static let options: [String] = [
+        "Speak once. ACode shapes it into clarity.",
+        "ACode turns ideas into clean, shippable notes.",
+        "Think aloud, ACode makes it real.",
+        "From voice to precision — powered by ACode.",
+        "ACode keeps your thoughts crisp and actionable.",
+        "ACode turns rough drafts into sharp direction."
+    ]
 
-    var body: some View {
-        ZStack {
-            Capsule()
-                .fill(Color(.systemGray6))
-                .overlay(
-                    Capsule()
-                        .stroke(Color(.systemGray4), lineWidth: 1)
-                )
-
-            if isRecording {
-                ListeningPillContent(levels: audioLevels)
-                    .padding(.horizontal, 10)
-            } else if isProcessing {
-                ThinkingPillContent()
-                    .padding(.horizontal, 10)
-            } else {
-                HStack(spacing: 6) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color(.systemGray))
-                    Text("点击说话")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color(.systemGray))
-                }
-            }
-        }
-        .frame(width: 200, height: 32)
-    }
-}
-
-struct ListeningPillContent: View {
-    let levels: [CGFloat]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            SymmetricBarsView(levels: levels, reverseWeights: false)
-                .frame(width: 42, height: 16)
-            VStack(spacing: 1) {
-                Text("正在倾听 点击结束")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color(.label))
-                Text("你的方言 也能听懂")
-                    .font(.system(size: 9, weight: .regular))
-                    .foregroundStyle(Color(.secondaryLabel))
-            }
-            SymmetricBarsView(levels: levels, reverseWeights: true)
-                .frame(width: 42, height: 16)
-        }
-    }
-}
-
-struct SymmetricBarsView: View {
-    let levels: [CGFloat]
-    let reverseWeights: Bool
-
-    var body: some View {
-        Canvas { context, size in
-            let count = 8
-            let barWidth: CGFloat = 3
-            let spacing: CGFloat = 2
-            let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
-            let startX = (size.width - totalWidth) / 2
-            let midY = size.height / 2
-            let maxHeight = size.height
-
-            let samples = normalizedLevels(count: count)
-            let gradient = Gradient(colors: [Color.cyan.opacity(0.9), Color.blue.opacity(0.85)])
-
-            for index in 0..<count {
-                let level = samples[index]
-                let progress = CGFloat(index) / CGFloat(max(1, count - 1))
-                let weight = reverseWeights ? (0.35 + 0.65 * (1 - progress)) : (0.35 + 0.65 * progress)
-                let height = max(3, level * weight * maxHeight)
-                let x = startX + CGFloat(index) * (barWidth + spacing)
-                let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
-                let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
-                context.fill(path, with: .linearGradient(gradient, startPoint: CGPoint(x: rect.minX, y: rect.minY), endPoint: CGPoint(x: rect.minX, y: rect.maxY)))
-            }
-        }
-        .drawingGroup()
-    }
-
-    private func normalizedLevels(count: Int) -> [CGFloat] {
-        let trimmed = Array(levels.suffix(count))
-        if trimmed.count >= count {
-            return trimmed.map { max(0.08, min($0, 1.0)) }
-        }
-        let padding = Array(repeating: CGFloat(0.08), count: count - trimmed.count)
-        return padding + trimmed.map { max(0.08, min($0, 1.0)) }
-    }
-}
-
-struct ThinkingPillContent: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            ThinkingDotsView()
-                .frame(width: 22, height: 10)
-            Text("识别中")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(.secondaryLabel))
-            ThinkingDotsView()
-                .frame(width: 22, height: 10)
-        }
-    }
-}
-
-struct ThinkingDotsView: View {
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            Canvas { context, size in
-                let count = 4
-                let spacing: CGFloat = 3
-                let radius: CGFloat = 2.0
-                let totalWidth = CGFloat(count) * radius * 2 + CGFloat(count - 1) * spacing
-                let startX = (size.width - totalWidth) / 2
-                let centerY = size.height / 2
-
-                for index in 0..<count {
-                    let phase = time * 3 + Double(index) * 0.6
-                    let pulse = 0.6 + 0.4 * ((sin(phase) + 1) / 2)
-                    let alpha = 0.35 + 0.55 * ((sin(phase) + 1) / 2)
-                    let r = radius * pulse
-                    let x = startX + CGFloat(index) * (radius * 2 + spacing) + radius - r
-                    let rect = CGRect(x: x, y: centerY - r, width: r * 2, height: r * 2)
-                    context.fill(Path(ellipseIn: rect), with: .color(Color.cyan.opacity(alpha)))
-                }
-            }
-        }
+    static func random() -> String {
+        options.randomElement() ?? "Speak once. ACode shapes it into clarity."
     }
 }

@@ -26,10 +26,18 @@ public actor RecordingStore {
         public let wordCount: Int
         public let error: String?
         public let status: String
+        public let userId: String?
 
         public var audioURL: URL? {
             audioPath.isEmpty ? nil : URL(fileURLWithPath: audioPath)
         }
+    }
+
+    public struct StorageInfo: Sendable {
+        public let baseDirectory: URL
+        public let recordingsDirectory: URL
+        public let databaseURL: URL
+        public let entryCount: Int
     }
 
     private let fileManager = FileManager.default
@@ -56,6 +64,7 @@ public actor RecordingStore {
         )
         db = Self.openDatabase(at: databaseURL)
         Self.createTables(in: db)
+        Self.migrateSchemaIfNeeded(in: db)
     }
 
     deinit {
@@ -73,7 +82,8 @@ public actor RecordingStore {
         correctionProviderId: String?,
         transcriptRaw: String?,
         transcriptFinal: String?,
-        error: String?
+        error: String?,
+        userId: String?
     ) {
         guard let db else {
             print("❌ RecordingStore: database not available")
@@ -115,8 +125,9 @@ public actor RecordingStore {
             transcript_final,
             word_count,
             error,
-            status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            status,
+            user_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
 
         var statement: OpaquePointer?
@@ -141,30 +152,78 @@ public actor RecordingStore {
         sqlite3_bind_int(stmt, 13, Int32(wordCount))
         bindText(stmt, index: 14, value: storedError)
         bindText(stmt, index: 15, value: status)
+        bindText(stmt, index: 16, value: userId)
 
+        var insertedId: Int64?
         if sqlite3_step(stmt) != SQLITE_DONE {
             print("❌ RecordingStore: Failed to insert recording")
         } else {
+            insertedId = sqlite3_last_insert_rowid(db)
             Task { @MainActor in
                 NotificationCenter.default.post(name: .echoRecordingSaved, object: nil)
             }
         }
 
         cleanupIfNeeded()
+
+        if let insertedId, storedError == nil || transcriptRaw != nil || transcriptFinal != nil {
+            let payload = CloudRecording(
+                id: String(insertedId),
+                createdAt: Date(timeIntervalSince1970: createdAt),
+                duration: audio.duration,
+                sampleRate: audio.format.sampleRate,
+                channelCount: audio.format.channelCount,
+                bitsPerSample: audio.format.bitsPerSample,
+                encoding: audio.format.encoding.rawValue,
+                asrProviderId: asrProviderId,
+                asrProviderName: asrProviderName,
+                correctionProviderId: correctionProviderId,
+                transcriptRaw: transcriptRaw,
+                transcriptFinal: transcriptFinal,
+                wordCount: wordCount,
+                status: status,
+                error: storedError,
+                audioStoragePath: nil,
+                audioDownloadURL: nil,
+                deviceId: Host.current().localizedName ?? "macOS"
+            )
+            let audioURL = audioPath.isEmpty ? nil : URL(fileURLWithPath: audioPath)
+            Task { @MainActor in
+                await CloudSyncService.shared.syncRecording(payload, audioURL: audioURL)
+            }
+        }
     }
 
-    public func fetchRecent(limit: Int = 100) -> [RecordingEntry] {
+    public func fetchRecent(limit: Int = 100, userId: String? = nil) -> [RecordingEntry] {
         guard let db else { return [] }
 
-        let sql = """
+        if let userId, !userId.isEmpty {
+            ensureUserScope(userId: userId)
+        }
+
+        let sql: String
+        if let userId, !userId.isEmpty {
+            sql = """
+            SELECT id, created_at, duration, sample_rate, channel_count, bits_per_sample,
+                   encoding, audio_path, asr_provider_id, asr_provider_name,
+                   correction_provider_id, transcript_raw, transcript_final,
+                   word_count, error, status, user_id
+            FROM recordings
+            WHERE user_id = ? OR user_id IS NULL OR user_id = ''
+            ORDER BY created_at DESC
+            LIMIT ?;
+            """
+        } else {
+            sql = """
         SELECT id, created_at, duration, sample_rate, channel_count, bits_per_sample,
                encoding, audio_path, asr_provider_id, asr_provider_name,
                correction_provider_id, transcript_raw, transcript_final,
-               word_count, error, status
+               word_count, error, status, user_id
         FROM recordings
         ORDER BY created_at DESC
         LIMIT ?;
         """
+        }
 
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
@@ -172,7 +231,12 @@ public actor RecordingStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_int(stmt, 1, Int32(limit))
+        if let userId, !userId.isEmpty {
+            bindText(stmt, index: 1, value: userId)
+            sqlite3_bind_int(stmt, 2, Int32(limit))
+        } else {
+            sqlite3_bind_int(stmt, 1, Int32(limit))
+        }
 
         var entries: [RecordingEntry] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -192,6 +256,7 @@ public actor RecordingStore {
             let wordCount = Int(sqlite3_column_int(stmt, 13))
             let error = columnText(stmt, index: 14)
             let status = columnText(stmt, index: 15) ?? "success"
+            let userId = columnText(stmt, index: 16)
 
             entries.append(
                 RecordingEntry(
@@ -210,12 +275,45 @@ public actor RecordingStore {
                     transcriptFinal: transcriptFinal,
                     wordCount: wordCount,
                     error: error,
-                    status: status
+                    status: status,
+                    userId: userId
                 )
             )
         }
 
         return entries
+    }
+
+    public func storageInfo() -> StorageInfo {
+        let count = countEntries()
+        return StorageInfo(
+            baseDirectory: baseDirectory,
+            recordingsDirectory: recordingsDirectory,
+            databaseURL: databaseURL,
+            entryCount: count
+        )
+    }
+
+    public func ensureUserScope(userId: String) {
+        guard let db else { return }
+        let sql = "UPDATE recordings SET user_id = ? WHERE user_id IS NULL OR user_id = '';"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, index: 1, value: userId)
+        sqlite3_step(stmt)
+    }
+
+    public func migrateUser(from oldUserId: String, to newUserId: String) {
+        guard let db else { return }
+        guard !oldUserId.isEmpty, !newUserId.isEmpty, oldUserId != newUserId else { return }
+        let sql = "UPDATE recordings SET user_id = ? WHERE user_id = ?;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else { return }
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, index: 1, value: newUserId)
+        bindText(stmt, index: 2, value: oldUserId)
+        sqlite3_step(stmt)
     }
 
     // MARK: - Setup
@@ -262,7 +360,8 @@ public actor RecordingStore {
             transcript_final TEXT,
             word_count INTEGER,
             error TEXT,
-            status TEXT NOT NULL
+            status TEXT NOT NULL,
+            user_id TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at
@@ -272,6 +371,33 @@ public actor RecordingStore {
         if sqlite3_exec(db, createSQL, nil, nil, nil) != SQLITE_OK {
             print("❌ RecordingStore: Failed to create tables")
         }
+    }
+
+    private static func migrateSchemaIfNeeded(in db: OpaquePointer?) {
+        guard let db else { return }
+        if !columnExists(db, table: "recordings", column: "user_id") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN user_id TEXT;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add user_id column")
+            }
+        }
+    }
+
+    private static func columnExists(_ db: OpaquePointer, table: String, column: String) -> Bool {
+        let sql = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            return false
+        }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cString = sqlite3_column_text(stmt, 1) {
+                if String(cString: cString) == column {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     // MARK: - Helpers
@@ -287,6 +413,20 @@ public actor RecordingStore {
     private func columnText(_ statement: OpaquePointer, index: Int32) -> String? {
         guard let cString = sqlite3_column_text(statement, index) else { return nil }
         return String(cString: cString)
+    }
+
+    private func countEntries() -> Int {
+        guard let db else { return 0 }
+        let sql = "SELECT COUNT(*) FROM recordings;"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            return 0
+        }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int(stmt, 0))
+        }
+        return 0
     }
 
     private func cleanupIfNeeded() {

@@ -10,19 +10,28 @@ public final class AppSettings: @unchecked Sendable {
         self.defaults = defaults
             ?? UserDefaults(suiteName: AppSettings.appGroupIdentifier)
             ?? .standard
+
+        // Sane defaults for a fresh install. Keep existing user choices intact.
+        if self.defaults.object(forKey: Keys.selectedASRProvider) == nil {
+            self.defaults.set("openai_whisper", forKey: Keys.selectedASRProvider)
+        }
+        if self.defaults.object(forKey: Keys.preferStreaming) == nil {
+            // OpenAI transcription is batch. Default to non-streaming to avoid confusing UX.
+            self.defaults.set(false, forKey: Keys.preferStreaming)
+        }
     }
 
     // MARK: - ASR Settings
 
     /// Currently selected ASR provider ID
     public var selectedASRProvider: String {
-        get { defaults.string(forKey: Keys.selectedASRProvider) ?? "apple_speech" }
+        get { defaults.string(forKey: Keys.selectedASRProvider) ?? "openai_whisper" }
         set { defaults.set(newValue, forKey: Keys.selectedASRProvider) }
     }
 
     /// Whether to use streaming mode when available
     public var preferStreaming: Bool {
-        get { defaults.bool(forKey: Keys.preferStreaming, default: true) }
+        get { defaults.bool(forKey: Keys.preferStreaming, default: false) }
         set { defaults.set(newValue, forKey: Keys.preferStreaming) }
     }
 
@@ -86,6 +95,13 @@ public final class AppSettings: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Keys.autoCapitalization) }
     }
 
+    // MARK: - Cloud Sync
+
+    public var cloudSyncEnabled: Bool {
+        get { defaults.bool(forKey: Keys.cloudSyncEnabled, default: true) }
+        set { defaults.set(newValue, forKey: Keys.cloudSyncEnabled) }
+    }
+
     // MARK: - Voice Input IPC
 
     /// Write transcription result for keyboard extension to read
@@ -113,6 +129,7 @@ public final class AppSettings: @unchecked Sendable {
         static let hapticFeedback = "echo.keyboard.haptic"
         static let autoCapitalization = "echo.keyboard.autocap"
         static let pendingTranscription = "echo.ipc.pending_transcription"
+        static let cloudSyncEnabled = "echo.cloud.sync.enabled"
     }
 }
 

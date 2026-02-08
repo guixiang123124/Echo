@@ -10,9 +10,9 @@ struct QWERTYKeyboardView: View {
     var body: some View {
         let rows = KeyboardLayout.qwertyRows(shift: shiftState)
 
-        VStack(spacing: 6) {
+        VStack(spacing: 8) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     ForEach(row) { key in
                         KeyboardKeyView(key: key, onPress: onKeyPress)
                             .frame(maxWidth: maxWidth(for: key))

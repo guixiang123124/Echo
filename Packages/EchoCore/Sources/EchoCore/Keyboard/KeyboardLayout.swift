@@ -43,7 +43,6 @@ public enum KeyboardLayout {
         let row4: [KeyboardKey] = [
             KeyboardKey(action: .switchToNumbers, label: "123", width: .wide),
             KeyboardKey(action: .switchLanguage, label: "EN/中", width: .wide),
-            KeyboardKey(action: .voice, label: "mic"),
             KeyboardKey(action: .space, label: "space", width: .spacebar),
             KeyboardKey(action: .enter, label: "return", width: .wide)
         ]
@@ -80,7 +79,6 @@ public enum KeyboardLayout {
         let row4: [KeyboardKey] = [
             KeyboardKey(action: .switchToNumbers, label: "123", width: .wide),
             KeyboardKey(action: .switchLanguage, label: "中/EN", width: .wide),
-            KeyboardKey(action: .voice, label: "mic"),
             KeyboardKey(action: .space, label: "空格", width: .spacebar),
             KeyboardKey(action: .enter, label: "确定", width: .wide)
         ]
@@ -109,7 +107,6 @@ public enum KeyboardLayout {
         let row4: [KeyboardKey] = [
             KeyboardKey(action: .switchToLetters, label: "ABC", width: .wide),
             KeyboardKey(action: .switchLanguage, label: "EN/中", width: .wide),
-            KeyboardKey(action: .voice, label: "mic"),
             KeyboardKey(action: .space, label: "space", width: .spacebar),
             KeyboardKey(action: .enter, label: "return", width: .wide)
         ]
@@ -138,7 +135,6 @@ public enum KeyboardLayout {
         let row4: [KeyboardKey] = [
             KeyboardKey(action: .switchToLetters, label: "ABC", width: .wide),
             KeyboardKey(action: .switchLanguage, label: "EN/中", width: .wide),
-            KeyboardKey(action: .voice, label: "mic"),
             KeyboardKey(action: .space, label: "space", width: .spacebar),
             KeyboardKey(action: .enter, label: "return", width: .wide)
         ]

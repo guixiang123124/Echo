@@ -36,4 +36,27 @@ enum VoiceInputTrigger {
             }
         }
     }
+
+    /// Open the main Echo app settings
+    static func openMainAppForSettings(from viewController: UIViewController?) {
+        guard let url = URL(string: "echo://settings") else { return }
+
+        var responder: UIResponder? = viewController
+        while let current = responder {
+            let selector = sel_registerName("openURL:")
+            if current.responds(to: selector) {
+                current.perform(selector, with: url)
+                return
+            }
+            responder = current.next
+        }
+
+        if let extensionContext = viewController?.extensionContext {
+            extensionContext.open(url) { success in
+                if !success {
+                    print("VoiceInputTrigger: Failed to open settings URL via extensionContext")
+                }
+            }
+        }
+    }
 }
