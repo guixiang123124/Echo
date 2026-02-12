@@ -104,6 +104,31 @@ Inspired by [Doubao Input Method (豆包输入法)](https://www.doubao.com), Ech
 3. Select **Echo**
 4. Tap **Echo** and enable **Allow Full Access** (required for App Groups IPC)
 
+### Cloud Sync Backend (No Firebase)
+
+Echo now supports a Firebase-free backend path:
+
+- Local-first: transcription history remains in on-device SQLite
+- Cloud sync: optional, user-scoped sync API on Railway
+- Storage: optional object storage (S3/R2) for audio blobs
+
+Backend service lives in `backend/`.
+
+Quick start:
+
+```bash
+cd backend
+npm install
+cp .env.example .env
+npm run dev
+```
+
+Deployment and launch checklist:
+
+- `backend/README.md`
+- `docs/deployment/NO_FIREBASE_STACK_CHECKLIST.md`
+- `docs/deployment/RAILWAY_VERCEL_STRIPE_RUNBOOK.md`
+
 ### Project Structure
 
 ```

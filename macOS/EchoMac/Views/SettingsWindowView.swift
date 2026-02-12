@@ -9,6 +9,7 @@ struct SettingsWindowView: View {
     @EnvironmentObject var settings: MacAppSettings
     @EnvironmentObject var authSession: EchoAuthSession
     @EnvironmentObject var cloudSync: CloudSyncService
+    @EnvironmentObject var billing: BillingService
 
     var body: some View {
         TabView {
@@ -20,6 +21,7 @@ struct SettingsWindowView: View {
                 .environmentObject(permissionManager)
                 .environmentObject(authSession)
                 .environmentObject(cloudSync)
+                .environmentObject(billing)
 
             ASRSettingsTab()
                 .tabItem {
@@ -55,6 +57,7 @@ struct GeneralSettingsView: View {
     @EnvironmentObject var permissionManager: PermissionManager
     @EnvironmentObject var authSession: EchoAuthSession
     @EnvironmentObject var cloudSync: CloudSyncService
+    @EnvironmentObject var billing: BillingService
     @State private var showAuthSheet = false
 
     var body: some View {
@@ -129,8 +132,8 @@ struct GeneralSettingsView: View {
             }
 
             Section("Account") {
-                if !authSession.isConfigured {
-                    Text("Firebase not configured. Add GoogleService-Info.plist to enable sign-in and sync.")
+                if settings.cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Cloud backend not configured. Local history still works.")
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
@@ -152,8 +155,50 @@ struct GeneralSettingsView: View {
                     set: { newValue in
                         settings.cloudSyncEnabled = newValue
                         cloudSync.setEnabled(newValue)
+                        billing.setEnabled(newValue)
                     }
                 ))
+
+                TextField(
+                    "Cloud API URL (Railway)",
+                    text: Binding(
+                        get: { settings.cloudSyncBaseURL },
+                        set: { newValue in
+                            settings.cloudSyncBaseURL = newValue
+                            authSession.configureBackend(baseURL: newValue)
+                            cloudSync.configure(
+                                baseURLString: newValue,
+                                uploadAudio: settings.cloudUploadAudioEnabled
+                            )
+                            billing.configure(baseURLString: newValue)
+                        }
+                    )
+                )
+                .textFieldStyle(.roundedBorder)
+
+                Toggle("Upload audio to cloud (optional)", isOn: Binding(
+                    get: { settings.cloudUploadAudioEnabled },
+                    set: { newValue in
+                        settings.cloudUploadAudioEnabled = newValue
+                        cloudSync.configure(
+                            baseURLString: settings.cloudSyncBaseURL,
+                            uploadAudio: newValue
+                        )
+                    }
+                ))
+
+                HStack {
+                    Text("Plan")
+                    Spacer()
+                    Text((billing.snapshot?.tier ?? "free").uppercased())
+                        .foregroundColor(billing.snapshot?.hasActiveSubscription == true ? .green : .secondary)
+                }
+
+                Button("Refresh Plan Status") {
+                    Task { await billing.refresh() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(!authSession.isSignedIn)
 
                 Button(authSession.isSignedIn ? "Switch User" : "Sign In") {
                     showAuthSheet = true
@@ -189,6 +234,12 @@ struct GeneralSettingsView: View {
         .sheet(isPresented: $showAuthSheet) {
             AuthSheetView()
                 .environmentObject(authSession)
+        }
+        .task {
+            billing.configure(baseURLString: settings.cloudSyncBaseURL)
+            billing.setEnabled(settings.cloudSyncEnabled)
+            billing.updateAuthState(user: authSession.user)
+            await billing.refresh()
         }
     }
 }
@@ -635,7 +686,6 @@ struct AuthSheetView: View {
     @EnvironmentObject var authSession: EchoAuthSession
     @Environment(\.dismiss) private var dismiss
 
-    @State private var mode: AuthMode = .email
     @State private var email = ""
     @State private var password = ""
     @State private var currentNonce: String?
@@ -650,37 +700,27 @@ struct AuthSheetView: View {
                     .keyboardShortcut(.cancelAction)
             }
 
-            Picker("", selection: $mode) {
-                Text("Email").tag(AuthMode.email)
-                Text("Phone").tag(AuthMode.phone)
-            }
-            .pickerStyle(.segmented)
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Email", text: $email)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
 
-            switch mode {
-            case .email:
-                VStack(alignment: .leading, spacing: 12) {
-                    TextField("Email", text: $email)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField("Password", text: $password)
-                        .textFieldStyle(.roundedBorder)
-
-                    HStack(spacing: 12) {
-                        Button("Sign In") {
-                            Task { await authSession.signIn(email: email, password: password) }
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Create Account") {
-                            Task { await authSession.signUp(email: email, password: password) }
-                        }
-                        .buttonStyle(.bordered)
+                HStack(spacing: 12) {
+                    Button("Sign In") {
+                        Task { await authSession.signIn(email: email, password: password) }
                     }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Create Account") {
+                        Task { await authSession.signUp(email: email, password: password) }
+                    }
+                    .buttonStyle(.bordered)
                 }
-            case .phone:
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Phone sign-in is available on iOS.")
-                        .foregroundStyle(.secondary)
-                }
+
+                Text("Use your Gmail address here, or continue with Apple below.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             SignInWithAppleButton(.signIn) { request in
@@ -726,11 +766,4 @@ struct AuthSheetView: View {
         .padding(20)
         .frame(width: 420)
     }
-}
-
-private enum AuthMode: String, CaseIterable, Identifiable {
-    case email
-    case phone
-
-    var id: String { rawValue }
 }

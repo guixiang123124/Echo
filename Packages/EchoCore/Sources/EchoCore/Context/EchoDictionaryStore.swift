@@ -40,19 +40,14 @@ public actor EchoDictionaryStore {
         self.defaults = defaults
             ?? UserDefaults(suiteName: AppSettings.appGroupIdentifier)
             ?? .standard
-        load()
+        self.entries = Self.decodeEntries(
+            from: self.defaults,
+            storageKey: self.storageKey
+        )
     }
 
     public func load() {
-        guard let data = defaults.data(forKey: storageKey) else {
-            entries = []
-            return
-        }
-        do {
-            entries = try JSONDecoder().decode([DictionaryTermEntry].self, from: data)
-        } catch {
-            entries = []
-        }
+        entries = Self.decodeEntries(from: defaults, storageKey: storageKey)
     }
 
     private func persist() {
@@ -109,5 +104,15 @@ public actor EchoDictionaryStore {
             NotificationCenter.default.post(name: .echoDictionaryChanged, object: nil)
         }
     }
-}
 
+    private static func decodeEntries(from defaults: UserDefaults, storageKey: String) -> [DictionaryTermEntry] {
+        guard let data = defaults.data(forKey: storageKey) else {
+            return []
+        }
+        do {
+            return try JSONDecoder().decode([DictionaryTermEntry].self, from: data)
+        } catch {
+            return []
+        }
+    }
+}

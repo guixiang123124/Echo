@@ -5,6 +5,7 @@ import AuthenticationServices
 struct SettingsView: View {
     @State private var settings = AppSettings()
     @StateObject private var authSession = EchoAuthSession.shared
+    @StateObject private var cloudSync = CloudSyncService.shared
     @State private var showAuthSheet = false
     @State private var selectedASR: String = ""
     @State private var correctionEnabled = true
@@ -14,13 +15,15 @@ struct SettingsView: View {
     @State private var autoEditQuickMode: AutoEditQuickMode = .balanced
     @State private var selectedCorrection: String = ""
     @State private var hapticEnabled = true
+    @State private var cloudSyncBaseURL = ""
+    @State private var cloudUploadAudioEnabled = false
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Account") {
-                    if !authSession.isConfigured {
-                        Text("Firebase not configured. Add GoogleService-Info.plist to enable sign-in and sync.")
+                    if cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Cloud backend not configured. Local history still works.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -42,8 +45,31 @@ struct SettingsView: View {
                         set: { newValue in
                             settings.cloudSyncEnabled = newValue
                             CloudSyncService.shared.setEnabled(newValue)
+                            BillingService.shared.setEnabled(newValue)
                         }
                     ))
+
+                    TextField("Cloud API URL (Railway)", text: $cloudSyncBaseURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: cloudSyncBaseURL) { _, newValue in
+                            settings.cloudSyncBaseURL = newValue
+                            authSession.configureBackend(baseURL: newValue)
+                            cloudSync.configure(
+                                baseURLString: newValue,
+                                uploadAudio: cloudUploadAudioEnabled
+                            )
+                            BillingService.shared.configure(baseURLString: newValue)
+                        }
+
+                    Toggle("Upload audio to cloud (optional)", isOn: $cloudUploadAudioEnabled)
+                        .onChange(of: cloudUploadAudioEnabled) { _, newValue in
+                            settings.cloudUploadAudioEnabled = newValue
+                            cloudSync.configure(
+                                baseURLString: cloudSyncBaseURL,
+                                uploadAudio: newValue
+                            )
+                        }
 
                     Button(authSession.isSignedIn ? "Switch User" : "Sign In") {
                         showAuthSheet = true
@@ -165,6 +191,19 @@ struct SettingsView: View {
                 autoEditQuickMode = resolveQuickMode()
                 selectedCorrection = settings.selectedCorrectionProvider
                 hapticEnabled = settings.hapticFeedbackEnabled
+                cloudSyncBaseURL = settings.cloudSyncBaseURL
+                cloudUploadAudioEnabled = settings.cloudUploadAudioEnabled
+
+                authSession.configureBackend(baseURL: cloudSyncBaseURL)
+                cloudSync.configure(
+                    baseURLString: cloudSyncBaseURL,
+                    uploadAudio: cloudUploadAudioEnabled
+                )
+                cloudSync.setEnabled(settings.cloudSyncEnabled)
+                cloudSync.updateAuthState(user: authSession.user)
+                BillingService.shared.configure(baseURLString: cloudSyncBaseURL)
+                BillingService.shared.setEnabled(settings.cloudSyncEnabled)
+                BillingService.shared.updateAuthState(user: authSession.user)
             }
             .onChange(of: selectedASR) { _, newValue in
                 settings.selectedASRProvider = newValue
@@ -246,51 +285,31 @@ struct AuthSheetView: View {
     @EnvironmentObject var authSession: EchoAuthSession
     @Environment(\.dismiss) private var dismiss
 
-    @State private var mode: AuthMode = .email
     @State private var email = ""
     @State private var password = ""
-    @State private var phoneNumber = ""
-    @State private var smsCode = ""
     @State private var currentNonce: String?
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Sign in") {
-                    Picker("", selection: $mode) {
-                        Text("Email").tag(AuthMode.email)
-                        Text("Phone").tag(AuthMode.phone)
-                    }
-                    .pickerStyle(.segmented)
+                    TextField("Email", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("Password", text: $password)
 
-                    switch mode {
-                    case .email:
-                        TextField("Email", text: $email)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                        SecureField("Password", text: $password)
-
-                        HStack {
-                            Button("Sign In") {
-                                Task { await authSession.signIn(email: email, password: password) }
-                            }
-                            Button("Create Account") {
-                                Task { await authSession.signUp(email: email, password: password) }
-                            }
+                    HStack {
+                        Button("Sign In") {
+                            Task { await authSession.signIn(email: email, password: password) }
                         }
-                    case .phone:
-                        TextField("+1 555 123 4567", text: $phoneNumber)
-                            .keyboardType(.phonePad)
-                        Button("Send Code") {
-                            Task { await authSession.startPhoneVerification(phoneNumber) }
-                        }
-
-                        TextField("Verification code", text: $smsCode)
-                            .keyboardType(.numberPad)
-                        Button("Verify") {
-                            Task { await authSession.verifyPhoneCode(smsCode) }
+                        Button("Create Account") {
+                            Task { await authSession.signUp(email: email, password: password) }
                         }
                     }
+
+                    Text("Use your Gmail address here, or continue with Apple below.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section {
@@ -330,13 +349,6 @@ struct AuthSheetView: View {
             }
         }
     }
-}
-
-private enum AuthMode: String, CaseIterable, Identifiable {
-    case email
-    case phone
-
-    var id: String { rawValue }
 }
 
 // MARK: - Keyboard Setup Guide

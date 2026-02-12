@@ -7,12 +7,12 @@ struct EchoHistoryView: View {
     @State private var entries: [RecordingStore.RecordingEntry] = []
     @State private var keepHistoryDays: Int = KeepHistoryPolicy.read()
     @State private var showKeepHistoryDialog = false
-    @State private var showMenu = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
+                    EchoSectionHeading("History")
                     headerCard
                     historySections
                 }
@@ -20,7 +20,7 @@ struct EchoHistoryView: View {
                 .padding(.vertical, 12)
             }
             .navigationTitle("History")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.automatic)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -35,10 +35,11 @@ struct EchoHistoryView: View {
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 36, height: 36)
+                            .frame(width: 32, height: 32)
                     }
                 }
             }
+            .background(EchoMobileTheme.pageBackground)
         }
         .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
@@ -56,61 +57,69 @@ struct EchoHistoryView: View {
     }
 
     private var headerCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                showKeepHistoryDialog = true
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "archivebox")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24)
-                    Text("Keep history")
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Text(KeepHistoryPolicy.describe(days: keepHistoryDays))
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(.tertiary)
-                        .font(.system(size: 13, weight: .semibold))
+        EchoCard {
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    showKeepHistoryDialog = true
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "archivebox")
+                            .foregroundStyle(EchoMobileTheme.mutedText)
+                            .frame(width: 22)
+                        Text("Keep history")
+                            .foregroundStyle(.primary)
+                            .font(.system(size: 18, weight: .semibold))
+                        Spacer()
+                        Text(KeepHistoryPolicy.describe(days: keepHistoryDays))
+                            .foregroundStyle(EchoMobileTheme.mutedText)
+                            .font(.system(size: 18, weight: .regular))
+                        Image(systemName: "chevron.right")
+                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .padding(.vertical, 6)
                 }
-                .padding(.vertical, 14)
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            Divider()
+                Divider()
+                    .padding(.vertical, 10)
 
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "lock")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 24)
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "lock")
+                        .foregroundStyle(EchoMobileTheme.mutedText)
+                        .frame(width: 22)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Your data stays private")
-                        .font(.body.weight(.semibold))
-                    Text("Your voice dictations are stored on device. If you enable cloud sync, we also upload dictation metadata to your account so it can sync across devices.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Your data stays private")
+                            .font(.system(size: 17, weight: .semibold))
+                        Text("Your voice dictations are stored on device. If you enable cloud sync, we also upload dictation metadata to your account so it can sync across devices.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(EchoMobileTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 0)
                 }
-
-                Spacer(minLength: 0)
             }
-            .padding(.vertical, 14)
         }
-        .padding(.horizontal, 16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
     }
 
     private var historySections: some View {
         let grouped = groupByDay(entries)
         return VStack(alignment: .leading, spacing: 18) {
+            if grouped.isEmpty {
+                EchoCard {
+                    Text("No recordings yet.")
+                        .font(.system(size: 15))
+                        .foregroundStyle(EchoMobileTheme.mutedText)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 8)
+                }
+            }
             ForEach(grouped, id: \.day) { section in
                 VStack(alignment: .leading, spacing: 10) {
                     Text(section.dayTitle)
-                        .font(.title3.weight(.bold))
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
                         .foregroundStyle(.primary)
 
                     VStack(spacing: 0) {
@@ -124,7 +133,11 @@ struct EchoHistoryView: View {
                     }
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
+                            .fill(EchoMobileTheme.cardSurface)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(EchoMobileTheme.border, lineWidth: 1)
                     )
                 }
             }
@@ -134,10 +147,10 @@ struct EchoHistoryView: View {
     private func historyRow(_ entry: RecordingStore.RecordingEntry) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(entry.createdAt.formatted(date: .omitted, time: .shortened))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(EchoMobileTheme.mutedText)
             Text(entry.transcriptFinal ?? entry.transcriptRaw ?? entry.error ?? "(No text)")
-                .font(.body)
+                .font(.system(size: 18))
                 .foregroundStyle(.primary)
                 .lineLimit(4)
         }
@@ -202,4 +215,3 @@ private enum KeepHistoryPolicy {
         return "\(days) days"
     }
 }
-

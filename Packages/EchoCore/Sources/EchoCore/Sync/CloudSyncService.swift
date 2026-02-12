@@ -1,9 +1,4 @@
 import Foundation
-import FirebaseAuth
-import FirebaseCore
-import FirebaseFirestore
-import FirebaseFirestoreSwift
-import FirebaseStorage
 
 public struct CloudRecording: Codable, Sendable {
     public let id: String
@@ -83,30 +78,35 @@ public final class CloudSyncService: ObservableObject {
     @Published public private(set) var isConfigured: Bool = false
     @Published public private(set) var isSignedIn: Bool = false
 
-    private let deviceId = UUID().uuidString
+    private var endpointBaseURL: URL?
+    private var uploadAudioEnabled: Bool = false
     private var isEnabled: Bool = true
 
     private init() {}
 
     public func setEnabled(_ enabled: Bool) {
         isEnabled = enabled
-        if !enabled {
-            status = .disabled("Sync disabled")
-        }
+        updateDerivedStatus()
     }
 
-    public func updateAuthState(user: User?) {
+    public func updateAuthState(user: EchoUser?) {
         isSignedIn = user != nil
-        if user == nil {
-            status = .disabled("Sign in to sync")
-        }
+        updateDerivedStatus()
+    }
+
+    public func configure(baseURLString: String?, uploadAudio: Bool = false) {
+        let normalized = normalize(baseURLString)
+        endpointBaseURL = normalized.flatMap(URL.init(string:))
+        uploadAudioEnabled = uploadAudio
+        isConfigured = endpointBaseURL != nil
+        updateDerivedStatus()
     }
 
     public func configureIfNeeded() {
-        isConfigured = FirebaseBootstrapper.configureIfPossible()
-        if !isConfigured {
-            status = .disabled("Firebase not configured")
-        }
+        let defaults = UserDefaults.standard
+        let baseURL = defaults.string(forKey: "echo.cloud.sync.baseURL")
+        let uploadAudio = defaults.bool(forKey: "echo.cloud.sync.uploadAudio")
+        configure(baseURLString: baseURL, uploadAudio: uploadAudio)
     }
 
     public func syncRecording(_ payload: CloudRecording, audioURL: URL?) async {
@@ -115,64 +115,142 @@ public final class CloudSyncService: ObservableObject {
             return
         }
 
-        guard FirebaseApp.app() != nil else {
-            status = .disabled("Firebase not configured")
+        guard let endpointBaseURL else {
+            status = .disabled("Cloud backend not configured")
             return
         }
 
-        guard let user = Auth.auth().currentUser else {
+        guard let user = EchoAuthSession.shared.user else {
             status = .disabled("Sign in to sync")
+            return
+        }
+
+        guard let accessToken = EchoAuthSession.shared.accessToken else {
+            status = .disabled("No access token")
             return
         }
 
         status = .syncing
 
         do {
-            var updatedPayload = payload
-            var storagePath: String?
-            var downloadURL: String?
-
-            if let audioURL {
-                let storage = Storage.storage()
-                let ref = storage.reference().child("users/\(user.uid)/recordings/\(payload.id).wav")
-                _ = try await ref.putFileAsync(from: audioURL)
-                storagePath = ref.fullPath
-                downloadURL = try await ref.downloadURL().absoluteString
-            }
-
-            updatedPayload = CloudRecording(
-                id: payload.id,
-                createdAt: payload.createdAt,
-                duration: payload.duration,
-                sampleRate: payload.sampleRate,
-                channelCount: payload.channelCount,
-                bitsPerSample: payload.bitsPerSample,
-                encoding: payload.encoding,
-                asrProviderId: payload.asrProviderId,
-                asrProviderName: payload.asrProviderName,
-                correctionProviderId: payload.correctionProviderId,
-                transcriptRaw: payload.transcriptRaw,
-                transcriptFinal: payload.transcriptFinal,
-                wordCount: payload.wordCount,
-                status: payload.status,
-                error: payload.error,
-                audioStoragePath: storagePath,
-                audioDownloadURL: downloadURL,
-                deviceId: payload.deviceId
+            let requestPayload = SyncRequestPayload(
+                userId: user.uid,
+                recording: payload,
+                includeAudio: uploadAudioEnabled,
+                audioBase64: try encodeAudioForUpload(audioURL: audioURL),
+                audioFileName: audioURL?.lastPathComponent
             )
 
-            let db = Firestore.firestore()
-            let doc = db.collection("users")
-                .document(user.uid)
-                .collection("recordings")
-                .document(payload.id)
-            try doc.setData(from: updatedPayload, merge: true)
+            try await postSync(
+                payload: requestPayload,
+                endpointBaseURL: endpointBaseURL,
+                accessToken: accessToken
+            )
 
             let now = Date()
             lastSync = now
             status = .synced(now)
         } catch {
             status = .error(error.localizedDescription)
+        }
+    }
+}
+
+// MARK: - Private
+
+private extension CloudSyncService {
+    func normalize(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
+    }
+
+    func updateDerivedStatus() {
+        if !isEnabled {
+            status = .disabled("Sync disabled")
+            return
+        }
+        if !isConfigured {
+            status = .disabled("Cloud backend not configured")
+            return
+        }
+        if !isSignedIn {
+            status = .disabled("Sign in to sync")
+            return
+        }
+        if case .synced = status {
+            return
+        }
+        if case .syncing = status {
+            return
+        }
+        status = .idle
+    }
+
+    func encodeAudioForUpload(audioURL: URL?) throws -> String? {
+        guard uploadAudioEnabled, let audioURL else { return nil }
+
+        let data = try Data(contentsOf: audioURL)
+        // Keep request size bounded in app-side sync path.
+        if data.count > 2_500_000 {
+            return nil
+        }
+        return data.base64EncodedString()
+    }
+
+    func postSync(
+        payload: SyncRequestPayload,
+        endpointBaseURL: URL,
+        accessToken: String
+    ) async throws {
+        let syncURL = URL(string: "/v1/sync/recordings", relativeTo: endpointBaseURL)
+        guard let syncURL else {
+            throw CloudSyncError.invalidEndpoint
+        }
+
+        var request = URLRequest(url: syncURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CloudSyncError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw CloudSyncError.server(message)
+        }
+    }
+}
+
+private struct SyncRequestPayload: Encodable {
+    let userId: String
+    let recording: CloudRecording
+    let includeAudio: Bool
+    let audioBase64: String?
+    let audioFileName: String?
+}
+
+private enum CloudSyncError: LocalizedError {
+    case invalidEndpoint
+    case invalidResponse
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidEndpoint:
+            return "Cloud sync endpoint is invalid."
+        case .invalidResponse:
+            return "Cloud sync response is invalid."
+        case .server(let message):
+            return message
         }
     }
 }

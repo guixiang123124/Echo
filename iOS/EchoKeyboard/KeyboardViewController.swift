@@ -6,7 +6,6 @@ import EchoCore
 class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardView>?
     private let keyboardState = KeyboardState()
-    private var lastInsertedTranscription: String?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -56,8 +55,6 @@ class KeyboardViewController: UIInputViewController {
         if let transcription = bridge.receivePendingTranscription() {
             let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
-            guard trimmed != lastInsertedTranscription else { return }
-            lastInsertedTranscription = trimmed
             textDocumentProxy.insertText(trimmed)
         }
     }

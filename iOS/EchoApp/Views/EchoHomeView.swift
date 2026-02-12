@@ -14,7 +14,11 @@ struct EchoHomeView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
+                    EchoSectionHeading(
+                        "Home",
+                        subtitle: "Set up Echo keyboard once, then dictation and AI editing stay one tap away in every app."
+                    )
                     heroCard
                     actionRow
                     setupCard
@@ -24,13 +28,15 @@ struct EchoHomeView: View {
                 .padding(.vertical, 12)
             }
             .navigationTitle("Echo")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(.automatic)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSetupGuide = true
                     } label: {
-                        Image(systemName: "questionmark.circle")
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 32, height: 32)
                     }
                 }
             }
@@ -47,6 +53,7 @@ struct EchoHomeView: View {
             .sheet(isPresented: $showVoiceTest) {
                 VoiceRecordingView(startForKeyboard: false)
             }
+            .background(EchoMobileTheme.pageBackground)
         }
         .task {
             storageInfo = await RecordingStore.shared.storageInfo()
@@ -59,45 +66,58 @@ struct EchoHomeView: View {
     }
 
     private var heroCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(.white.opacity(0.18))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: "waveform")
+        EchoCard {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Image(systemName: "keyboard.badge.ellipsis")
                         .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(EchoMobileTheme.accent)
+                        .frame(width: 38, height: 38)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(EchoMobileTheme.accentSoft)
+                        )
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Set up Echo Keyboard")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                        Text("It will be one tap away in all your apps.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(EchoMobileTheme.mutedText)
+                    }
+                    Spacer()
                 }
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Voice-first typing")
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(EchoMobileTheme.heroGradient)
+                    .overlay(
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Hold space to dictate", systemImage: "waveform")
+                            Label("Release to transcribe", systemImage: "sparkles")
+                            Label("Auto insert into text fields", systemImage: "text.cursor")
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.85))
+                        .padding(12),
+                        alignment: .leading
+                    )
+                    .frame(height: 132)
+
+                Button {
+                    openAppSettings()
+                } label: {
+                    Text("Add Echo Keyboard")
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
-                    Text("Hold space on the Echo keyboard to dictate. Release to insert.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.86))
-                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(.black)
+                        )
                 }
-
-                Spacer()
+                .buttonStyle(.plain)
             }
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.16, green: 0.54, blue: 0.95),
-                            Color(red: 0.52, green: 0.35, blue: 0.95)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .shadow(color: Color.black.opacity(0.12), radius: 18, x: 0, y: 10)
     }
 
     private var actionRow: some View {
@@ -111,7 +131,7 @@ struct EchoHomeView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.black)
                     )
             }
@@ -126,8 +146,8 @@ struct EchoHomeView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color(.secondarySystemBackground))
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(EchoMobileTheme.cardBackground)
                     )
             }
             .buttonStyle(.plain)
@@ -135,52 +155,33 @@ struct EchoHomeView: View {
     }
 
     private var setupCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Keyboard setup")
-                .font(.headline)
-            Text("Echo works best as your system keyboard. Add it once, then switch with the globe key.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        EchoCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Keyboard setup")
+                    .font(.system(size: 18, weight: .semibold))
+                Text("Echo works best as your system keyboard. Add it once, then switch with the globe key.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(EchoMobileTheme.mutedText)
 
-            VStack(alignment: .leading, spacing: 8) {
-                setupStep(1, "Open Settings")
-                setupStep(2, "General > Keyboard > Keyboards")
-                setupStep(3, "Add New Keyboard... > Echo")
-                setupStep(4, "Enable Allow Full Access")
-            }
-            .padding(.top, 4)
+                VStack(alignment: .leading, spacing: 8) {
+                    setupStep(1, "Open Settings")
+                    setupStep(2, "General > Keyboard > Keyboards")
+                    setupStep(3, "Add New Keyboard... > Echo")
+                    setupStep(4, "Enable Allow Full Access")
+                }
+                .padding(.top, 2)
 
-            Button {
-                openAppSettings()
-            } label: {
-                Text("Add Echo Keyboard")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(Color.black)
-                    )
+                Button {
+                    showSetupGuide = true
+                } label: {
+                    Text("Having trouble?")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(EchoMobileTheme.mutedText)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
-            .buttonStyle(.plain)
-
-            Button {
-                showSetupGuide = true
-            } label: {
-                Text("Having trouble?")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 2)
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
     }
 
     private func setupStep(_ index: Int, _ text: String) -> some View {
@@ -189,7 +190,7 @@ struct EchoHomeView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.white)
                 .frame(width: 20, height: 20)
-                .background(Circle().fill(Color(.systemBlue)))
+                .background(Circle().fill(EchoMobileTheme.accent))
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(.primary)
@@ -197,55 +198,46 @@ struct EchoHomeView: View {
     }
 
     private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Database & Sync")
-                    .font(.headline)
-                Spacer()
-            }
-
-            HStack {
-                Label("Local history", systemImage: "internaldrive")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(localStatusText)
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack {
-                Label("Cloud sync", systemImage: "icloud")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text(syncStatusText)
-                    .foregroundStyle(.secondary)
-            }
-
-            if authSession.isSignedIn {
+        EchoCard {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Label("Signed in", systemImage: "person.crop.circle")
-                        .foregroundStyle(.secondary)
+                    Text("Database & Sync")
+                        .font(.system(size: 18, weight: .semibold))
                     Spacer()
-                    Text(authSession.displayName)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    EchoStatusDot(color: syncColor)
                 }
-            } else {
-                Text("Sign in on the Account tab to sync history across devices.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
 
-            if !settings.cloudSyncEnabled {
-                Text("Cloud sync is disabled in Settings.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                statusRow("Local history", icon: "internaldrive", value: localStatusText)
+                statusRow("Cloud sync", icon: "icloud", value: syncStatusText)
+
+                if authSession.isSignedIn {
+                    statusRow("Signed in", icon: "person.crop.circle", value: authSession.displayName)
+                } else {
+                    Text("Sign in on the Account tab to sync history across devices.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(EchoMobileTheme.mutedText)
+                }
+
+                if !settings.cloudSyncEnabled {
+                    Text("Cloud sync is disabled in Settings.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.orange)
+                }
             }
         }
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
+    }
+
+    private func statusRow(_ title: String, icon: String, value: String) -> some View {
+        HStack {
+            Label(title, systemImage: icon)
+                .font(.system(size: 14))
+                .foregroundStyle(EchoMobileTheme.mutedText)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
     }
 
     private var localStatusText: String {
@@ -267,6 +259,21 @@ struct EchoHomeView: View {
             return "Synced \(formatter.localizedString(for: date, relativeTo: Date()))"
         case .error(let message):
             return "Error: \(message)"
+        }
+    }
+
+    private var syncColor: Color {
+        switch cloudSync.status {
+        case .error:
+            return .red
+        case .disabled:
+            return .gray
+        case .syncing:
+            return .blue
+        case .synced:
+            return .green
+        case .idle:
+            return .gray
         }
     }
 

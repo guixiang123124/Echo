@@ -12,6 +12,7 @@ struct EchoMacApp: App {
     @StateObject private var diagnostics = DiagnosticsState.shared
     @StateObject private var authSession = EchoAuthSession.shared
     @StateObject private var cloudSync = CloudSyncService.shared
+    @StateObject private var billing = BillingService.shared
 
     var body: some Scene {
         // Menu Bar Extra - the main UI
@@ -23,6 +24,7 @@ struct EchoMacApp: App {
                 .environmentObject(diagnostics)
                 .environmentObject(authSession)
                 .environmentObject(cloudSync)
+                .environmentObject(billing)
         } label: {
             menuBarIcon
         }
@@ -37,6 +39,7 @@ struct EchoMacApp: App {
                 .environmentObject(diagnostics)
                 .environmentObject(authSession)
                 .environmentObject(cloudSync)
+                .environmentObject(billing)
         }
 
         Window("Echo Home", id: "echo-home") {
@@ -47,7 +50,11 @@ struct EchoMacApp: App {
                 .environmentObject(diagnostics)
                 .environmentObject(authSession)
                 .environmentObject(cloudSync)
+                .environmentObject(billing)
+                .preferredColorScheme(.light)
+                .environment(\.colorScheme, .light)
         }
+        .defaultSize(width: 1080, height: 720)
 
         Window("Echo History", id: "echo-history") {
             RecordingHistoryView()
@@ -57,7 +64,11 @@ struct EchoMacApp: App {
                 .environmentObject(diagnostics)
                 .environmentObject(authSession)
                 .environmentObject(cloudSync)
+                .environmentObject(billing)
+                .preferredColorScheme(.light)
+                .environment(\.colorScheme, .light)
         }
+        .defaultSize(width: 760, height: 560)
     }
 
     /// Menu bar icon that changes based on recording state

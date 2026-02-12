@@ -24,20 +24,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private lazy var hotkeyMonitor = GlobalHotkeyMonitor(settings: settings)
     private let authSession = EchoAuthSession.shared
     private let cloudSync = CloudSyncService.shared
+    private let billing = BillingService.shared
 
     // MARK: - App Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 EchoMac starting...")
+        NSApp.appearance = NSAppearance(named: .aqua)
 
         // Initialize services
         voiceInputService = VoiceInputService(settings: settings)
         textInserter = TextInserter()
 
+        authSession.configureBackend(baseURL: settings.cloudSyncBaseURL)
         authSession.start()
-        cloudSync.configureIfNeeded()
+        cloudSync.configure(
+            baseURLString: settings.cloudSyncBaseURL,
+            uploadAudio: settings.cloudUploadAudioEnabled
+        )
         cloudSync.setEnabled(settings.cloudSyncEnabled)
         cloudSync.updateAuthState(user: authSession.user)
+        billing.configure(baseURLString: settings.cloudSyncBaseURL)
+        billing.setEnabled(settings.cloudSyncEnabled)
+        billing.updateAuthState(user: authSession.user)
 
         // Bind voice input state to app state for UI
         if let voiceInputService {
@@ -101,6 +110,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] user in
                 guard let self else { return }
                 self.cloudSync.updateAuthState(user: user)
+                self.billing.updateAuthState(user: user)
+                Task { await self.billing.refresh() }
                 if let user {
                     self.settings.currentUserId = user.uid
                     let name = user.displayName ?? user.email ?? user.phoneNumber ?? "Echo User"
@@ -447,6 +458,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let view = EchoHomeWindowView(settings: settings)
         let hostingController = NSHostingController(rootView: view)
+        let lightAppearance = NSAppearance(named: .aqua)
+        hostingController.view.appearance = lightAppearance
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Echo Home"
@@ -458,6 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.delegate = self
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.tabbingMode = .disallowed
+        window.appearance = lightAppearance
 
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -475,6 +489,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let view = RecordingHistoryView()
         let hostingController = NSHostingController(rootView: view)
+        let lightAppearance = NSAppearance(named: .aqua)
+        hostingController.view.appearance = lightAppearance
 
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Echo History"
@@ -483,6 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
+        window.appearance = lightAppearance
 
         window.makeKeyAndOrderFront(nil)
         window.orderFrontRegardless()
@@ -545,7 +562,7 @@ struct RecordingPillView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
         }
-        .frame(width: 200, height: 34)
+        .frame(width: 188, height: 32)
         .clipShape(Capsule())
         .onAppear {
             shimmer = true
@@ -638,9 +655,9 @@ struct SymmetricBarsView: View {
         TimelineView(.animation) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
-                let count = 14
-                let barWidth: CGFloat = 2.4
-                let spacing: CGFloat = 2.2
+                let count = 16
+                let barWidth: CGFloat = 2.1
+                let spacing: CGFloat = 1.9
                 let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
                 let startX = (size.width - totalWidth) / 2
                 let midY = size.height / 2
@@ -652,10 +669,12 @@ struct SymmetricBarsView: View {
                 for index in 0..<count {
                     let base = samples[index]
                     let progress = CGFloat(index) / CGFloat(max(1, count - 1))
-                    let weight = reverseWeights ? (0.45 + 0.55 * (1 - progress)) : (0.45 + 0.55 * progress)
-                    let phase = time * 3.2 + Double(index) * 0.7
-                    let wave = 0.65 + 0.35 * ((sin(phase) + 1) / 2)
-                    let height = max(2.6, pow(base * wave * weight, 0.8) * maxHeight)
+                    let directionalWeight = reverseWeights ? (0.50 + 0.50 * (1 - progress)) : (0.50 + 0.50 * progress)
+                    let centerWeight = centerEnvelope(progress: progress)
+                    let phase = time * 4.1 + Double(index) * 0.82
+                    let wave = 0.56 + 0.44 * ((sin(phase) + 1) / 2)
+                    let intensity = pow(base, 0.58) * directionalWeight * centerWeight
+                    let height = max(2.6, (0.14 + intensity * wave) * maxHeight)
                     let x = startX + CGFloat(index) * (barWidth + spacing)
                     let rect = CGRect(x: x, y: midY - height / 2, width: barWidth, height: height)
                     let path = Path(roundedRect: rect, cornerRadius: barWidth / 2)
@@ -676,10 +695,16 @@ struct SymmetricBarsView: View {
     private func normalizedLevels(count: Int) -> [CGFloat] {
         let trimmed = Array(levels.suffix(count))
         if trimmed.count >= count {
-            return trimmed.map { max(0.12, min($0, 1.0)) }
+            return trimmed.map { max(0.14, min($0 * 2.8, 1.0)) }
         }
-        let padding = Array(repeating: CGFloat(0.12), count: count - trimmed.count)
-        return padding + trimmed.map { max(0.12, min($0, 1.0)) }
+        let padding = Array(repeating: CGFloat(0.14), count: count - trimmed.count)
+        return padding + trimmed.map { max(0.14, min($0 * 2.8, 1.0)) }
+    }
+
+    private func centerEnvelope(progress: CGFloat) -> CGFloat {
+        // Emphasize the center bars to mimic fluid capsule waveforms.
+        let distance = abs(progress - 0.5) * 2.0
+        return 0.52 + (1.0 - distance) * 0.62
     }
 }
 
@@ -856,6 +881,7 @@ struct EchoHomeWindowView: View {
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject var authSession: EchoAuthSession
     @EnvironmentObject var cloudSync: CloudSyncService
+    @EnvironmentObject var billing: BillingService
     @StateObject private var model = HomeDashboardViewModel()
     @State private var selectedSection: HomeSection = .home
     @State private var newTerm: String = ""
@@ -878,6 +904,7 @@ struct EchoHomeWindowView: View {
         .onAppear {
             model.refresh(userId: effectiveUserId)
             retentionOption = HistoryRetention.from(days: settings.historyRetentionDays)
+            Task { await billing.refresh() }
         }
         .onChange(of: retentionOption) { _, newValue in
             settings.historyRetentionDays = newValue.days
@@ -890,10 +917,12 @@ struct EchoHomeWindowView: View {
         }
         .onChange(of: authSession.userId) { _, _ in
             model.refresh(userId: effectiveUserId)
+            Task { await billing.refresh() }
         }
         // The Home UI uses a Typeless-style light theme with explicit light backgrounds.
         // Force light mode so `.primary` stays readable even if macOS is in Dark Mode.
         .preferredColorScheme(.light)
+        .environment(\.colorScheme, .light)
         .sheet(isPresented: $showAuthSheet) {
             AuthSheetView()
                 .environmentObject(authSession)
@@ -1079,7 +1108,9 @@ struct EchoHomeWindowView: View {
                     storageInfo: model.storageInfo,
                     syncStatus: cloudSync.status,
                     isSignedIn: authSession.isSignedIn,
-                    displayName: authSession.displayName
+                    displayName: authSession.displayName,
+                    planTier: billing.snapshot?.tier,
+                    billingStatus: billing.status
                 )
                 StatCard(title: "Total dictation time", value: "\(model.totalMinutes) min", icon: "clock")
                 StatCard(title: "Words dictated", value: "\(max(model.totalWords, settings.totalWordsTranscribed))", icon: "mic.fill")
@@ -1359,6 +1390,8 @@ private struct SyncStatusCard: View {
     let syncStatus: CloudSyncService.Status
     let isSignedIn: Bool
     let displayName: String
+    let planTier: String?
+    let billingStatus: BillingService.Status
 
     private var statusText: String {
         switch syncStatus {
@@ -1407,6 +1440,12 @@ private struct SyncStatusCard: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            if isSignedIn {
+                Text("Plan: \((planTier ?? "free").uppercased())")
+                    .font(.caption)
+                    .foregroundStyle(planTier == "pro" ? .green : .secondary)
+            }
+
             HStack(spacing: 8) {
                 Circle()
                     .fill(statusColor)
@@ -1414,6 +1453,19 @@ private struct SyncStatusCard: View {
                 Text(statusText)
                     .font(.caption)
                     .foregroundStyle(statusColor)
+            }
+
+            switch billingStatus {
+            case .loading:
+                Text("Checking subscription...")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            case .error(let message):
+                Text("Plan status error: \(message)")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            default:
+                EmptyView()
             }
 
             if let storageInfo {

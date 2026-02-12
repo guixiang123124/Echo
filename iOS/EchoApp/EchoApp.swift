@@ -7,11 +7,17 @@ struct EchoApp: App {
 
     init() {
         let settings = AppSettings()
-        FirebaseBootstrapper.configureIfPossible()
+        EchoAuthSession.shared.configureBackend(baseURL: settings.cloudSyncBaseURL)
         EchoAuthSession.shared.start()
-        CloudSyncService.shared.configureIfNeeded()
+        CloudSyncService.shared.configure(
+            baseURLString: settings.cloudSyncBaseURL,
+            uploadAudio: settings.cloudUploadAudioEnabled
+        )
         CloudSyncService.shared.setEnabled(settings.cloudSyncEnabled)
         CloudSyncService.shared.updateAuthState(user: EchoAuthSession.shared.user)
+        BillingService.shared.configure(baseURLString: settings.cloudSyncBaseURL)
+        BillingService.shared.setEnabled(settings.cloudSyncEnabled)
+        BillingService.shared.updateAuthState(user: EchoAuthSession.shared.user)
     }
 
     var body: some Scene {

@@ -33,6 +33,8 @@ public final class MacAppSettings: ObservableObject {
         static let userDisplayName = "echo.user.displayName"
         static let localUserId = "echo.user.localId"
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
+        static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
+        static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"
     }
 
     // MARK: - Hotkey Types
@@ -228,6 +230,12 @@ public final class MacAppSettings: ObservableObject {
         }
         if defaults.object(forKey: Keys.cloudSyncEnabled) == nil {
             defaults.set(true, forKey: Keys.cloudSyncEnabled)
+        }
+        if defaults.object(forKey: Keys.cloudSyncBaseURL) == nil {
+            defaults.set("", forKey: Keys.cloudSyncBaseURL)
+        }
+        if defaults.object(forKey: Keys.cloudUploadAudio) == nil {
+            defaults.set(false, forKey: Keys.cloudUploadAudio)
         }
     }
 
@@ -454,6 +462,22 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.cloudSyncEnabled)
+        }
+    }
+
+    public var cloudSyncBaseURL: String {
+        get { defaults.string(forKey: Keys.cloudSyncBaseURL) ?? "" }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.cloudSyncBaseURL)
+        }
+    }
+
+    public var cloudUploadAudioEnabled: Bool {
+        get { defaults.bool(forKey: Keys.cloudUploadAudio) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.cloudUploadAudio)
         }
     }
 

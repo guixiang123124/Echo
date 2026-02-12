@@ -18,7 +18,7 @@ public enum EchoTheme {
             let match = appearance.bestMatch(from: [.darkAqua, .aqua])
             return match == .darkAqua ? dark : light
         }
-        return Color(dynamic ?? light)
+        return Color(dynamic)
     }
     #endif
 

@@ -22,24 +22,79 @@ struct EchoDictionaryView: View {
     @State private var entries: [DictionaryTermEntry] = []
     @State private var showAddSheet = false
     @State private var newTerm = ""
+    @State private var query = ""
 
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Picker("", selection: $filter) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        EchoSectionHeading(
+                            "Dictionary",
+                            subtitle: "Teach Echo names, product terms, and phrases to improve dictation quality."
+                        )
+
+                        HStack(spacing: 8) {
                             ForEach(Filter.allCases) { f in
-                                Text(f.title).tag(f)
+                                Button {
+                                    filter = f
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        if f == .autoAdded {
+                                            Image(systemName: "sparkles")
+                                                .font(.system(size: 11, weight: .semibold))
+                                        } else if f == .manual {
+                                            Image(systemName: "leaf")
+                                                .font(.system(size: 11, weight: .semibold))
+                                        }
+                                        Text(f.title)
+                                    }
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(filter == f ? .primary : EchoMobileTheme.mutedText)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(filter == f ? EchoMobileTheme.accentSoft : EchoMobileTheme.cardBackground)
+                                    )
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .pickerStyle(.segmented)
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(EchoMobileTheme.mutedText)
+                            TextField("Search terms", text: $query)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 14))
+                            if !query.isEmpty {
+                                Button {
+                                    query = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(EchoMobileTheme.cardSurface)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(EchoMobileTheme.border, lineWidth: 1)
+                        )
 
                         dictionaryCard
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                 }
+                .background(EchoMobileTheme.pageBackground)
 
                 Button {
                     newTerm = ""
@@ -49,14 +104,14 @@ struct EchoDictionaryView: View {
                         .font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 52, height: 52)
-                        .background(Circle().fill(Color.black))
+                        .background(Circle().fill(.black))
                         .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 10)
                 }
                 .padding(.trailing, 18)
                 .padding(.bottom, 18)
             }
             .navigationTitle("Dictionary")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.automatic)
         }
         .task { await refresh() }
         .onChange(of: filter) { _, _ in
@@ -95,21 +150,21 @@ struct EchoDictionaryView: View {
 
     private var dictionaryCard: some View {
         VStack(spacing: 0) {
-            if entries.isEmpty {
+            if filteredEntries.isEmpty {
                 VStack(spacing: 10) {
                     Text("No words yet")
                         .font(.headline)
                     Text("Echo remembers unique names and terms to improve recognition and editing.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(EchoMobileTheme.mutedText)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 22)
                 .padding(.horizontal, 14)
             } else {
-                ForEach(entries.indices, id: \.self) { idx in
-                    let item = entries[idx]
+                ForEach(filteredEntries.indices, id: \.self) { idx in
+                    let item = filteredEntries[idx]
                     HStack(spacing: 12) {
                         Image(systemName: "sparkles")
                             .foregroundStyle(item.source == .manual ? Color(.systemTeal) : Color(.systemMint))
@@ -130,7 +185,7 @@ struct EchoDictionaryView: View {
                         }
                     }
 
-                    if idx < entries.count - 1 {
+                    if idx < filteredEntries.count - 1 {
                         Divider()
                     }
                 }
@@ -138,7 +193,11 @@ struct EchoDictionaryView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+                .fill(EchoMobileTheme.cardSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(EchoMobileTheme.border, lineWidth: 1)
         )
     }
 
@@ -151,5 +210,10 @@ struct EchoDictionaryView: View {
         }
         entries = await EchoDictionaryStore.shared.all(filter: filterSource)
     }
-}
 
+    private var filteredEntries: [DictionaryTermEntry] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return entries }
+        return entries.filter { $0.term.localizedCaseInsensitiveContains(term) }
+    }
+}

@@ -102,6 +102,16 @@ public final class AppSettings: @unchecked Sendable {
         set { defaults.set(newValue, forKey: Keys.cloudSyncEnabled) }
     }
 
+    public var cloudSyncBaseURL: String {
+        get { defaults.string(forKey: Keys.cloudSyncBaseURL) ?? "" }
+        set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.cloudSyncBaseURL) }
+    }
+
+    public var cloudUploadAudioEnabled: Bool {
+        get { defaults.bool(forKey: Keys.cloudUploadAudio, default: false) }
+        set { defaults.set(newValue, forKey: Keys.cloudUploadAudio) }
+    }
+
     // MARK: - Voice Input IPC
 
     /// Write transcription result for keyboard extension to read
@@ -130,6 +140,8 @@ public final class AppSettings: @unchecked Sendable {
         static let autoCapitalization = "echo.keyboard.autocap"
         static let pendingTranscription = "echo.ipc.pending_transcription"
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
+        static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
+        static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"
     }
 }
 
