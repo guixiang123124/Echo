@@ -63,6 +63,27 @@ cp backend/.env.production.example backend/.env.production
 ./scripts/deploy_railway_backend.sh
 ```
 
+## Stripe bootstrap automation
+
+You can auto-create (or reuse) Echo product/prices and webhook by script:
+
+```bash
+cd /Users/xianggui/Downloads/Echo/backend
+export STRIPE_SECRET_KEY=sk_live_xxx
+export ECHO_API_BASE_URL=https://echo-api-production-c83b.up.railway.app
+export RAILWAY_SYNC=true
+export RAILWAY_SERVICE_NAME=echo-api
+export RAILWAY_ENVIRONMENT=production
+node scripts/bootstrap_stripe.mjs
+```
+
+Optional pricing overrides:
+
+```bash
+export ECHO_MONTHLY_USD_CENTS=999
+export ECHO_YEARLY_USD_CENTS=9999
+```
+
 ## 3) Connect iOS/macOS clients
 
 In app settings:
