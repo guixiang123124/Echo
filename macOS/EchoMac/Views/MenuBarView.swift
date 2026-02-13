@@ -16,6 +16,7 @@ struct MenuBarView: View {
     @State private var testResult: String = ""
     @State private var isTestingMic: Bool = false
     @State private var testTask: Task<Void, Never>?
+    @State private var didAutoOpenWindows: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -60,6 +61,16 @@ struct MenuBarView: View {
         }
         .padding(.vertical, 8)
         .frame(width: 280)
+        .onAppear {
+            // Used by scripts to generate deterministic App Store screenshots.
+            guard !didAutoOpenWindows else { return }
+            didAutoOpenWindows = true
+
+            if ProcessInfo.processInfo.environment["ECHO_AUTOMATION_SCREENSHOT"] == "1" {
+                openWindow(id: "echo-home")
+                openWindow(id: "echo-history")
+            }
+        }
     }
 
     // MARK: - Status Section

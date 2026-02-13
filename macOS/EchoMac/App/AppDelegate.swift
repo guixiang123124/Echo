@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 import Combine
 import EchoCore
@@ -25,6 +26,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let authSession = EchoAuthSession.shared
     private let cloudSync = CloudSyncService.shared
     private let billing = BillingService.shared
+    private let isScreenshotAutomation: Bool = {
+        ProcessInfo.processInfo.environment["ECHO_AUTOMATION_SCREENSHOT"] == "1"
+            || CommandLine.arguments.contains("--automation-screenshot")
+    }()
+    private lazy var screenshotAutomationOutDir: URL = {
+        if let idx = CommandLine.arguments.firstIndex(of: "--automation-out-dir"),
+           idx + 1 < CommandLine.arguments.count {
+            return URL(fileURLWithPath: CommandLine.arguments[idx + 1])
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/EchoScreenshots", isDirectory: true)
+    }()
 
     // MARK: - App Lifecycle
 
@@ -135,6 +148,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         // Setup hotkey monitoring (if already authorized)
         startHotkeyMonitoring()
+
+        // Used by scripts to generate deterministic App Store screenshots.
+        if isScreenshotAutomation {
+            runScreenshotAutomation()
+        }
 
         print("✅ EchoMac started successfully")
     }
@@ -457,6 +475,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let view = EchoHomeWindowView(settings: settings)
+            .environmentObject(AppState.shared)
+            .environmentObject(PermissionManager.shared)
+            .environmentObject(settings)
+            .environmentObject(DiagnosticsState.shared)
+            .environmentObject(EchoAuthSession.shared)
+            .environmentObject(CloudSyncService.shared)
+            .environmentObject(BillingService.shared)
+            .preferredColorScheme(.light)
+            .environment(\.colorScheme, .light)
         let hostingController = NSHostingController(rootView: view)
         let lightAppearance = NSAppearance(named: .aqua)
         hostingController.view.appearance = lightAppearance
@@ -488,6 +515,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         let view = RecordingHistoryView()
+            .environmentObject(AppState.shared)
+            .environmentObject(PermissionManager.shared)
+            .environmentObject(settings)
+            .environmentObject(DiagnosticsState.shared)
+            .environmentObject(EchoAuthSession.shared)
+            .environmentObject(CloudSyncService.shared)
+            .environmentObject(BillingService.shared)
+            .preferredColorScheme(.light)
+            .environment(\.colorScheme, .light)
         let hostingController = NSHostingController(rootView: view)
         let lightAppearance = NSAppearance(named: .aqua)
         hostingController.view.appearance = lightAppearance
@@ -529,6 +565,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard homeWindow == nil, historyWindow == nil else { return }
         if NSApp.activationPolicy() != .accessory {
             NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    // MARK: - Screenshot Automation
+
+    private func runScreenshotAutomation() {
+        showHomeWindow()
+        showHistoryWindow()
+
+        Task { @MainActor in
+            do {
+                try FileManager.default.createDirectory(at: screenshotAutomationOutDir, withIntermediateDirectories: true)
+            } catch {
+                print("⚠️ Failed to create screenshot output dir: \(error)")
+            }
+
+            // Give SwiftUI time to render and layout.
+            try? await Task.sleep(for: .milliseconds(900))
+
+            if let window = homeWindow {
+                capture(window: window, filename: "EchoMac-Home.png")
+            }
+
+            selectHomeSection(.history)
+            try? await Task.sleep(for: .milliseconds(350))
+            if let window = homeWindow {
+                capture(window: window, filename: "EchoMac-Home-History.png")
+            }
+
+            selectHomeSection(.dictionary)
+            try? await Task.sleep(for: .milliseconds(350))
+            if let window = homeWindow {
+                capture(window: window, filename: "EchoMac-Home-Dictionary.png")
+            }
+
+            if let window = historyWindow {
+                capture(window: window, filename: "EchoMac-History.png")
+            }
+
+            print("📸 Screenshot automation complete: \(screenshotAutomationOutDir.path)")
+            try? await Task.sleep(for: .milliseconds(250))
+            NSApp.terminate(nil)
+        }
+    }
+
+    private func selectHomeSection(_ section: HomeSection) {
+        NotificationCenter.default.post(
+            name: .echoHomeSelectSection,
+            object: nil,
+            userInfo: ["section": section.rawValue]
+        )
+    }
+
+    private func capture(window: NSWindow, filename: String) {
+        let outURL = screenshotAutomationOutDir.appendingPathComponent(filename)
+        let windowID = CGWindowID(window.windowNumber)
+        guard let cgImage = CGWindowListCreateImage(
+            .null,
+            .optionIncludingWindow,
+            windowID,
+            [.bestResolution]
+        ) else {
+            print("⚠️ Failed to capture window: \(filename)")
+            return
+        }
+
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let data = rep.representation(using: .png, properties: [:]) else {
+            print("⚠️ Failed to encode screenshot: \(filename)")
+            return
+        }
+
+        do {
+            try data.write(to: outURL, options: [.atomic])
+        } catch {
+            print("⚠️ Failed to write screenshot: \(error)")
         }
     }
 }
@@ -918,6 +1030,13 @@ struct EchoHomeWindowView: View {
         .onChange(of: authSession.userId) { _, _ in
             model.refresh(userId: effectiveUserId)
             Task { await billing.refresh() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .echoHomeSelectSection)) { note in
+            guard let raw = note.userInfo?["section"] as? String,
+                  let next = HomeSection(rawValue: raw) else {
+                return
+            }
+            selectedSection = next
         }
         // The Home UI uses a Typeless-style light theme with explicit light backgrounds.
         // Force light mode so `.primary` stays readable even if macOS is in Dark Mode.
@@ -1604,4 +1723,5 @@ private enum HistoryRetention: String, CaseIterable, Identifiable {
 extension Notification.Name {
     static let echoToggleRecording = Notification.Name("echo.toggleRecording")
     static let echoRecordingSaved = Notification.Name("echo.recordingSaved")
+    static let echoHomeSelectSection = Notification.Name("echo.homeSelectSection")
 }

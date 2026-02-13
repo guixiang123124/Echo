@@ -53,6 +53,18 @@ struct MainView: View {
         .onOpenURL { url in
             guard url.scheme == "echo", let host = url.host else { return }
             switch host {
+            case "home":
+                selectedTab = .home
+                deepLink = nil
+            case "history":
+                selectedTab = .history
+                deepLink = nil
+            case "dictionary":
+                selectedTab = .dictionary
+                deepLink = nil
+            case "account":
+                selectedTab = .account
+                deepLink = nil
             case "voice":
                 deepLink = .voice
             case "settings":

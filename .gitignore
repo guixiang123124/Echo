@@ -46,6 +46,10 @@ build/
 *.app
 *.ipa
 
+# Local artifacts
+output/
+.deriveddata_screenshots/
+
 # Archives
 *.xcarchive
 
@@ -55,6 +59,9 @@ playground.xcworkspace
 
 # Instruments
 *.trace
+
+# Coverage / profiling artifacts
+*.profraw
 
 # fastlane
 fastlane/report.xml

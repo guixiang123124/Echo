@@ -26,6 +26,26 @@ APPICONSETS = [
     ROOT / "macOS" / "EchoMac" / "Assets.xcassets" / "AppIcon.appiconset",
 ]
 
+def center_crop_square(img: Image.Image) -> Image.Image:
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    return img.crop((left, top, left + side, top + side))
+
+
+def flatten_alpha(img: Image.Image) -> Image.Image:
+    """
+    App icons must be fully opaque (no alpha channel).
+    If the source has transparency, composite onto a matte color sampled from the corner.
+    """
+    if img.mode in ("RGBA", "LA") or ("transparency" in img.info):
+        rgba = img.convert("RGBA")
+        r, g, b, _a = rgba.getpixel((0, 0))
+        matte = Image.new("RGBA", rgba.size, (r, g, b, 255))
+        return Image.alpha_composite(matte, rgba).convert("RGB")
+    return img.convert("RGB")
+
 
 def parse_size(size_str: str) -> tuple[float, float]:
     w_str, h_str = size_str.split("x")
@@ -81,12 +101,11 @@ def main() -> int:
         return 2
 
     src = Image.open(src_path)
-    if src.size != (1024, 1024):
-        # Still accept it, but ensure we start from a square 1024 for consistent results.
-        src = src.convert("RGB")
-        src = src.resize((1024, 1024), resample=Image.Resampling.LANCZOS)
-    else:
-        src = src.convert("RGB")
+    # Ensure consistent sizing without distorting aspect ratio:
+    # center-crop to square, then scale to 1024.
+    src = center_crop_square(src)
+    src = src.resize((1024, 1024), resample=Image.Resampling.LANCZOS)
+    src = flatten_alpha(src)
 
     for appiconset in APPICONSETS:
         if not (appiconset / "Contents.json").exists():
@@ -99,4 +118,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
