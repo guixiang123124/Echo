@@ -153,6 +153,11 @@ struct EchoHistoryView: View {
                 .font(.system(size: 18))
                 .foregroundStyle(.primary)
                 .lineLimit(4)
+
+            Text(autoEditSummary(for: entry))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -192,6 +197,36 @@ private func groupByDay(_ items: [RecordingStore.RecordingEntry]) -> [HistoryDay
     return groups
         .map { HistoryDaySection(day: $0.key, items: $0.value.sorted { $0.createdAt > $1.createdAt }) }
         .sorted { $0.day > $1.day }
+}
+
+private func autoEditSummary(for entry: RecordingStore.RecordingEntry) -> String {
+    let providerName: String
+    if let id = entry.correctionProviderId {
+        switch id {
+        case "openai_gpt": providerName = "OpenAI GPT-4o"
+        case "claude": providerName = "Claude"
+        case "doubao": providerName = "Doubao"
+        case "qwen": providerName = "Qwen"
+        default: providerName = id
+        }
+    } else {
+        providerName = "Off"
+    }
+
+    let modified: String
+    if let raw = entry.transcriptRaw,
+       let final = entry.transcriptFinal,
+       !raw.isEmpty,
+       !final.isEmpty,
+       raw != final {
+        modified = "edited"
+    } else if entry.correctionProviderId != nil {
+        modified = "no change"
+    } else {
+        modified = ""
+    }
+
+    return modified.isEmpty ? "Auto Edit: \(providerName)" : "Auto Edit: \(providerName) (\(modified))"
 }
 
 private enum KeepHistoryPolicy {

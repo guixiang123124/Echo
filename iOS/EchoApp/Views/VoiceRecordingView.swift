@@ -228,9 +228,10 @@ final class VoiceRecordingViewModel: ObservableObject {
             var finalText = rawText
 
             // Auto Edit (optional)
-            let correctionProviderId = settings.correctionEnabled ? settings.selectedCorrectionProvider : nil
+            var correctionProviderId: String? = nil
             if settings.correctionEnabled,
                let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider) {
+                correctionProviderId = correctionProvider.id
                 statusText = "Correcting..."
                 do {
                     let pipeline = CorrectionPipeline(provider: correctionProvider)

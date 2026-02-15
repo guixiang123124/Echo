@@ -41,6 +41,36 @@ final class RecordingHistoryViewModel: ObservableObject {
     }
 }
 
+private func autoEditSummary(for entry: RecordingStore.RecordingEntry) -> String {
+    let providerName: String
+    if let id = entry.correctionProviderId {
+        switch id {
+        case "openai_gpt": providerName = "OpenAI GPT-4o"
+        case "claude": providerName = "Claude"
+        case "doubao": providerName = "Doubao"
+        case "qwen": providerName = "Qwen"
+        default: providerName = id
+        }
+    } else {
+        providerName = "Off"
+    }
+
+    let modified: String
+    if let raw = entry.transcriptRaw,
+       let final = entry.transcriptFinal,
+       !raw.isEmpty,
+       !final.isEmpty,
+       raw != final {
+        modified = "edited"
+    } else if entry.correctionProviderId != nil {
+        modified = "no change"
+    } else {
+        modified = ""
+    }
+
+    return modified.isEmpty ? "Auto Edit: \(providerName)" : "Auto Edit: \(providerName) (\(modified))"
+}
+
 struct RecordingHistoryView: View {
     @StateObject private var model = RecordingHistoryViewModel()
     @EnvironmentObject var settings: MacAppSettings
@@ -204,6 +234,10 @@ struct RecordingRow: View {
 
             HStack(spacing: 12) {
                 Text(entry.asrProviderName)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Text(autoEditSummary(for: entry))
                     .font(.caption)
                     .foregroundColor(.secondary)
 

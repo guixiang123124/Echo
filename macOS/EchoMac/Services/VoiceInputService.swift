@@ -111,7 +111,7 @@ public final class VoiceInputService: ObservableObject {
         var providerForStorage: (any ASRProvider)?
         var rawTranscript: String?
         var finalTranscriptValue: String?
-        let correctionProviderId = settings.correctionEnabled ? settings.selectedCorrectionProvider : nil
+        var correctionProviderId: String? = nil
 
         do {
             // Combine all audio chunks
@@ -150,6 +150,7 @@ public final class VoiceInputService: ObservableObject {
             // Apply LLM correction if enabled and provider is available
             if settings.correctionEnabled,
                let correctionProvider = resolveCorrectionProvider() {
+                correctionProviderId = correctionProvider.id
                 isCorrecting = true
                 defer { isCorrecting = false }
 
