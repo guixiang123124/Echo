@@ -20,7 +20,9 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         if let apiKeyOverride, !apiKeyOverride.isEmpty {
             return true
         }
-        return keyStore.hasKey(for: id)
+        // Prefer the dedicated Auto Edit key, but allow reusing the Whisper key
+        // so users don't have to enter the same OpenAI API key twice.
+        return keyStore.hasKey(for: id) || keyStore.hasKey(for: "openai_whisper")
     }
 
     public func correct(
@@ -29,7 +31,11 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         confidence: [WordConfidence],
         options: CorrectionOptions
     ) async throws -> CorrectionResult {
-        guard let apiKey = try (apiKeyOverride ?? keyStore.retrieve(for: id)) else {
+        let apiKey = try (apiKeyOverride
+            ?? keyStore.retrieve(for: id)
+            ?? keyStore.retrieve(for: "openai_whisper"))
+
+        guard let apiKey, !apiKey.isEmpty else {
             throw CorrectionError.apiKeyMissing
         }
 

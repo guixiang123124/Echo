@@ -22,9 +22,12 @@ struct ProviderSettingsView: View {
     var body: some View {
         List {
             Section {
-                Text("API keys are stored securely in your device's Keychain.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("API keys are stored securely in your device's Keychain.")
+                    Text("Tip: You can reuse the same OpenAI API key for Whisper (ASR) and Auto Edit (GPT-4o).")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
             }
 
             Section("Speech Recognition Providers") {
