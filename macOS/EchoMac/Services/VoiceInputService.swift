@@ -161,7 +161,11 @@ public final class VoiceInputService: ObservableObject {
 
                 let correctionStart = Date()
                 do {
-                    await contextStore.updateUserTerms(settings.customTerms)
+                    // Always include the shared on-device dictionary in the prompt context.
+                    let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
+                    let mergedTerms = Array(Set(dictTerms + settings.customTerms))
+                    await contextStore.updateUserTerms(mergedTerms)
+
                     let context = await contextStore.currentContext()
                     let pipeline = CorrectionPipeline(provider: correctionProvider)
                     let correction = try await pipeline.process(
@@ -170,6 +174,14 @@ public final class VoiceInputService: ObservableObject {
                         options: settings.autoEditOptions
                     )
                     result = correction.correctedText
+
+                    if correction.wasModified {
+                        let candidates = DictionaryAutoAdder.candidates(
+                            original: correction.originalText,
+                            corrected: correction.correctedText
+                        )
+                        await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
+                    }
                 } catch {
                     print("⚠️ Correction failed, using raw transcription: \(error)")
                 }

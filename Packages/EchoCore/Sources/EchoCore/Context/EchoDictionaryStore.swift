@@ -32,6 +32,9 @@ public struct DictionaryTermEntry: Codable, Hashable, Sendable, Identifiable {
 public actor EchoDictionaryStore {
     public static let shared = EchoDictionaryStore()
 
+    /// Safety valve: keep auto-added terms capped to avoid pollution.
+    public static let defaultMaxAutoAddedTerms = 200
+
     private let defaults: UserDefaults
     private let storageKey = "echo.dictionary.entries.v1"
     private var entries: [DictionaryTermEntry] = []
@@ -74,27 +77,57 @@ public actor EchoDictionaryStore {
     }
 
     public func add(term: String, source: DictionaryTermSource) {
-        let cleaned = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
+        add(terms: [term], source: source)
+    }
 
-        let key = cleaned.lowercased()
-        if let idx = entries.firstIndex(where: { $0.term.lowercased() == key }) {
-            // Upgrade source if needed (manual wins).
-            if entries[idx].source != .manual, source == .manual {
-                entries[idx] = DictionaryTermEntry(term: cleaned, source: .manual, createdAt: entries[idx].createdAt)
-                persist()
+    public func add(terms: [String], source: DictionaryTermSource) {
+        let cleanedTerms: [String] = terms
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        guard !cleanedTerms.isEmpty else { return }
+
+        var changed = false
+
+        for cleaned in cleanedTerms {
+            let key = cleaned.lowercased()
+            if let idx = entries.firstIndex(where: { $0.term.lowercased() == key }) {
+                // Upgrade source if needed (manual wins).
+                if entries[idx].source != .manual, source == .manual {
+                    entries[idx] = DictionaryTermEntry(term: cleaned, source: .manual, createdAt: entries[idx].createdAt)
+                    changed = true
+                }
+                continue
             }
-            return
+
+            entries.append(DictionaryTermEntry(term: cleaned, source: source))
+            changed = true
         }
 
-        entries.append(DictionaryTermEntry(term: cleaned, source: source))
-        persist()
+        if source == .autoAdded {
+            changed = enforceAutoAddedLimit(maxCount: Self.defaultMaxAutoAddedTerms) || changed
+        }
+
+        if changed {
+            persist()
+        }
     }
 
     public func remove(term: String) {
         let key = term.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let oldCount = entries.count
         entries.removeAll { $0.term.lowercased() == key }
-        persist()
+        if entries.count != oldCount {
+            persist()
+        }
+    }
+
+    public func clearAutoAdded() {
+        let oldCount = entries.count
+        entries.removeAll { $0.source == .autoAdded }
+        if entries.count != oldCount {
+            persist()
+        }
     }
 
     public func clear() {
@@ -103,6 +136,25 @@ public actor EchoDictionaryStore {
         Task { @MainActor in
             NotificationCenter.default.post(name: .echoDictionaryChanged, object: nil)
         }
+    }
+
+    @discardableResult
+    private func enforceAutoAddedLimit(maxCount: Int) -> Bool {
+        guard maxCount >= 0 else { return false }
+
+        let autoAdded = entries.filter { $0.source == .autoAdded }
+        guard autoAdded.count > maxCount else { return false }
+
+        // Remove oldest auto-added entries first.
+        let toRemoveCount = autoAdded.count - maxCount
+        let oldest = autoAdded
+            .sorted { $0.createdAt < $1.createdAt }
+            .prefix(toRemoveCount)
+
+        let oldestIds = Set(oldest.map { $0.id })
+        let oldCount = entries.count
+        entries.removeAll { $0.source == .autoAdded && oldestIds.contains($0.id) }
+        return entries.count != oldCount
     }
 
     private static func decodeEntries(from defaults: UserDefaults, storageKey: String) -> [DictionaryTermEntry] {

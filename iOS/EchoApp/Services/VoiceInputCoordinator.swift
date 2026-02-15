@@ -107,12 +107,25 @@ public actor VoiceInputCoordinator {
         }
 
         do {
-            let context = await contextStore.currentContext()
+            var context = await contextStore.currentContext()
+            // Always include the shared on-device dictionary in the prompt context.
+            let dictionaryTerms = await EchoDictionaryStore.shared.all().map(\.term)
+            context = context.withUserTerms(dictionaryTerms)
+
             let correctionResult = try await pipeline.process(
                 transcription: transcription,
                 context: context,
                 options: settings.correctionOptions
             )
+
+            if correctionResult.wasModified {
+                let candidates = DictionaryAutoAdder.candidates(
+                    original: correctionResult.originalText,
+                    corrected: correctionResult.correctedText
+                )
+                await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
+            }
+
             return correctionResult.correctedText
         } catch {
             // Fallback to raw transcription if correction fails

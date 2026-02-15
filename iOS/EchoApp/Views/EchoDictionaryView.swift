@@ -112,6 +112,25 @@ struct EchoDictionaryView: View {
             }
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            Task { await EchoDictionaryStore.shared.clearAutoAdded() }
+                        } label: {
+                            Label("Clear Auto-added", systemImage: "sparkles")
+                        }
+
+                        Button(role: .destructive) {
+                            Task { await EchoDictionaryStore.shared.clear() }
+                        } label: {
+                            Label("Clear All", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
         }
         .task { await refresh() }
         .onChange(of: filter) { _, _ in
@@ -166,7 +185,7 @@ struct EchoDictionaryView: View {
                 ForEach(filteredEntries.indices, id: \.self) { idx in
                     let item = filteredEntries[idx]
                     HStack(spacing: 12) {
-                        Image(systemName: "sparkles")
+                        Image(systemName: item.source == .manual ? "leaf" : "sparkles")
                             .foregroundStyle(item.source == .manual ? Color(.systemTeal) : Color(.systemMint))
                             .frame(width: 18)
                         Text(item.term)
