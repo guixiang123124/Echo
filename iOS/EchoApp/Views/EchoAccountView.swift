@@ -22,8 +22,8 @@ struct EchoAccountView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .navigationTitle("Account")
-            .navigationBarTitleDisplayMode(.automatic)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .background(EchoMobileTheme.pageBackground)
         }
         .task {

@@ -110,8 +110,8 @@ struct EchoDictionaryView: View {
                 .padding(.trailing, 18)
                 .padding(.bottom, 18)
             }
-            .navigationTitle("Dictionary")
-            .navigationBarTitleDisplayMode(.automatic)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
         }
         .task { await refresh() }
         .onChange(of: filter) { _, _ in
