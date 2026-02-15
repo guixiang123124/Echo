@@ -12,14 +12,11 @@
 		10E7CE68E1706EB4A44E2435 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = F95664E71CD1BBEF13B0A623 /* EchoCore */; };
 		11F1E4AF37B042C50B123085 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE679EEE3D1B592BDB2575F3 /* KeyboardViewController.swift */; };
 		13EFD688437B9302D44440DD /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 210A74478C858A7A367C2CB2 /* MainView.swift */; };
-		B0B1C2D3E4F5061728394A5B /* EchoHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */; };
-		B0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */; };
-		B0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */; };
-		B0B1C2D3E4F5061728394A5E /* EchoAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */; };
 		14B6870AE108A3F8FE9E738B /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 837BCAB508DE49771AD6E478 /* EchoCore */; };
 		175FD424CC8B140CC7E257AC /* AppGroupBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C6FADA443E43D2F0DC52D5 /* AppGroupBridge.swift */; };
 		1D5DDBD8FDFE6C7E7FE0A4C3 /* EchoUI in Frameworks */ = {isa = PBXBuildFile; productRef = 2AA64A8E783C9FD7E0F49240 /* EchoUI */; };
 		1ECDA37615FB61056945E9F2 /* VoiceRecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AA94C54579B51AE4E016C68 /* VoiceRecordingView.swift */; };
+		2129AC321BE044A22168B559 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 84B58304A61FA72BF8A045C9 /* Assets.xcassets */; };
 		24F347E37A9B3035D7DC65DF /* CorrectionProviderResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C85953B1B568898F15F7EC /* CorrectionProviderResolver.swift */; };
 		2F49A86595EF196314A036E3 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA58D71C589CDF26095F347D /* AppState.swift */; };
 		41FB41B8DE6F0B05895B5B3D /* PinyinKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EF1AE1F72CBE9F7A2C9DC3D /* PinyinKeyboardView.swift */; };
@@ -32,9 +29,14 @@
 		66222CF85B299EA4F9DABF39 /* MacAppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F0BD2B49B39441C7E257BD9 /* MacAppSettings.swift */; };
 		7479EB6ED0B3E06FA935457B /* EchoUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1604F1834F9A3AA6057A688C /* EchoUI */; };
 		779890FF768867B2A7F9F82F /* VoiceInputService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 282D61BCB4384740A670C946 /* VoiceInputService.swift */; };
+		875747A02D012F80D76A8FB9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA140E071E1DA6D4B90B09CA /* Assets.xcassets */; };
 		9684B1A49C2EA336C3F58D75 /* QWERTYKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F45DCBB07FB8AC442B59C6 /* QWERTYKeyboardView.swift */; };
 		9FA9B60B68874D75800202D4 /* RecordingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 920C1BFCD91842C5B54FDDF4 /* RecordingStore.swift */; };
 		A41F66B3A885D3BFDF50C747 /* ProviderSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CDFA00DF51DB7720485465F /* ProviderSettingsView.swift */; };
+		B0B1C2D3E4F5061728394A5B /* EchoHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */; };
+		B0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */; };
+		B0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */; };
+		B0B1C2D3E4F5061728394A5E /* EchoAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */; };
 		B62A80AD64EE33EAC221B019 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D1E2B1AF62213AEC4E3E3B2 /* SettingsView.swift */; };
 		C4318EC7D6BF3A395954D576 /* KeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFF3F0C51F7D8408BCE22D25 /* KeyboardView.swift */; };
 		C6D72A4757234D9B87B632B3 /* RecordingHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E2BB0E9A6B64608AF950CA1 /* RecordingHistoryView.swift */; };
@@ -44,8 +46,6 @@
 		E22C0C65DCA6F8BE515059B4 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2962763E1AB23FF84ED7070 /* PermissionManager.swift */; };
 		E3A124F2305DBE71F95F3BA8 /* VoiceInputTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = E57DE8832A3A6533E1094159 /* VoiceInputTrigger.swift */; };
 		E5BDCA43AF6F1CB845858655 /* SettingsWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96A1662B0ABDF7BED5FD3108 /* SettingsWindowView.swift */; };
-		2129AC321BE044A22168B559 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 84B58304A61FA72BF8A045C9 /* Assets.xcassets */; };
-		875747A02D012F80D76A8FB9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FA140E071E1DA6D4B90B09CA /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,14 +75,8 @@
 /* Begin PBXFileReference section */
 		00ECA9072D38C509ADA04F75 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		0485684911B260FD0E26A06F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		84B58304A61FA72BF8A045C9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		FA140E071E1DA6D4B90B09CA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1531B09ACCDB79FC2FC49B15 /* VoiceInputCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputCoordinator.swift; sourceTree = "<group>"; };
 		210A74478C858A7A367C2CB2 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
-		A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHomeView.swift; sourceTree = "<group>"; };
-		A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHistoryView.swift; sourceTree = "<group>"; };
-		A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoDictionaryView.swift; sourceTree = "<group>"; };
-		A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoAccountView.swift; sourceTree = "<group>"; };
 		2746BE2EFD003FB5C59B8952 /* GlobalHotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyMonitor.swift; sourceTree = "<group>"; };
 		282D61BCB4384740A670C946 /* VoiceInputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputService.swift; sourceTree = "<group>"; };
 		2AA94C54579B51AE4E016C68 /* VoiceRecordingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceRecordingView.swift; sourceTree = "<group>"; };
@@ -90,6 +84,7 @@
 		45DB0A344C11EC8AE4FEBE0E /* EchoMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoMacApp.swift; sourceTree = "<group>"; };
 		6F0BD2B49B39441C7E257BD9 /* MacAppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppSettings.swift; sourceTree = "<group>"; };
 		7876B0E64F5A6E7FCFCEF152 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		84B58304A61FA72BF8A045C9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8CDFA00DF51DB7720485465F /* ProviderSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderSettingsView.swift; sourceTree = "<group>"; };
 		8E2BB0E9A6B64608AF950CA1 /* RecordingHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingHistoryView.swift; sourceTree = "<group>"; };
 		920C1BFCD91842C5B54FDDF4 /* RecordingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingStore.swift; sourceTree = "<group>"; };
@@ -102,8 +97,12 @@
 		9D1E2B1AF62213AEC4E3E3B2 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		9D2645297A65A50E8B0C26AB /* EchoKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EchoKeyboard.entitlements; sourceTree = "<group>"; };
 		9EF1AE1F72CBE9F7A2C9DC3D /* PinyinKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinKeyboardView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5B /* EchoHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHomeView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5C /* EchoHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHistoryView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5D /* EchoDictionaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoDictionaryView.swift; sourceTree = "<group>"; };
+		A0B1C2D3E4F5061728394A5E /* EchoAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoAccountView.swift; sourceTree = "<group>"; };
 		AE3A20618335C45821EEA70C /* EchoMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EchoMac.entitlements; sourceTree = "<group>"; };
-		B7C95318784C2F76F52AB00B /* EchoMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B7C95318784C2F76F52AB00B /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BF041E7BC5C505154B5F120E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		C34F8DAE23167E78D602884C /* TextInserter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextInserter.swift; sourceTree = "<group>"; };
 		C8F94BE75FB5B36078900C36 /* EchoKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = EchoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -116,6 +115,7 @@
 		F1C85953B1B568898F15F7EC /* CorrectionProviderResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionProviderResolver.swift; sourceTree = "<group>"; };
 		F2962763E1AB23FF84ED7070 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
 		F98B22D2B2B4E45F0D0EDE5F /* EchoUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EchoUI; path = Packages/EchoUI; sourceTree = SOURCE_ROOT; };
+		FA140E071E1DA6D4B90B09CA /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -147,25 +147,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXResourcesBuildPhase section */
-		81B888E55BD896C34FF67B53 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				2129AC321BE044A22168B559 /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		DA4634A011E7C67CFC9C6AD8 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				875747A02D012F80D76A8FB9 /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXGroup section */
 		0889F08CE775EC585053FCE6 = {
@@ -225,7 +206,7 @@
 			children = (
 				97E8653789D4163726FB455A /* EchoApp.app */,
 				C8F94BE75FB5B36078900C36 /* EchoKeyboard.appex */,
-				B7C95318784C2F76F52AB00B /* EchoMac.app */,
+				B7C95318784C2F76F52AB00B /* Echo.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -377,7 +358,7 @@
 				1604F1834F9A3AA6057A688C /* EchoUI */,
 			);
 			productName = EchoMac;
-			productReference = B7C95318784C2F76F52AB00B /* EchoMac.app */;
+			productReference = B7C95318784C2F76F52AB00B /* Echo.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -411,6 +392,25 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		81B888E55BD896C34FF67B53 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2129AC321BE044A22168B559 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DA4634A011E7C67CFC9C6AD8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				875747A02D012F80D76A8FB9 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		7B40A4CBE7174364AAA8CAE3 /* Sources */ = {
@@ -475,27 +475,30 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-			1C0D88E4BF5F2F850A3B4D54 /* Release */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
-					COMBINE_HIDPI_IMAGES = YES;
-					"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
-					ENABLE_HARDENED_RUNTIME = YES;
-					INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-					LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-					MACOSX_DEPLOYMENT_TARGET = 14.0;
-					PRODUCT_NAME = Echo;
-					PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
-					SDKROOT = macosx;
-				};
-				name = Release;
+		1C0D88E4BF5F2F850A3B4D54 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = D7BK236H9B;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
+				PRODUCT_NAME = Echo;
+				SDKROOT = macosx;
 			};
+			name = Release;
+		};
 		64DA68B5AB3695AEBC1E9E48 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = iOS/EchoKeyboard/EchoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				INFOPLIST_FILE = iOS/EchoKeyboard/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -514,6 +517,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = iOS/EchoKeyboard/EchoKeyboard.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				INFOPLIST_FILE = iOS/EchoKeyboard/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -591,7 +596,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = iOS/EchoApp/EchoApp.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				INFOPLIST_FILE = iOS/EchoApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -605,23 +611,24 @@
 			};
 			name = Debug;
 		};
-			B52EB92A829E66393107CCDA /* Debug */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-					CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
-					COMBINE_HIDPI_IMAGES = YES;
-					"DEVELOPMENT_TEAM[sdk=macosx*]" = D7BK236H9B;
-					ENABLE_HARDENED_RUNTIME = YES;
-					INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-					LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-					MACOSX_DEPLOYMENT_TARGET = 14.0;
-					PRODUCT_NAME = Echo;
-					PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
-					SDKROOT = macosx;
-				};
-				name = Debug;
+		B52EB92A829E66393107CCDA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = macOS/EchoMac/EchoMac.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = D7BK236H9B;
+				ENABLE_HARDENED_RUNTIME = YES;
+				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
+				PRODUCT_NAME = Echo;
+				SDKROOT = macosx;
 			};
+			name = Debug;
+		};
 		BBFF3AC7386C73BA9373735F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -692,7 +699,8 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = iOS/EchoApp/EchoApp.entitlements;
-				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				INFOPLIST_FILE = iOS/EchoApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;

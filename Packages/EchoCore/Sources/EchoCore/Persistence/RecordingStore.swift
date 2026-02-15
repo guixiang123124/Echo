@@ -565,10 +565,17 @@ public actor RecordingStore {
     }
 
     private func currentDeviceName() -> String {
+        // Avoid main-actor-only APIs here (UIDevice / Host.localizedName) since this store is an actor.
+        // The value is only used for diagnostics/sync metadata, so prefer a safe nonisolated identifier.
+        let host = ProcessInfo.processInfo.hostName
+        if !host.isEmpty {
+            return host
+        }
+
         #if os(iOS)
-        return UIDevice.current.name
+        return "iOS"
         #else
-        return Host.current().localizedName ?? "macOS"
+        return "macOS"
         #endif
     }
 }
