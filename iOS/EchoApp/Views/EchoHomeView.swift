@@ -167,7 +167,7 @@ struct EchoHomeView: View {
                     setupStep(1, "Open Settings")
                     setupStep(2, "General > Keyboard > Keyboards")
                     setupStep(3, "Add New Keyboard... > Echo")
-                    setupStep(4, "Enable Allow Full Access")
+                    setupStep(4, "(Recommended) Enable Allow Full Access for Voice + AI")
                 }
                 .padding(.top, 2)
 
