@@ -136,7 +136,7 @@ struct KeyboardView: View {
 
     private func openMainAppVoice() {
         guard state.hasFullAccess else {
-            state.showToast("Enable Full Access to use voice input")
+            state.showToast("Enable Allow Full Access for Voice + AI")
             return
         }
 
@@ -149,7 +149,7 @@ struct KeyboardView: View {
 
     private func openMainAppSettings() {
         guard state.hasFullAccess else {
-            state.showToast("Enable Full Access to open Echo settings")
+            state.showToast("Enable Allow Full Access to open Echo settings")
             return
         }
 

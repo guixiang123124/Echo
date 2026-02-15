@@ -362,14 +362,14 @@ struct KeyboardSetupGuide: View {
                     setupStep(number: 2, text: "Go to General > Keyboard > Keyboards")
                     setupStep(number: 3, text: "Tap 'Add New Keyboard...'")
                     setupStep(number: 4, text: "Select 'Echo'")
-                    setupStep(number: 5, text: "Tap 'Echo' and enable 'Allow Full Access'")
+                    setupStep(number: 5, text: "(Recommended) Tap 'Echo' and enable 'Allow Full Access' to enable Voice + AI")
                     setupStep(number: 6, text: "Switch to Echo using the globe key")
                 }
                 .padding(.vertical, 8)
             } header: {
                 Text("Setup Steps")
             } footer: {
-                Text("Full Access is required for voice input and cloud-based speech recognition.")
+                Text("Voice input and AI correction work best with Allow Full Access. Without it, you can still use Echo as a regular keyboard.")
             }
         }
         .navigationTitle("Keyboard Setup")
