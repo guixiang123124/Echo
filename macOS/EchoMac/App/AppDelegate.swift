@@ -162,6 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         print("👋 EchoMac terminated")
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Clicking the Dock icon should reopen the main Home window.
+        showHomeWindow()
+        return true
+    }
+
     // MARK: - Hotkey Monitoring
 
     private func startHotkeyMonitoring() {
@@ -555,6 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Activation Policy
 
     private func ensureAppVisibleForWindow() {
+        // With Dock enabled, keep Echo as a regular app so it can show windows.
         if NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
         }
@@ -562,10 +569,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func restoreMenuBarOnlyIfNeeded() {
-        guard homeWindow == nil, historyWindow == nil else { return }
-        if NSApp.activationPolicy() != .accessory {
-            NSApp.setActivationPolicy(.accessory)
-        }
+        // Keep Echo visible in Dock even when windows are closed.
+        // This lets users click the Dock icon to reopen the Home window.
+        return
     }
 
     // MARK: - Screenshot Automation

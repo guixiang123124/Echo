@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>NSInputMonitoringUsageDescription</key>
 	<string>Echo needs input monitoring to detect global hotkeys.</string>
 	<key>NSMicrophoneUsageDescription</key>
