@@ -27,6 +27,9 @@ public actor RecordingStore {
         public let error: String?
         public let status: String
         public let userId: String?
+        public let asrLatencyMs: Int?
+        public let correctionLatencyMs: Int?
+        public let totalLatencyMs: Int?
 
         public var audioURL: URL? {
             audioPath.isEmpty ? nil : URL(fileURLWithPath: audioPath)
@@ -83,7 +86,10 @@ public actor RecordingStore {
         transcriptRaw: String?,
         transcriptFinal: String?,
         error: String?,
-        userId: String?
+        userId: String?,
+        asrLatencyMs: Int? = nil,
+        correctionLatencyMs: Int? = nil,
+        totalLatencyMs: Int? = nil
     ) {
         guard let db else {
             print("❌ RecordingStore: database not available")
@@ -126,8 +132,11 @@ public actor RecordingStore {
             word_count,
             error,
             status,
-            user_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            user_id,
+            asr_latency_ms,
+            correction_latency_ms,
+            total_latency_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
 
         var statement: OpaquePointer?
@@ -153,6 +162,21 @@ public actor RecordingStore {
         bindText(stmt, index: 14, value: storedError)
         bindText(stmt, index: 15, value: status)
         bindText(stmt, index: 16, value: userId)
+        if let asrLatencyMs {
+            sqlite3_bind_int(stmt, 17, Int32(asrLatencyMs))
+        } else {
+            sqlite3_bind_null(stmt, 17)
+        }
+        if let correctionLatencyMs {
+            sqlite3_bind_int(stmt, 18, Int32(correctionLatencyMs))
+        } else {
+            sqlite3_bind_null(stmt, 18)
+        }
+        if let totalLatencyMs {
+            sqlite3_bind_int(stmt, 19, Int32(totalLatencyMs))
+        } else {
+            sqlite3_bind_null(stmt, 19)
+        }
 
         var insertedId: Int64?
         if sqlite3_step(stmt) != SQLITE_DONE {
@@ -207,7 +231,8 @@ public actor RecordingStore {
             SELECT id, created_at, duration, sample_rate, channel_count, bits_per_sample,
                    encoding, audio_path, asr_provider_id, asr_provider_name,
                    correction_provider_id, transcript_raw, transcript_final,
-                   word_count, error, status, user_id
+                   word_count, error, status, user_id,
+                   asr_latency_ms, correction_latency_ms, total_latency_ms
             FROM recordings
             WHERE user_id = ? OR user_id IS NULL OR user_id = ''
             ORDER BY created_at DESC
@@ -218,7 +243,8 @@ public actor RecordingStore {
         SELECT id, created_at, duration, sample_rate, channel_count, bits_per_sample,
                encoding, audio_path, asr_provider_id, asr_provider_name,
                correction_provider_id, transcript_raw, transcript_final,
-               word_count, error, status, user_id
+               word_count, error, status, user_id,
+               asr_latency_ms, correction_latency_ms, total_latency_ms
         FROM recordings
         ORDER BY created_at DESC
         LIMIT ?;
@@ -257,6 +283,9 @@ public actor RecordingStore {
             let error = columnText(stmt, index: 14)
             let status = columnText(stmt, index: 15) ?? "success"
             let userId = columnText(stmt, index: 16)
+            let asrLatencyMs = sqlite3_column_type(stmt, 17) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 17))
+            let correctionLatencyMs = sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 18))
+            let totalLatencyMs = sqlite3_column_type(stmt, 19) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 19))
 
             entries.append(
                 RecordingEntry(
@@ -276,7 +305,10 @@ public actor RecordingStore {
                     wordCount: wordCount,
                     error: error,
                     status: status,
-                    userId: userId
+                    userId: userId,
+                    asrLatencyMs: asrLatencyMs,
+                    correctionLatencyMs: correctionLatencyMs,
+                    totalLatencyMs: totalLatencyMs
                 )
             )
         }
@@ -361,7 +393,10 @@ public actor RecordingStore {
             word_count INTEGER,
             error TEXT,
             status TEXT NOT NULL,
-            user_id TEXT
+            user_id TEXT,
+            asr_latency_ms INTEGER,
+            correction_latency_ms INTEGER,
+            total_latency_ms INTEGER
         );
 
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at
@@ -379,6 +414,24 @@ public actor RecordingStore {
             let alterSQL = "ALTER TABLE recordings ADD COLUMN user_id TEXT;"
             if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
                 print("❌ RecordingStore: Failed to add user_id column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "asr_latency_ms") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN asr_latency_ms INTEGER;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add asr_latency_ms column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "correction_latency_ms") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN correction_latency_ms INTEGER;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add correction_latency_ms column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "total_latency_ms") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN total_latency_ms INTEGER;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add total_latency_ms column")
             }
         }
     }

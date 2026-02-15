@@ -222,17 +222,24 @@ final class VoiceRecordingViewModel: ObservableObject {
         )
 
         do {
+            let totalStart = Date()
+
             // Transcribe
+            let asrStart = Date()
             let transcription = try await provider.transcribe(audio: combinedChunk)
+            let asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+
             let rawText = transcription.text
             var finalText = rawText
 
             // Auto Edit (optional)
             var correctionProviderId: String? = nil
+            var correctionLatencyMs: Int? = nil
             if settings.correctionEnabled,
                let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider) {
                 correctionProviderId = correctionProvider.id
                 statusText = "Correcting..."
+                let correctionStart = Date()
                 do {
                     let pipeline = CorrectionPipeline(provider: correctionProvider)
                     let context = await contextStore.currentContext()
@@ -245,9 +252,12 @@ final class VoiceRecordingViewModel: ObservableObject {
                 } catch {
                     finalText = rawText
                 }
+                correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
             }
 
             await contextStore.addTranscription(finalText)
+
+            let totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
 
             await RecordingStore.shared.saveRecording(
                 audio: combinedChunk,
@@ -257,7 +267,10 @@ final class VoiceRecordingViewModel: ObservableObject {
                 transcriptRaw: rawText,
                 transcriptFinal: finalText,
                 error: nil,
-                userId: authSession.userId
+                userId: authSession.userId,
+                asrLatencyMs: asrLatencyMs,
+                correctionLatencyMs: correctionLatencyMs,
+                totalLatencyMs: totalLatencyMs
             )
 
             transcribedText = finalText

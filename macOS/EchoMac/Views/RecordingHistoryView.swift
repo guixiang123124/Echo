@@ -68,7 +68,19 @@ private func autoEditSummary(for entry: RecordingStore.RecordingEntry) -> String
         modified = ""
     }
 
-    return modified.isEmpty ? "Auto Edit: \(providerName)" : "Auto Edit: \(providerName) (\(modified))"
+    var suffix = modified.isEmpty ? "" : " (\(modified))"
+
+    if let asr = entry.asrLatencyMs, let total = entry.totalLatencyMs {
+        let editPart: String
+        if let edit = entry.correctionLatencyMs {
+            editPart = ", edit \(edit)"
+        } else {
+            editPart = ""
+        }
+        suffix += " • \(asr)ms\(editPart), total \(total)ms"
+    }
+
+    return "Auto Edit: \(providerName)" + suffix
 }
 
 struct RecordingHistoryView: View {

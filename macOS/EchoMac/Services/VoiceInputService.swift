@@ -142,18 +142,24 @@ public final class VoiceInputService: ObservableObject {
             }
             providerForStorage = provider
 
+            let totalStart = Date()
+
             // Transcribe
+            let asrStart = Date()
             let transcription = try await provider.transcribe(audio: combinedChunk)
+            let asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
             rawTranscript = transcription.text
             var result = transcription.text
 
             // Apply LLM correction if enabled and provider is available
+            var correctionLatencyMs: Int? = nil
             if settings.correctionEnabled,
                let correctionProvider = resolveCorrectionProvider() {
                 correctionProviderId = correctionProvider.id
                 isCorrecting = true
                 defer { isCorrecting = false }
 
+                let correctionStart = Date()
                 do {
                     await contextStore.updateUserTerms(settings.customTerms)
                     let context = await contextStore.currentContext()
@@ -167,6 +173,7 @@ public final class VoiceInputService: ObservableObject {
                 } catch {
                     print("⚠️ Correction failed, using raw transcription: \(error)")
                 }
+                correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
             }
 
             await contextStore.addTranscription(result)
@@ -179,6 +186,8 @@ public final class VoiceInputService: ObservableObject {
             finalTranscription = result
             finalTranscriptValue = result
 
+            let totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
+
             await recordingStore.saveRecording(
                 audio: combinedChunk,
                 asrProviderId: provider.id,
@@ -187,8 +196,17 @@ public final class VoiceInputService: ObservableObject {
                 transcriptRaw: rawTranscript,
                 transcriptFinal: finalTranscriptValue,
                 error: nil,
-                userId: authSession.userId ?? settings.currentUserId
+                userId: authSession.userId ?? settings.currentUserId,
+                asrLatencyMs: asrLatencyMs,
+                correctionLatencyMs: correctionLatencyMs,
+                totalLatencyMs: totalLatencyMs
             )
+
+            let autoEditLatencyText = correctionLatencyMs.map(String.init) ?? "-"
+            DiagnosticsState.shared.log(
+                "Latency(ms): asr=\(asrLatencyMs) autoEdit=\(autoEditLatencyText) total=\(totalLatencyMs)"
+            )
+
             return result
         } catch {
             let errorString = error.localizedDescription
