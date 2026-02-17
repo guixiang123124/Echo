@@ -248,6 +248,8 @@ struct GeneralSettingsView: View {
 
 struct ASRSettingsTab: View {
     @EnvironmentObject var settings: MacAppSettings
+    @State private var benchmarkRunning = false
+    @State private var benchmarkStatus = ""
 
     var body: some View {
         Form {
@@ -273,12 +275,47 @@ struct ASRSettingsTab: View {
             Section("Speech Recognition (ASR)") {
                 Picker("Speech Recognition Provider", selection: $settings.selectedASRProvider) {
                     Text("OpenAI Transcribe").tag("openai_whisper")
+                    Text("Deepgram Nova-3").tag("deepgram")
+                    Text("Volcano Ark ASR").tag("ark_asr")
                     Text("Volcano Engine (ByteDance)").tag("volcano")
                     Text("Alibaba Cloud NLS").tag("aliyun")
                 }
                 .pickerStyle(.menu)
 
-                if settings.selectedASRProvider == "volcano" {
+                Picker("Request Mode", selection: $settings.asrMode) {
+                    Text("Batch").tag(MacAppSettings.ASRMode.batch)
+                    Text("Stream (Realtime)").tag(MacAppSettings.ASRMode.stream)
+                }
+                .pickerStyle(.segmented)
+
+                if settings.selectedASRProvider != "deepgram" && settings.asrMode == .stream {
+                    Text("This provider currently uses batch mode. Switch to Deepgram for realtime stream captions.")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+
+                if settings.selectedASRProvider == "ark_asr" {
+                    ProviderKeyRow(
+                        label: "Ark API Key",
+                        providerId: "ark_asr"
+                    )
+
+                    ProviderValueRow(
+                        label: "Ark Model ID (optional)",
+                        providerId: "ark_asr_model",
+                        placeholder: "doubao-seed-asr-2-0"
+                    )
+
+                    ProviderValueRow(
+                        label: "Ark Endpoint (optional)",
+                        providerId: "ark_asr_endpoint",
+                        placeholder: "https://ark.cn-beijing.volces.com/api/v3/audio/transcriptions"
+                    )
+
+                    Text("Ark ASR uses your Volcano Ark API Key. You can override model/endpoint if your project uses a different deployment.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if settings.selectedASRProvider == "volcano" {
                     ProviderKeyRow(
                         label: "Volcano App ID",
                         providerId: "volcano_app_id"
@@ -289,7 +326,34 @@ struct ASRSettingsTab: View {
                         providerId: "volcano_access_key"
                     )
 
-                    Text("Volcano requires both App ID and Access Key.")
+                    ProviderValueRow(
+                        label: "Volcano Resource ID (optional)",
+                        providerId: "volcano_resource_id",
+                        placeholder: "volc.bigasr.auc_turbo"
+                    )
+
+                    ProviderValueRow(
+                        label: "Volcano Endpoint (optional)",
+                        providerId: "volcano_endpoint",
+                        placeholder: "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+                    )
+
+                    Text("Volcano requires both App ID and Access Key. Resource ID may vary by account entitlement.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                } else if settings.selectedASRProvider == "deepgram" {
+                    ProviderKeyRow(
+                        label: "Deepgram API Key",
+                        providerId: "deepgram"
+                    )
+
+                    Picker("Deepgram Model", selection: $settings.deepgramModel) {
+                        Text("nova-3 (recommended)").tag("nova-3")
+                        Text("nova-2").tag("nova-2")
+                    }
+                    .pickerStyle(.menu)
+
+                    Text("Deepgram supports both Batch and Stream. In Stream mode, captions update in realtime.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else if settings.selectedASRProvider == "aliyun" {
@@ -313,9 +377,9 @@ struct ASRSettingsTab: View {
                     )
 
                     Picker("Transcription Model", selection: $settings.openAITranscriptionModel) {
-                        Text("Whisper-1 (default)").tag("whisper-1")
-                        Text("GPT-4o Transcribe").tag("gpt-4o-transcribe")
+                        Text("GPT-4o Transcribe (default)").tag("gpt-4o-transcribe")
                         Text("GPT-4o Mini Transcribe").tag("gpt-4o-mini-transcribe")
+                        Text("Whisper-1").tag("whisper-1")
                     }
                     .pickerStyle(.menu)
 
@@ -345,6 +409,24 @@ struct ASRSettingsTab: View {
                     .foregroundColor(.secondary)
             }
 
+            Section("ASR Benchmark") {
+                Button(benchmarkRunning ? "Running…" : "Run 1-Click Benchmark (last 2 recordings)") {
+                    Task { await runBenchmark() }
+                }
+                .disabled(benchmarkRunning)
+
+                if !benchmarkStatus.isEmpty {
+                    Text(benchmarkStatus)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+
+                Text("Runs whisper-1 / gpt-4o-transcribe / gpt-4o-mini-transcribe plus Volcano (if configured), each with Auto Edit ON/OFF, then writes a markdown report.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             Section("Language") {
                 Picker("Recognition Language", selection: $settings.asrLanguage) {
                     Text("Auto Detect").tag("auto")
@@ -360,6 +442,215 @@ struct ASRSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+        .onChange(of: settings.selectedASRProvider) { _, newValue in
+            if newValue != "deepgram" && settings.asrMode == .stream {
+                settings.asrMode = .batch
+            }
+        }
+    }
+
+    private func runBenchmark() async {
+        benchmarkRunning = true
+        benchmarkStatus = "Preparing benchmark…"
+        defer { benchmarkRunning = false }
+
+        do {
+            let reportURL = try await ASRBenchmarkRunner.runUsingLatestRecordings(limit: 2)
+            benchmarkStatus = "Done. Report: \(reportURL.path)"
+        } catch {
+            benchmarkStatus = "Benchmark failed: \(error.localizedDescription)"
+        }
+    }
+}
+
+private enum ASRBenchmarkRunner {
+    struct Result {
+        let fileName: String
+        let provider: String
+        let autoEdit: Bool
+        let success: Bool
+        let asrLatencyMs: Int
+        let autoEditLatencyMs: Int?
+        let totalLatencyMs: Int
+        let error: String?
+        let text: String
+    }
+
+    static func runUsingLatestRecordings(limit: Int) async throws -> URL {
+        let recordingsDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Containers/com.xianggui.echo.mac/Data/Library/Application Support/Echo/Recordings", isDirectory: true)
+
+        let files = try FileManager.default.contentsOfDirectory(at: recordingsDir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])
+            .filter { $0.pathExtension.lowercased() == "wav" }
+            .sorted {
+                let d1 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return d1 > d2
+            }
+
+        guard files.count >= limit else {
+            throw NSError(domain: "ASRBenchmark", code: 1, userInfo: [NSLocalizedDescriptionKey: "Need at least \(limit) recordings in \(recordingsDir.path)"])
+        }
+
+        let targetFiles = Array(files.prefix(limit))
+        let keyStore = SecureKeyStore()
+        let correctionProvider = OpenAICorrectionProvider(keyStore: keyStore)
+
+        let models = ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]
+        var providers: [(String, () -> (any ASRProvider)?)] = models.map { model in
+            ("openai:\(model)", { OpenAIWhisperProvider(keyStore: keyStore, model: model) })
+        }
+
+        let volcano = VolcanoASRProvider(keyStore: keyStore)
+        if volcano.isAvailable {
+            providers.append(("volcano", { VolcanoASRProvider(keyStore: keyStore) }))
+        }
+
+        var results: [Result] = []
+
+        for file in targetFiles {
+            let chunk = try loadWAV(file)
+
+            for (providerName, providerFactory) in providers {
+                for autoEdit in [false, true] {
+                    let start = Date()
+                    guard let provider = providerFactory(), provider.isAvailable else {
+                        results.append(Result(fileName: file.lastPathComponent, provider: providerName, autoEdit: autoEdit, success: false, asrLatencyMs: 0, autoEditLatencyMs: nil, totalLatencyMs: 0, error: "Provider unavailable", text: ""))
+                        continue
+                    }
+
+                    do {
+                        let asrStart = Date()
+                        let transcription = try await provider.transcribe(audio: chunk)
+                        let asrLatency = Int(Date().timeIntervalSince(asrStart) * 1000)
+
+                        var finalText = transcription.text
+                        var autoEditLatency: Int? = nil
+                        if autoEdit {
+                            guard correctionProvider.isAvailable else {
+                                throw NSError(domain: "ASRBenchmark", code: 2, userInfo: [NSLocalizedDescriptionKey: "Auto Edit unavailable (missing OpenAI key)"])
+                            }
+                            let editStart = Date()
+                            let correction = try await CorrectionPipeline(provider: correctionProvider).process(
+                                transcription: transcription,
+                                context: ConversationContext(),
+                                options: CorrectionOptions(enableHomophones: true, enablePunctuation: true, enableFormatting: true)
+                            )
+                            finalText = correction.correctedText
+                            autoEditLatency = Int(Date().timeIntervalSince(editStart) * 1000)
+                        }
+
+                        results.append(Result(fileName: file.lastPathComponent, provider: providerName, autoEdit: autoEdit, success: true, asrLatencyMs: asrLatency, autoEditLatencyMs: autoEditLatency, totalLatencyMs: Int(Date().timeIntervalSince(start) * 1000), error: nil, text: finalText))
+                    } catch {
+                        results.append(Result(fileName: file.lastPathComponent, provider: providerName, autoEdit: autoEdit, success: false, asrLatencyMs: 0, autoEditLatencyMs: nil, totalLatencyMs: Int(Date().timeIntervalSince(start) * 1000), error: error.localizedDescription, text: ""))
+                    }
+                }
+            }
+        }
+
+        let report = renderReport(files: targetFiles, results: results)
+        let outDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Containers/com.xianggui.echo.mac/Data/Library/Application Support/Echo/BenchmarkReports", isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let ts = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let outURL = outDir.appendingPathComponent("asr-benchmark-\(ts).md")
+        try report.write(to: outURL, atomically: true, encoding: .utf8)
+        return outURL
+    }
+
+    private static func renderReport(files: [URL], results: [Result]) -> String {
+        var lines: [String] = []
+        lines.append("# ASR Benchmark Report")
+        lines.append("Generated: \(ISO8601DateFormatter().string(from: Date()))")
+        lines.append("Files: \(files.map { $0.lastPathComponent }.joined(separator: ", "))")
+        lines.append("")
+        lines.append("## Latency / Failure Table")
+        lines.append("")
+        lines.append("| File | Provider | AutoEdit | Success | ASR ms | AutoEdit ms | Total ms | Error |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|---|")
+        for r in results {
+            lines.append("| \(r.fileName) | \(r.provider) | \(r.autoEdit ? "on" : "off") | \(r.success ? "✅" : "❌") | \(r.asrLatencyMs) | \(r.autoEditLatencyMs.map(String.init) ?? "-") | \(r.totalLatencyMs) | \((r.error ?? "").replacingOccurrences(of: "|", with: "/")) |")
+        }
+        lines.append("")
+        lines.append("## Full Transcription Text")
+        lines.append("")
+        for r in results where r.success {
+            lines.append("### \(r.fileName) · \(r.provider) · AutoEdit \(r.autoEdit ? "ON" : "OFF")")
+            lines.append(r.text)
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func loadWAV(_ fileURL: URL) throws -> AudioChunk {
+        let data = try Data(contentsOf: fileURL)
+        let parsed = try WAVReader.parse(data: data)
+        return AudioChunk(
+            data: parsed.pcmData,
+            format: AudioStreamFormat(sampleRate: parsed.sampleRate, channelCount: parsed.channels, bitsPerSample: parsed.bitsPerSample, encoding: .linearPCM),
+            duration: parsed.duration
+        )
+    }
+}
+
+private enum WAVReader {
+    struct Parsed {
+        let pcmData: Data
+        let sampleRate: Double
+        let channels: Int
+        let bitsPerSample: Int
+        let duration: TimeInterval
+    }
+
+    static func parse(data: Data) throws -> Parsed {
+        guard data.count > 44 else {
+            throw NSError(domain: "WAVReader", code: 1, userInfo: [NSLocalizedDescriptionKey: "Audio file too small"])
+        }
+        guard String(data: data.subdata(in: 0..<4), encoding: .ascii) == "RIFF",
+              String(data: data.subdata(in: 8..<12), encoding: .ascii) == "WAVE" else {
+            throw NSError(domain: "WAVReader", code: 2, userInfo: [NSLocalizedDescriptionKey: "Invalid WAV file"])
+        }
+
+        var offset = 12
+        var sampleRate: Double = 16000
+        var channels = 1
+        var bitsPerSample = 16
+        var pcmData = Data()
+
+        while offset + 8 <= data.count {
+            let chunkId = String(data: data.subdata(in: offset..<(offset + 4)), encoding: .ascii) ?? ""
+            let chunkSize = Int(UInt32(littleEndian: data.subdata(in: (offset + 4)..<(offset + 8)).withUnsafeBytes { $0.load(as: UInt32.self) }))
+            let start = offset + 8
+            let end = start + chunkSize
+            guard end <= data.count else { break }
+
+            if chunkId == "fmt " {
+                let fmt = data.subdata(in: start..<end)
+                if fmt.count >= 16 {
+                    channels = Int(UInt16(littleEndian: fmt.subdata(in: 2..<4).withUnsafeBytes { $0.load(as: UInt16.self) }))
+                    sampleRate = Double(UInt32(littleEndian: fmt.subdata(in: 4..<8).withUnsafeBytes { $0.load(as: UInt32.self) }))
+                    bitsPerSample = Int(UInt16(littleEndian: fmt.subdata(in: 14..<16).withUnsafeBytes { $0.load(as: UInt16.self) }))
+                }
+            } else if chunkId == "data" {
+                pcmData = data.subdata(in: start..<end)
+            }
+
+            offset = end + (chunkSize % 2)
+        }
+
+        guard !pcmData.isEmpty else {
+            throw NSError(domain: "WAVReader", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing PCM data chunk"])
+        }
+
+        let bytesPerSecond = max(1, Int(sampleRate) * channels * max(1, bitsPerSample / 8))
+        return Parsed(
+            pcmData: pcmData,
+            sampleRate: sampleRate,
+            channels: channels,
+            bitsPerSample: bitsPerSample,
+            duration: TimeInterval(pcmData.count) / TimeInterval(bytesPerSecond)
+        )
     }
 }
 
@@ -628,6 +919,72 @@ struct ProviderKeyRow: View {
         try? keyStore.delete(for: providerId)
         storedKey = nil
         apiKey = ""
+    }
+}
+
+struct ProviderValueRow: View {
+    let label: String
+    let providerId: String
+    let placeholder: String
+
+    @State private var value: String = ""
+    @State private var isSaved = false
+
+    private let keyStore = SecureKeyStore()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $value)
+                    .textFieldStyle(.roundedBorder)
+
+                Button("Save") {
+                    saveValue()
+                }
+                .font(.caption)
+
+                Button("Clear") {
+                    clearValue()
+                }
+                .font(.caption)
+                .foregroundColor(.red)
+            }
+
+            if isSaved {
+                Text("Saved")
+                    .font(.caption2)
+                    .foregroundColor(.green)
+            }
+        }
+        .onAppear(perform: loadValue)
+        .onChange(of: providerId) { _, _ in loadValue() }
+    }
+
+    private func loadValue() {
+        value = (try? keyStore.retrieve(for: providerId)) ?? ""
+        isSaved = false
+    }
+
+    private func saveValue() {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            try? keyStore.delete(for: providerId)
+            value = ""
+        } else {
+            try? keyStore.store(key: trimmed, for: providerId)
+            value = trimmed
+        }
+        isSaved = true
+    }
+
+    private func clearValue() {
+        try? keyStore.delete(for: providerId)
+        value = ""
+        isSaved = false
     }
 }
 

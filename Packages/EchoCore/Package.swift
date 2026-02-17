@@ -11,6 +11,10 @@ let package = Package(
         .library(
             name: "EchoCore",
             targets: ["EchoCore"]
+        ),
+        .executable(
+            name: "ASRBenchmarkCLI",
+            targets: ["ASRBenchmarkCLI"]
         )
     ],
     dependencies: [],
@@ -19,6 +23,11 @@ let package = Package(
             name: "EchoCore",
             dependencies: [],
             path: "Sources/EchoCore"
+        ),
+        .executableTarget(
+            name: "ASRBenchmarkCLI",
+            dependencies: ["EchoCore"],
+            path: "Sources/ASRBenchmarkCLI"
         ),
         .testTarget(
             name: "EchoCoreTests",

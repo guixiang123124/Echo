@@ -11,8 +11,10 @@ public final class MacAppSettings: ObservableObject {
         static let hotkeyType = "hotkeyType"
         static let recordingMode = "recordingMode"
         static let selectedASRProvider = "selectedASRProvider"
+        static let asrMode = "echo.asr.mode"
         static let asrLanguage = "asrLanguage"
         static let openAITranscriptionModel = "echo.asr.openaiModel"
+        static let deepgramModel = "echo.asr.deepgramModel"
         static let selectedCorrectionProvider = "selectedCorrectionProvider"
         static let correctionEnabled = "correctionEnabled"
         static let correctionHomophones = "correctionHomophones"
@@ -122,6 +124,24 @@ public final class MacAppSettings: ObservableObject {
         }
     }
 
+    // MARK: - ASR Modes
+
+    public enum ASRMode: String, CaseIterable, Identifiable {
+        case batch
+        case stream
+
+        public var id: String { rawValue }
+
+        public var displayName: String {
+            switch self {
+            case .batch:
+                return "Batch"
+            case .stream:
+                return "Stream (Realtime)"
+            }
+        }
+    }
+
     // MARK: - Pipeline Presets
 
     public enum PipelinePreset: String, CaseIterable, Identifiable {
@@ -183,8 +203,14 @@ public final class MacAppSettings: ObservableObject {
         if defaults.object(forKey: Keys.asrLanguage) == nil {
             defaults.set("auto", forKey: Keys.asrLanguage)
         }
+        if defaults.object(forKey: Keys.asrMode) == nil {
+            defaults.set(ASRMode.batch.rawValue, forKey: Keys.asrMode)
+        }
         if defaults.object(forKey: Keys.openAITranscriptionModel) == nil {
-            defaults.set("whisper-1", forKey: Keys.openAITranscriptionModel)
+            defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
+        }
+        if defaults.object(forKey: Keys.deepgramModel) == nil {
+            defaults.set("nova-3", forKey: Keys.deepgramModel)
         }
         if defaults.object(forKey: Keys.correctionEnabled) == nil {
             defaults.set(true, forKey: Keys.correctionEnabled)
@@ -344,6 +370,20 @@ public final class MacAppSettings: ObservableObject {
         }
     }
 
+    public var asrMode: ASRMode {
+        get {
+            guard let raw = defaults.string(forKey: Keys.asrMode),
+                  let mode = ASRMode(rawValue: raw) else {
+                return .batch
+            }
+            return mode
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.asrMode)
+        }
+    }
+
     public var pipelinePreset: PipelinePreset {
         get { currentPipelinePreset() }
         set {
@@ -361,10 +401,18 @@ public final class MacAppSettings: ObservableObject {
     }
 
     public var openAITranscriptionModel: String {
-        get { defaults.string(forKey: Keys.openAITranscriptionModel) ?? "whisper-1" }
+        get { defaults.string(forKey: Keys.openAITranscriptionModel) ?? "gpt-4o-transcribe" }
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.openAITranscriptionModel)
+        }
+    }
+
+    public var deepgramModel: String {
+        get { defaults.string(forKey: Keys.deepgramModel) ?? "nova-3" }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.deepgramModel)
         }
     }
 
