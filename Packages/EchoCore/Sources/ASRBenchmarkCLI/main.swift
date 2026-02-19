@@ -50,6 +50,18 @@ struct ASRBenchmarkCLI {
             }, autoEdit: true))
         }
 
+        // Optional: include Deepgram when key is provided (env/file).
+        let deepgramKey = Self.resolveDeepgramKey()
+        if deepgramKey != nil {
+            fputs("[bench] Using Deepgram key from environment/file\n", stderr)
+        }
+        cases.append(BenchCase(providerLabel: "deepgram:nova-3", providerFactory: {
+            DeepgramASRProvider(keyStore: keyStore, apiKey: deepgramKey, model: "nova-3", language: nil)
+        }, autoEdit: false))
+        cases.append(BenchCase(providerLabel: "deepgram:nova-3", providerFactory: {
+            DeepgramASRProvider(keyStore: keyStore, apiKey: deepgramKey, model: "nova-3", language: nil)
+        }, autoEdit: true))
+
         // Always include Volcano in benchmark table so availability issues are visible in report.
         // CLI can't reliably access Keychain, so prefer env vars / token file.
         let volcanoKeys = Self.resolveVolcanoKeys()
@@ -165,6 +177,19 @@ struct ASRBenchmarkCLI {
             return key
         }
         // 3. Fall through to Keychain (may prompt)
+        return nil
+    }
+
+    private static func resolveDeepgramKey() -> String? {
+        if let key = ProcessInfo.processInfo.environment["DEEPGRAM_API_KEY"], !key.isEmpty {
+            return key
+        }
+        let tokenPath = NSHomeDirectory() + "/.deepgram_key"
+        if let data = FileManager.default.contents(atPath: tokenPath),
+           let key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            return key
+        }
         return nil
     }
 

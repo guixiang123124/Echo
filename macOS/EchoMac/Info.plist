@@ -20,7 +20,7 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>GOOGLE_CLIENT_ID</key>
+	<key>GOOGLE_CLIENT_ID_MAC</key>
 	<string></string>
 	<key>LSUIElement</key>
 	<true/>
