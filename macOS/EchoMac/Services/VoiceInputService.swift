@@ -414,7 +414,12 @@ public final class VoiceInputService: ObservableObject {
     private func resolveASRProvider() -> (any ASRProvider)? {
         switch settings.selectedASRProvider {
         case "volcano":
-            let provider = VolcanoASRProvider(keyStore: keyStore)
+            let volcanoOverrides = resolveVolcanoOverrides()
+            let provider = VolcanoASRProvider(
+                keyStore: keyStore,
+                appId: volcanoOverrides.appId,
+                accessKey: volcanoOverrides.accessKey
+            )
             return provider.isAvailable ? provider : nil
         case "ark_asr":
             let provider = ArkASRProvider(
@@ -428,6 +433,7 @@ public final class VoiceInputService: ObservableObject {
             let resolvedLanguage = (selectedModel == "nova-3") ? nil : deepgramLanguageCode(from: settings.asrLanguage)
             let provider = DeepgramASRProvider(
                 keyStore: keyStore,
+                apiKey: resolveDeepgramKeyFallback(),
                 model: selectedModel,
                 language: resolvedLanguage
             )
@@ -482,6 +488,40 @@ public final class VoiceInputService: ObservableObject {
         default:
             return nil
         }
+    }
+
+    private func resolveDeepgramKeyFallback() -> String? {
+        let path = NSHomeDirectory() + "/.deepgram_key"
+        guard let data = FileManager.default.contents(atPath: path),
+              let key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !key.isEmpty else {
+            return nil
+        }
+        return key
+    }
+
+    private func resolveVolcanoOverrides() -> (appId: String?, accessKey: String?) {
+        let appIdPath = NSHomeDirectory() + "/.volcano_app_id"
+        let tokenPath = NSHomeDirectory() + "/.volcano_token"
+
+        let appIdFromFile: String? = {
+            guard let data = FileManager.default.contents(atPath: appIdPath),
+                  let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }()
+
+        let accessKeyFromFile: String? = {
+            guard let data = FileManager.default.contents(atPath: tokenPath),
+                  let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }()
+
+        if accessKeyFromFile != nil {
+            return (appId: appIdFromFile ?? "6490217589", accessKey: accessKeyFromFile)
+        }
+        return (nil, nil)
     }
 
     private func resolveCorrectionProvider() -> (any CorrectionProvider)? {
