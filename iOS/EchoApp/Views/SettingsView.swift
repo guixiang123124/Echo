@@ -316,7 +316,9 @@ struct AuthSheetView: View {
 
                 Section {
                     Button {
-                        Task { await signInWithGoogle() }
+                        Task { @MainActor in
+                            await signInWithGoogle()
+                        }
                     } label: {
                         HStack {
                             Image(systemName: "globe")
@@ -362,6 +364,7 @@ struct AuthSheetView: View {
         }
     }
 
+    @MainActor
     private func signInWithGoogle() async {
         guard let root = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })

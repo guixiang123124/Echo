@@ -1082,7 +1082,9 @@ struct AuthSheetView: View {
             }
 
             Button {
-                Task { await signInWithGoogle() }
+                Task { @MainActor in
+                    await signInWithGoogle()
+                }
             } label: {
                 HStack {
                     Spacer()
@@ -1145,6 +1147,7 @@ struct AuthSheetView: View {
         .frame(width: 420)
     }
 
+    @MainActor
     private func signInWithGoogle() async {
         do {
             let clientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_MAC") as? String)
