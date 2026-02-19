@@ -14,6 +14,8 @@ DerivedData/
 .build/
 .swiftpm/
 Package.resolved
+# Keep project-level lockfile for CI with automatic resolution disabled
+!Echo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 # CocoaPods (if ever used)
 Pods/
