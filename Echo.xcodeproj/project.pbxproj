@@ -495,7 +495,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.app.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.app.keyboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -513,7 +513,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -531,7 +531,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.app;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -549,7 +549,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -566,7 +566,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -582,7 +582,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.echo.app.keyboard;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.app.keyboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
