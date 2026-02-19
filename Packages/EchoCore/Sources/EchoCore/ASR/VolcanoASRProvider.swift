@@ -146,8 +146,19 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     private func resolvedStreamingResourceId() throws -> String {
-        // For streaming, use the streaming-specific resource IDs
-        // seedasr (model 2.0) is preferred
+        // Allow UI-configured resource_id override for stream as well.
+        // If user provided an AUC resource id, map to SAUC when obvious.
+        let configured = try (resourceIdOverride ?? keyStore.retrieve(for: Self.resourceIdKeyId))?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let configured, !configured.isEmpty {
+            if configured.contains(".auc") {
+                return configured.replacingOccurrences(of: ".auc", with: ".sauc")
+            }
+            return configured
+        }
+
+        // Default streaming resource
         return "volc.seedasr.sauc.duration"
     }
 

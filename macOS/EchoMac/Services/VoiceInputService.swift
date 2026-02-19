@@ -423,10 +423,13 @@ public final class VoiceInputService: ObservableObject {
             )
             return provider.isAvailable ? provider : nil
         case "deepgram":
+            let selectedModel = settings.deepgramModel
+            // For nova-3, let Deepgram auto-detect language (better for mixed zh/en in practice).
+            let resolvedLanguage = (selectedModel == "nova-3") ? nil : deepgramLanguageCode(from: settings.asrLanguage)
             let provider = DeepgramASRProvider(
                 keyStore: keyStore,
-                model: "nova-3",
-                language: deepgramLanguageCode(from: settings.asrLanguage)
+                model: selectedModel,
+                language: resolvedLanguage
             )
             return provider.isAvailable ? provider : nil
         case "aliyun":
