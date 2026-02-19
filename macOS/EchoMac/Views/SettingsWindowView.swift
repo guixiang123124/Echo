@@ -1156,12 +1156,17 @@ struct AuthSheetView: View {
             GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
         }
 
-        guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first else {
+        guard let candidateWindow = NSApplication.shared.keyWindow
+                ?? NSApplication.shared.mainWindow
+                ?? NSApplication.shared.windows.first else {
             authSession.errorMessage = "Unable to find active window for Google sign-in."
             return
         }
 
-        GIDSignIn.sharedInstance.signIn(withPresenting: window) { result, error in
+        // Avoid presenting OAuth from a sheet window; use its parent when available.
+        let presentingWindow = candidateWindow.sheetParent ?? candidateWindow
+
+        GIDSignIn.sharedInstance.signIn(withPresenting: presentingWindow) { result, error in
             if let error {
                 Task { @MainActor in
                     self.authSession.errorMessage = error.localizedDescription
