@@ -1,6 +1,8 @@
 import SwiftUI
 import EchoCore
 import AuthenticationServices
+import GoogleSignIn
+import UIKit
 
 struct SettingsView: View {
     @State private var settings = AppSettings()
@@ -313,6 +315,16 @@ struct AuthSheetView: View {
                 }
 
                 Section {
+                    Button {
+                        Task { await signInWithGoogle() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "globe")
+                            Text("Sign in with Google")
+                            Spacer()
+                        }
+                    }
+
                     SignInWithAppleButton(.signIn) { request in
                         let nonce = NonceHelper.randomNonce()
                         currentNonce = nonce
@@ -347,6 +359,32 @@ struct AuthSheetView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    private func signInWithGoogle() async {
+        guard let root = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap(\.windows)
+            .first(where: { $0.isKeyWindow })?.rootViewController else {
+            authSession.errorMessage = "Unable to find active window for Google sign-in."
+            return
+        }
+
+        do {
+            if let clientID = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String,
+               !clientID.isEmpty {
+                GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+            }
+
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: root)
+            guard let idToken = result.user.idToken?.tokenString else {
+                authSession.errorMessage = "Google sign-in did not return an ID token."
+                return
+            }
+            await authSession.signInWithGoogle(idToken: idToken)
+        } catch {
+            authSession.errorMessage = error.localizedDescription
         }
     }
 }

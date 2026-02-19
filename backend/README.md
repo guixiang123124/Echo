@@ -2,7 +2,7 @@
 
 Minimal cloud backend for Echo (no Firebase):
 
-- Auth: Email/Password + Apple Sign In token exchange
+- Auth: Email/Password + Apple Sign In + Google Sign-In token exchange
 - Sync: Recording history metadata + dictionary terms
 - Storage: Optional audio upload to S3/R2
 - DB: PostgreSQL
@@ -39,6 +39,7 @@ curl http://127.0.0.1:8080/healthz
    - `JWT_SECRET` (long random string)
    - `CORS_ORIGIN` (for web console origin; use `*` during initial test)
    - `APPLE_AUDIENCE` (comma-separated bundle IDs, required for Apple login verification)
+   - `GOOGLE_AUDIENCE` (comma-separated Google OAuth Client IDs, required for Google ID token verification)
 4. Optional Stripe billing envs:
    - `STRIPE_SECRET_KEY`
    - `STRIPE_WEBHOOK_SECRET`
@@ -101,6 +102,7 @@ The app stays local-first:
 - `POST /v1/auth/register`
 - `POST /v1/auth/login`
 - `POST /v1/auth/apple`
+- `POST /v1/auth/google`
 - `GET /v1/auth/me`
 - `GET /v1/billing/status`
 - `POST /v1/billing/create-checkout-session`

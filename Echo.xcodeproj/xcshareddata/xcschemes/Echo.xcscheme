@@ -15,7 +15,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "785EB4E50F37FA15D298129C"
+               BlueprintIdentifier = "5DDBE07F0CAB146B16894090"
                BuildableName = "EchoApp.app"
                BlueprintName = "EchoApp"
                ReferencedContainer = "container:Echo.xcodeproj">
@@ -29,7 +29,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "909D014C6732287CA3A9ECBD"
+               BlueprintIdentifier = "40675497E1E8EB0044625C3C"
                BuildableName = "EchoKeyboard.appex"
                BlueprintName = "EchoKeyboard"
                ReferencedContainer = "container:Echo.xcodeproj">
@@ -47,7 +47,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "785EB4E50F37FA15D298129C"
+            BlueprintIdentifier = "5DDBE07F0CAB146B16894090"
             BuildableName = "EchoApp.app"
             BlueprintName = "EchoApp"
             ReferencedContainer = "container:Echo.xcodeproj">
@@ -72,7 +72,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "785EB4E50F37FA15D298129C"
+            BlueprintIdentifier = "5DDBE07F0CAB146B16894090"
             BuildableName = "EchoApp.app"
             BlueprintName = "EchoApp"
             ReferencedContainer = "container:Echo.xcodeproj">
@@ -91,7 +91,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "785EB4E50F37FA15D298129C"
+            BlueprintIdentifier = "5DDBE07F0CAB146B16894090"
             BuildableName = "EchoApp.app"
             BlueprintName = "EchoApp"
             ReferencedContainer = "container:Echo.xcodeproj">

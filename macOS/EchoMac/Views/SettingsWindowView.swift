@@ -1,7 +1,8 @@
 import SwiftUI
 import EchoCore
 import AuthenticationServices
-
+import GoogleSignIn
+import AppKit
 /// Main settings window view with tab navigation
 struct SettingsWindowView: View {
     @EnvironmentObject var appState: AppState
@@ -1081,6 +1082,23 @@ struct AuthSheetView: View {
             }
 
             Button {
+                Task { await signInWithGoogle() }
+            } label: {
+                HStack {
+                    Spacer()
+                    Image(systemName: "globe")
+                    Text("Sign in with Google")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.white))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.35), lineWidth: 1))
+                .foregroundColor(.black)
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 appleCoordinator.start { credential, nonce in
                     Task { await authSession.signInWithApple(credential: credential, nonce: nonce) }
                 } onError: { error in
@@ -1125,6 +1143,29 @@ struct AuthSheetView: View {
         }
         .padding(20)
         .frame(width: 420)
+    }
+
+    private func signInWithGoogle() async {
+        do {
+            if let clientID = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String,
+               !clientID.isEmpty {
+                GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+            }
+
+            guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first else {
+                authSession.errorMessage = "Unable to find active window for Google sign-in."
+                return
+            }
+
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: window)
+            guard let idToken = result.user.idToken?.tokenString else {
+                authSession.errorMessage = "Google sign-in did not return an ID token."
+                return
+            }
+            await authSession.signInWithGoogle(idToken: idToken)
+        } catch {
+            authSession.errorMessage = error.localizedDescription
+        }
     }
 }
 

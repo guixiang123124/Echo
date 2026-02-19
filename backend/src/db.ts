@@ -17,11 +17,15 @@ export async function initDb(): Promise<void> {
       display_name TEXT,
       password_hash TEXT,
       apple_sub TEXT UNIQUE,
+      google_sub TEXT UNIQUE,
       stripe_customer_id TEXT UNIQUE,
       subscription_tier TEXT NOT NULL DEFAULT 'free',
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub);
 
     CREATE TABLE IF NOT EXISTS recordings (
       id TEXT PRIMARY KEY,

@@ -20,8 +20,10 @@
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>GOOGLE_CLIENT_ID</key>
+	<string></string>
 	<key>LSUIElement</key>
-	<false/>
+	<true/>
 	<key>NSInputMonitoringUsageDescription</key>
 	<string>Echo needs input monitoring to detect global hotkeys.</string>
 	<key>NSMicrophoneUsageDescription</key>

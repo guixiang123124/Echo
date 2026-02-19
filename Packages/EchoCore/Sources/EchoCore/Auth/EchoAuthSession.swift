@@ -182,6 +182,34 @@ public final class EchoAuthSession: ObservableObject {
         }
     }
 
+    public func signInWithGoogle(idToken: String) async {
+        errorMessage = nil
+
+        guard let backendBaseURL = normalizedBackendURLString else {
+            errorMessage = "Google sign-in requires Cloud API URL in Settings."
+            return
+        }
+
+        guard !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "Missing Google ID token."
+            return
+        }
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let result = try await authenticate(
+                path: "/v1/auth/google",
+                payload: GoogleSignInPayload(idToken: idToken),
+                baseURLString: backendBaseURL
+            )
+            persistSession(user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
 #if os(iOS)
     public func startPhoneVerification(_ phoneNumber: String) async {
         errorMessage = "Phone verification is not enabled in this build."
@@ -320,6 +348,10 @@ private struct AppleSignInPayload: Encodable {
     let nonce: String
     let email: String?
     let fullName: String?
+}
+
+private struct GoogleSignInPayload: Encodable {
+    let idToken: String
 }
 
 private struct AuthEnvelope: Decodable {

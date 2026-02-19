@@ -6,6 +6,7 @@ import Stripe from "stripe";
 import { z } from "zod";
 import { authMiddleware, issueAccessToken } from "./auth.js";
 import { verifyAppleIdentityToken } from "./apple.js";
+import { verifyGoogleIdToken } from "./google.js";
 import { config, hasStripe } from "./config.js";
 import { healthCheck, initDb, pool } from "./db.js";
 import { maybeUploadAudio } from "./storage.js";
@@ -224,6 +225,83 @@ app.post("/v1/auth/apple", async (req, res) => {
     res.status(401).json({
       error: "invalid_apple_token",
       message: error instanceof Error ? error.message : "Apple token verification failed."
+    });
+  }
+});
+
+const googleSignInSchema = z.object({
+  idToken: z.string().min(1)
+});
+
+app.post("/v1/auth/google", async (req, res) => {
+  const parsed = googleSignInSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  try {
+    const verified = await verifyGoogleIdToken(parsed.data.idToken, config.google.audienceList);
+    const email = verified.email ? normalizeEmail(verified.email) : null;
+    const googleSub = verified.sub;
+    const displayName = verified.name ?? null;
+
+    if (!googleSub) {
+      res.status(401).json({ error: "invalid_google_token", message: "Missing Google subject (sub)." });
+      return;
+    }
+
+    const existingByGoogle = await pool.query<UserRow>(
+      "SELECT id, email, phone_number, display_name FROM users WHERE google_sub = $1 LIMIT 1",
+      [googleSub]
+    );
+
+    let user = existingByGoogle.rows[0];
+
+    if (!user && email) {
+      const existingByEmail = await pool.query<UserRow & { google_sub: string | null }>(
+        "SELECT id, email, phone_number, display_name, google_sub FROM users WHERE email = $1 LIMIT 1",
+        [email]
+      );
+      const existingEmailUser = existingByEmail.rows[0];
+      if (existingEmailUser) {
+        const linked = await pool.query<UserRow>(
+          `UPDATE users
+           SET google_sub = $2, updated_at = NOW()
+           WHERE id = $1
+           RETURNING id, email, phone_number, display_name`,
+          [existingEmailUser.id, googleSub]
+        );
+        user = linked.rows[0];
+      }
+    }
+
+    if (!user) {
+      const userId = randomUUID();
+      const inserted = await pool.query<UserRow>(
+        `INSERT INTO users (id, email, google_sub, display_name)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, email, phone_number, display_name`,
+        [userId, email, googleSub, displayName]
+      );
+      user = inserted.rows[0];
+    } else if (!user.email && email) {
+      const updated = await pool.query<UserRow>(
+        `UPDATE users
+         SET email = $2, updated_at = NOW()
+         WHERE id = $1
+         RETURNING id, email, phone_number, display_name`,
+        [user.id, email]
+      );
+      user = updated.rows[0];
+    }
+
+    const accessToken = issueAccessToken({ id: user.id, email: user.email });
+    res.json({ accessToken, token: accessToken, user: userResponseRow(user, "google") });
+  } catch (error) {
+    res.status(401).json({
+      error: "invalid_google_token",
+      message: error instanceof Error ? error.message : "Google token verification failed."
     });
   }
 });

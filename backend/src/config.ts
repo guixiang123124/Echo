@@ -39,6 +39,10 @@ export const config = {
     audienceList: optionalList("APPLE_AUDIENCE"),
     issuer: process.env.APPLE_ISSUER ?? "https://appleid.apple.com"
   },
+  google: {
+    audienceList: optionalList("GOOGLE_AUDIENCE"),
+    issuer: process.env.GOOGLE_ISSUER ?? "https://accounts.google.com"
+  },
   stripe: {
     secretKey: optional("STRIPE_SECRET_KEY"),
     webhookSecret: optional("STRIPE_WEBHOOK_SECRET"),
