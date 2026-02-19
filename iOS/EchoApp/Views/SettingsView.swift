@@ -316,9 +316,7 @@ struct AuthSheetView: View {
 
                 Section {
                     Button {
-                        Task { @MainActor in
-                            await signInWithGoogle()
-                        }
+                        signInWithGoogle()
                     } label: {
                         HStack {
                             Image(systemName: "globe")
@@ -365,7 +363,7 @@ struct AuthSheetView: View {
     }
 
     @MainActor
-    private func signInWithGoogle() async {
+    private func signInWithGoogle() {
         guard let root = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .flatMap(\.windows)
@@ -374,22 +372,31 @@ struct AuthSheetView: View {
             return
         }
 
-        do {
-            let clientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_IOS") as? String)
-                ?? (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String)
+        let clientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_IOS") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String)
 
-            if let clientID, !clientID.isEmpty {
-                GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
-            }
+        if let clientID, !clientID.isEmpty {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
+        }
 
-            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: root)
-            guard let idToken = result.user.idToken?.tokenString else {
-                authSession.errorMessage = "Google sign-in did not return an ID token."
+        GIDSignIn.sharedInstance.signIn(withPresenting: root) { result, error in
+            if let error {
+                Task { @MainActor in
+                    self.authSession.errorMessage = error.localizedDescription
+                }
                 return
             }
-            await authSession.signInWithGoogle(idToken: idToken)
-        } catch {
-            authSession.errorMessage = error.localizedDescription
+
+            guard let idToken = result?.user.idToken?.tokenString else {
+                Task { @MainActor in
+                    self.authSession.errorMessage = "Google sign-in did not return an ID token."
+                }
+                return
+            }
+
+            Task { @MainActor in
+                await self.authSession.signInWithGoogle(idToken: idToken)
+            }
         }
     }
 }

@@ -63,6 +63,8 @@ targets:
       properties:
         com.apple.security.application-groups:
           - group.com.xianggui.echo.shared
+        com.apple.developer.applesignin:
+          - Default
 
   # iOS Keyboard Extension
   EchoKeyboard:
@@ -136,6 +138,8 @@ targets:
         com.apple.security.device.audio-input: true
         com.apple.security.automation.apple-events: true
         com.apple.security.network.client: true
+        com.apple.developer.applesignin:
+          - Default
 
 schemes:
   Echo:
