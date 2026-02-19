@@ -30,16 +30,22 @@ struct ASRBenchmarkCLI {
             exit(1)
         }
 
-        let correctionProvider = OpenAICorrectionProvider(keyStore: keyStore)
+        // Resolve API keys from env vars first to avoid Keychain popups in CLI
+        let openaiKey = Self.resolveOpenAIKey()
+        if openaiKey != nil {
+            fputs("[bench] Using OpenAI key from environment\n", stderr)
+        }
+
+        let correctionProvider = OpenAICorrectionProvider(keyStore: keyStore, apiKey: openaiKey)
         let canAutoEdit = correctionProvider.isAvailable
 
         var cases: [BenchCase] = []
         for model in ["whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"] {
             cases.append(BenchCase(providerLabel: "openai:\(model)", providerFactory: {
-                OpenAIWhisperProvider(keyStore: keyStore, model: model)
+                OpenAIWhisperProvider(keyStore: keyStore, apiKey: openaiKey, model: model)
             }, autoEdit: false))
             cases.append(BenchCase(providerLabel: "openai:\(model)", providerFactory: {
-                OpenAIWhisperProvider(keyStore: keyStore, model: model)
+                OpenAIWhisperProvider(keyStore: keyStore, apiKey: openaiKey, model: model)
             }, autoEdit: true))
         }
 
@@ -143,7 +149,23 @@ struct ASRBenchmarkCLI {
         )
     }
 
-    // MARK: - Volcano key resolution (env > file > fallback)
+    // MARK: - API key resolution (env > file > Keychain fallback)
+
+    private static func resolveOpenAIKey() -> String? {
+        // 1. Environment variable
+        if let key = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], !key.isEmpty {
+            return key
+        }
+        // 2. Token file
+        let tokenPath = NSHomeDirectory() + "/.openai_key"
+        if let data = FileManager.default.contents(atPath: tokenPath),
+           let key = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !key.isEmpty {
+            return key
+        }
+        // 3. Fall through to Keychain (may prompt)
+        return nil
+    }
 
     private static func resolveVolcanoKeys() -> (appId: String?, accessKey: String?) {
         // 1. Environment variables take top priority
