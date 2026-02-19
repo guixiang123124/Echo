@@ -213,7 +213,7 @@ public final class MacAppSettings: ObservableObject {
             defaults.set("nova-3", forKey: Keys.deepgramModel)
         }
         if defaults.object(forKey: Keys.correctionEnabled) == nil {
-            defaults.set(true, forKey: Keys.correctionEnabled)
+            defaults.set(false, forKey: Keys.correctionEnabled)
         }
         if defaults.object(forKey: Keys.correctionHomophones) == nil {
             defaults.set(true, forKey: Keys.correctionHomophones)
