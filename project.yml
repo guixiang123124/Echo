@@ -118,6 +118,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.xianggui.echo.mac
         INFOPLIST_FILE: macOS/EchoMac/Info.plist
         CODE_SIGN_ENTITLEMENTS: macOS/EchoMac/EchoMac.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: J5Y8R5W53N
         ENABLE_HARDENED_RUNTIME: YES
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
