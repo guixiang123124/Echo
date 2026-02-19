@@ -252,6 +252,8 @@ struct ASRSettingsTab: View {
     @State private var benchmarkRunning = false
     @State private var benchmarkStatus = ""
 
+    private static let streamingCapableProviders: Set<String> = ["deepgram", "volcano"]
+
     var body: some View {
         Form {
             Section("Pipeline Presets") {
@@ -289,8 +291,8 @@ struct ASRSettingsTab: View {
                 }
                 .pickerStyle(.segmented)
 
-                if settings.selectedASRProvider != "deepgram" && settings.asrMode == .stream {
-                    Text("This provider currently uses batch mode. Switch to Deepgram for realtime stream captions.")
+                if !Self.streamingCapableProviders.contains(settings.selectedASRProvider) && settings.asrMode == .stream {
+                    Text("This provider currently uses batch mode. Switch to Deepgram or Volcano Engine for realtime stream captions.")
                         .font(.caption)
                         .foregroundColor(.orange)
                 }
@@ -444,7 +446,7 @@ struct ASRSettingsTab: View {
         .formStyle(.grouped)
         .padding()
         .onChange(of: settings.selectedASRProvider) { _, newValue in
-            if newValue != "deepgram" && settings.asrMode == .stream {
+            if !Self.streamingCapableProviders.contains(newValue) && settings.asrMode == .stream {
                 settings.asrMode = .batch
             }
         }
