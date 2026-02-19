@@ -150,7 +150,7 @@ public final class GlobalHotkeyMonitor: ObservableObject {
 
         switch settings.hotkeyType {
         case .fn:
-            handleFnKey(flags: flags)
+            handleFnKey(flags: flags, keyCode: keyCode)
 
         case .rightOption:
             handleModifierKey(
@@ -206,10 +206,22 @@ public final class GlobalHotkeyMonitor: ObservableObject {
         print("✅ Global hotkey monitoring started (NSEvent fallback) for: \(settings.hotkeyType.displayName)")
     }
 
-    private func handleFnKey(flags: CGEventFlags) {
-        // Fn key is detected via .maskSecondaryFn flag
-        let fnPressed = flags.contains(.maskSecondaryFn)
+    private func handleFnKey(flags: CGEventFlags, keyCode: Int64) {
+        // Fn key is detected via .maskSecondaryFn flag.
+        // Important: only react to the physical Fn/Globe key events to avoid
+        // accidental capture when Caps Lock is remapped to Globe/Fn at OS level.
+        let isPhysicalFnEvent = keyCode == Int64(kVK_Function)
 
+        if !isPhysicalFnEvent {
+            // If we were previously pressed, still allow release when Fn flag clears.
+            if currentHotkeyPressed, !flags.contains(.maskSecondaryFn) {
+                currentHotkeyPressed = false
+                handler?(.released)
+            }
+            return
+        }
+
+        let fnPressed = flags.contains(.maskSecondaryFn)
         if fnPressed != currentHotkeyPressed {
             currentHotkeyPressed = fnPressed
             handler?(fnPressed ? .pressed : .released)
@@ -268,3 +280,4 @@ private let kVK_Option = 58
 private let kVK_RightOption = 61
 private let kVK_Command = 55
 private let kVK_RightCommand = 54
+private let kVK_Function = 63
