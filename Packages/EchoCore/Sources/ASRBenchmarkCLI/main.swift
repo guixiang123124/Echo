@@ -25,10 +25,11 @@ struct ASRBenchmarkCLI {
         let keyStore = SecureKeyStore()
 
         let inputFiles = resolveInputFiles()
-        guard inputFiles.count == 2 else {
-            fputs("Expected 2 audio files. Pass file paths or ensure 2 recordings exist in ~/Library/Containers/com.xianggui.echo.mac/Data/Library/Application Support/Echo/Recordings\n", stderr)
+        guard !inputFiles.isEmpty else {
+            fputs("No audio files found. Pass file paths as arguments or ensure recordings exist in ~/Library/Containers/com.xianggui.echo.mac/Data/Library/Application Support/Echo/Recordings\n", stderr)
             exit(1)
         }
+        fputs("[bench] Testing \(inputFiles.count) audio files\n", stderr)
 
         // Resolve API keys from env vars first to avoid Keychain popups in CLI
         let openaiKey = Self.resolveOpenAIKey()
@@ -121,7 +122,7 @@ struct ASRBenchmarkCLI {
 
     private static func resolveInputFiles() -> [URL] {
         let args = Array(CommandLine.arguments.dropFirst()).map { URL(fileURLWithPath: $0) }
-        if args.count >= 2 { return Array(args.prefix(2)) }
+        if !args.isEmpty { return args }
 
         let fallback = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Containers/com.xianggui.echo.mac/Data/Library/Application Support/Echo/Recordings", isDirectory: true)
@@ -135,7 +136,7 @@ struct ASRBenchmarkCLI {
                 let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                 return d1 > d2
             }
-            .prefix(2)
+            .prefix(10)
             .map { $0 }
     }
 
