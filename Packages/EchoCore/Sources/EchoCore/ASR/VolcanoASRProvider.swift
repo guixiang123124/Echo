@@ -4,7 +4,7 @@ import Foundation
 public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     public let id = "volcano"
     public let displayName = "Volcano Engine (火山引擎)"
-    public let supportsStreaming = false
+    public let supportsStreaming = true
     public let requiresNetwork = true
     public let supportedLanguages: Set<String> = ["zh-Hans", "en"]
 
@@ -94,16 +94,61 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
         }
     }
 
+    private var streamingSession: VolcanoStreamingSession?
+
     public func startStreaming() -> AsyncStream<TranscriptionResult> {
-        AsyncStream { $0.finish() }
+        do {
+            let appId = try (appIdOverride ?? keyStore.retrieve(for: Self.appIdKeyId)) ?? ""
+            let accessKey = try (accessKeyOverride ?? keyStore.retrieve(for: Self.accessKeyKeyId)) ?? ""
+            guard !appId.isEmpty, !accessKey.isEmpty else {
+                return AsyncStream { $0.finish() }
+            }
+
+            let resourceId: String
+            do {
+                let resolved = try resolvedStreamingResourceId()
+                resourceId = resolved
+            } catch {
+                return AsyncStream { $0.finish() }
+            }
+
+            let config = VolcanoStreamingSession.Config(
+                appId: appId,
+                accessKey: accessKey,
+                resourceId: resourceId,
+                endpoint: URL(string: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async")!,
+                sampleRate: 16000,
+                enableITN: true,
+                enablePunc: true,
+                enableDDC: false
+            )
+
+            let session = VolcanoStreamingSession(config: config)
+            self.streamingSession = session
+            return session.start()
+        } catch {
+            return AsyncStream { $0.finish() }
+        }
     }
 
     public func feedAudio(_ chunk: AudioChunk) async throws {
-        throw ASRError.streamingNotSupported
+        guard let session = streamingSession else {
+            throw ASRError.streamingNotSupported
+        }
+        session.feedAudio(chunk)
     }
 
     public func stopStreaming() async throws -> TranscriptionResult? {
-        nil
+        guard let session = streamingSession else { return nil }
+        let result = await session.stop()
+        streamingSession = nil
+        return result
+    }
+
+    private func resolvedStreamingResourceId() throws -> String {
+        // For streaming, use the streaming-specific resource IDs
+        // seedasr (model 2.0) is preferred
+        return "volc.seedasr.sauc.duration"
     }
 
     // MARK: - Private
