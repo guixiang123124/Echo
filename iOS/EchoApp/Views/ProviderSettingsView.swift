@@ -83,8 +83,10 @@ struct ProviderSettingsView: View {
                     .foregroundColor(.red)
                     .font(.caption)
                 } else {
-                    TextField("Enter API Key", text: binding(for: provider.id))
+                    SecureField("Enter API Key", text: binding(for: provider.id))
                         .font(.caption)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
 
                     Button("Save") {
@@ -150,8 +152,10 @@ struct ProviderSettingsView: View {
                 Text(firstLabel)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                TextField("Enter \(firstLabel)", text: binding(for: firstKeyId))
+                SecureField("Enter \(firstLabel)", text: binding(for: firstKeyId))
                     .font(.caption)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
                 Button("Save") {
                     saveKey(for: firstKeyId)
@@ -164,8 +168,10 @@ struct ProviderSettingsView: View {
                 Text(secondLabel)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                TextField("Enter \(secondLabel)", text: binding(for: secondKeyId))
+                SecureField("Enter \(secondLabel)", text: binding(for: secondKeyId))
                     .font(.caption)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)
                 Button("Save") {
                     saveKey(for: secondKeyId)

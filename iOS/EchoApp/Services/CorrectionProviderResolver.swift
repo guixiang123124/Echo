@@ -17,6 +17,8 @@ enum CorrectionProviderResolver {
             provider = ClaudeCorrectionProvider(keyStore: keyStore)
         case "doubao":
             provider = DoubaoCorrectionProvider(keyStore: keyStore)
+        case "qwen":
+            provider = QwenCorrectionProvider(keyStore: keyStore)
         default:
             return nil
         }
@@ -27,7 +29,7 @@ enum CorrectionProviderResolver {
     static func firstAvailable(
         keyStore: SecureKeyStore = SecureKeyStore()
     ) -> (any CorrectionProvider)? {
-        let providerIds = ["openai_gpt", "claude", "doubao"]
+        let providerIds = ["openai_gpt", "claude", "doubao", "qwen"]
         for id in providerIds {
             if let provider = resolve(for: id, keyStore: keyStore) {
                 return provider

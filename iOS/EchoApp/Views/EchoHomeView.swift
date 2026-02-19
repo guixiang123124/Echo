@@ -15,10 +15,6 @@ struct EchoHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    EchoSectionHeading(
-                        "Home",
-                        subtitle: "Set up Echo keyboard once, then dictation and AI editing stay one tap away in every app."
-                    )
                     heroCard
                     actionRow
                     setupCard
@@ -27,9 +23,18 @@ struct EchoHomeView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .navigationTitle("Echo")
-            .navigationBarTitleDisplayMode(.automatic)
+            .navigationTitle("")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Echo")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                }
+
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showSetupGuide = true
@@ -38,6 +43,7 @@ struct EchoHomeView: View {
                             .font(.system(size: 17, weight: .semibold))
                             .frame(width: 32, height: 32)
                     }
+                    .accessibilityLabel("More options")
                 }
             }
             .sheet(isPresented: $showSetupGuide) {
@@ -140,7 +146,7 @@ struct EchoHomeView: View {
             Button {
                 openAppSettings()
             } label: {
-                Label("Enable Keyboard", systemImage: "keyboard")
+                Label("Add Keyboard", systemImage: "keyboard")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(maxWidth: .infinity)

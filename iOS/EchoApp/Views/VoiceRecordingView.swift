@@ -11,6 +11,7 @@ struct VoiceRecordingView: View {
     @State private var lastCommittedText: String = ""
     @State private var showSettings = false
     @FocusState private var isFocused: Bool
+    @Environment(\.dismiss) private var dismiss
 
     init(startForKeyboard: Bool = false) {
         self.startForKeyboard = startForKeyboard
@@ -40,6 +41,12 @@ struct VoiceRecordingView: View {
             .padding(.top, 16)
             .navigationTitle("Echo")
             .toolbar {
+                if !startForKeyboard {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+
                 ToolbarItemGroup(placement: .keyboard) {
                     KeyboardAccessoryBar(
                         isRecording: viewModel.isRecording,
@@ -97,7 +104,7 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var transcribedText = ""
     @Published var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     @Published var statusText = "Ready"
-    @Published var tipText = ACodeTaglines.random()
+    @Published var tipText = EchoTaglines.random()
     @Published var showError = false
     @Published var errorMessage = ""
 
@@ -166,7 +173,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         isProcessing = false
         statusText = "Listening..."
         transcribedText = ""
-        tipText = ACodeTaglines.random()
+        tipText = EchoTaglines.random()
 
         // Collect audio + update audio levels while recording.
         recordingTask = Task { [weak self] in
@@ -324,13 +331,14 @@ final class VoiceRecordingViewModel: ObservableObject {
             }
             return AliyunASRProvider(appKey: appKey, token: token)
         case "volcano":
-            guard let appId = try? keyStore.retrieve(for: "volcano_app_id"),
-                  let accessKey = try? keyStore.retrieve(for: "volcano_access_key"),
-                  !appId.isEmpty,
-                  !accessKey.isEmpty else {
-                return nil
-            }
-            return VolcanoASRProvider(appId: appId, accessKey: accessKey)
+            let provider = VolcanoASRProvider(keyStore: keyStore)
+            return provider.isAvailable ? provider : nil
+        case "ark_asr":
+            let provider = ArkASRProvider(keyStore: keyStore)
+            return provider.isAvailable ? provider : nil
+        case "deepgram":
+            let provider = DeepgramASRProvider(keyStore: keyStore)
+            return provider.isAvailable ? provider : nil
         default:
             // Default to OpenAI Whisper (batch transcription)
             let provider = OpenAIWhisperProvider(keyStore: keyStore)
@@ -407,17 +415,17 @@ struct KeyboardAccessoryBar: View {
     }
 }
 
-enum ACodeTaglines {
+enum EchoTaglines {
     private static let options: [String] = [
-        "Speak once. ACode shapes it into clarity.",
-        "ACode turns ideas into clean, shippable notes.",
-        "Think aloud, ACode makes it real.",
-        "From voice to precision — powered by ACode.",
-        "ACode keeps your thoughts crisp and actionable.",
-        "ACode turns rough drafts into sharp direction."
+        "Speak once. Echo shapes it into clarity.",
+        "Echo turns ideas into clean, polished notes.",
+        "Think aloud, Echo makes it usable.",
+        "From voice to precision — powered by Echo.",
+        "Echo keeps your thoughts crisp and actionable.",
+        "Echo turns rough drafts into sharp direction."
     ]
 
     static func random() -> String {
-        options.randomElement() ?? "Speak once. ACode shapes it into clarity."
+        options.randomElement() ?? "Speak once. Echo shapes it into clarity."
     }
 }

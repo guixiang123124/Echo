@@ -28,7 +28,9 @@ public final class VoiceInputService: ObservableObject {
     private var audioChunks: [AudioChunk] = []
     private var audioUpdateTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
+    private var streamingResultTask: Task<Void, Never>?
     private var activeProvider: (any ASRProvider)?
+    private var isStreamingSession = false
 
     // MARK: - Initialization
 
@@ -69,6 +71,11 @@ public final class VoiceInputService: ObservableObject {
                 throw VoiceInputError.noASRProvider
             }
             activeProvider = provider
+            isStreamingSession = settings.asrMode == .stream && provider.supportsStreaming
+
+            if isStreamingSession {
+                startStreamingResults(provider: provider)
+            }
 
             // Start audio capture
             try audioCaptureService.startRecording()
@@ -114,26 +121,6 @@ public final class VoiceInputService: ObservableObject {
         var correctionProviderId: String? = nil
 
         do {
-            // Combine all audio chunks
-            guard !audioChunks.isEmpty else {
-                throw VoiceInputError.noAudioData
-            }
-
-            // Combine chunks into a single chunk for batch transcription
-            let combinedData = audioChunks.reduce(Data()) { $0 + $1.data }
-            let totalDuration = audioChunks.reduce(0) { $0 + $1.duration }
-            let format = audioChunks.first?.format ?? .default
-
-            DiagnosticsState.shared.log(
-                "Audio captured: chunks=\(audioChunks.count), bytes=\(combinedData.count), duration=\(String(format: "%.2f", totalDuration))s"
-            )
-
-            let combinedChunk = AudioChunk(
-                data: combinedData,
-                format: format,
-                duration: totalDuration
-            )
-
             // Resolve ASR provider
             let provider = activeProvider ?? resolveASRProvider()
             activeProvider = nil
@@ -143,11 +130,45 @@ public final class VoiceInputService: ObservableObject {
             providerForStorage = provider
 
             let totalStart = Date()
+            var asrLatencyMs: Int = 0
+            let transcription: TranscriptionResult
 
-            // Transcribe
-            let asrStart = Date()
-            let transcription = try await provider.transcribe(audio: combinedChunk)
-            let asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+            if isStreamingSession {
+                let asrStart = Date()
+                let finalResult = try await provider.stopStreaming()
+                stopStreamingResults()
+                let text = finalResult?.text ?? partialTranscription
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+                }
+                transcription = TranscriptionResult(text: trimmed, language: .unknown, isFinal: true)
+                asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+            } else {
+                // Combine chunks into a single chunk for batch transcription
+                guard !audioChunks.isEmpty else {
+                    throw VoiceInputError.noAudioData
+                }
+
+                let combinedData = audioChunks.reduce(Data()) { $0 + $1.data }
+                let totalDuration = audioChunks.reduce(0) { $0 + $1.duration }
+                let format = audioChunks.first?.format ?? .default
+
+                DiagnosticsState.shared.log(
+                    "Audio captured: chunks=\(audioChunks.count), bytes=\(combinedData.count), duration=\(String(format: "%.2f", totalDuration))s"
+                )
+
+                let combinedChunk = AudioChunk(
+                    data: combinedData,
+                    format: format,
+                    duration: totalDuration
+                )
+
+                let asrStart = Date()
+                transcription = try await provider.transcribe(audio: combinedChunk)
+                asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+            }
+
             rawTranscript = transcription.text
             var result = transcription.text
 
@@ -199,9 +220,17 @@ public final class VoiceInputService: ObservableObject {
             finalTranscriptValue = result
 
             let totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
+            let combinedDataForSave = audioChunks.reduce(Data()) { $0 + $1.data }
+            let totalDurationForSave = audioChunks.reduce(0) { $0 + $1.duration }
+            let formatForSave = audioChunks.first?.format ?? .default
+            let recordingChunk = AudioChunk(
+                data: combinedDataForSave,
+                format: formatForSave,
+                duration: totalDurationForSave
+            )
 
             await recordingStore.saveRecording(
-                audio: combinedChunk,
+                audio: recordingChunk,
                 asrProviderId: provider.id,
                 asrProviderName: provider.displayName,
                 correctionProviderId: correctionProviderId,
@@ -221,6 +250,11 @@ public final class VoiceInputService: ObservableObject {
 
             return result
         } catch {
+            if isStreamingSession, let provider = providerForStorage {
+                try? await provider.stopStreaming()
+            }
+            stopStreamingResults()
+
             let errorString = error.localizedDescription
             if !audioChunks.isEmpty {
                 let fallbackProviderId = providerForStorage?.id ?? "openai_whisper"
@@ -255,7 +289,11 @@ public final class VoiceInputService: ObservableObject {
         guard isRecording else { return }
 
         isRecording = false
+        if isStreamingSession, let provider = activeProvider {
+            Task { try? await provider.stopStreaming() }
+        }
         activeProvider = nil
+        stopStreamingResults()
         stopAudioLevelMonitoring()
         stopAudioCollection()
         audioCaptureService.stopRecording()
@@ -273,6 +311,14 @@ public final class VoiceInputService: ObservableObject {
                 guard !Task.isCancelled else { break }
                 await MainActor.run {
                     self.audioChunks.append(chunk)
+                }
+
+                if isStreamingSession, let provider = activeProvider {
+                    do {
+                        try await provider.feedAudio(chunk)
+                    } catch {
+                        DiagnosticsState.shared.log("Streaming feed error: \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -336,6 +382,27 @@ public final class VoiceInputService: ObservableObject {
         audioLevels = levels
     }
 
+    private func startStreamingResults(provider: any ASRProvider) {
+        let stream = provider.startStreaming()
+        streamingResultTask = Task {
+            for await result in stream {
+                guard !Task.isCancelled else { break }
+                await MainActor.run {
+                    self.partialTranscription = result.text
+                    if result.isFinal {
+                        self.finalTranscription = result.text
+                    }
+                }
+            }
+        }
+    }
+
+    private func stopStreamingResults() {
+        streamingResultTask?.cancel()
+        streamingResultTask = nil
+        isStreamingSession = false
+    }
+
     // MARK: - Configuration
 
     public func updateSettings() {
@@ -347,13 +414,21 @@ public final class VoiceInputService: ObservableObject {
     private func resolveASRProvider() -> (any ASRProvider)? {
         switch settings.selectedASRProvider {
         case "volcano":
-            guard let appId = try? keyStore.retrieve(for: "volcano_app_id"),
-                  let accessKey = try? keyStore.retrieve(for: "volcano_access_key"),
-                  !appId.isEmpty,
-                  !accessKey.isEmpty else {
-                return nil
-            }
-            return VolcanoASRProvider(appId: appId, accessKey: accessKey)
+            let provider = VolcanoASRProvider(keyStore: keyStore)
+            return provider.isAvailable ? provider : nil
+        case "ark_asr":
+            let provider = ArkASRProvider(
+                keyStore: keyStore,
+                language: whisperLanguageCode(from: settings.asrLanguage)
+            )
+            return provider.isAvailable ? provider : nil
+        case "deepgram":
+            let provider = DeepgramASRProvider(
+                keyStore: keyStore,
+                model: "nova-3",
+                language: deepgramLanguageCode(from: settings.asrLanguage)
+            )
+            return provider.isAvailable ? provider : nil
         case "aliyun":
             guard let appKey = try? keyStore.retrieve(for: "aliyun_app_key"),
                   let token = try? keyStore.retrieve(for: "aliyun_token"),
@@ -386,6 +461,21 @@ public final class VoiceInputService: ObservableObject {
             return "ja"
         case "ko-KR":
             return "ko"
+        default:
+            return nil
+        }
+    }
+
+    private func deepgramLanguageCode(from setting: String) -> String? {
+        // Deepgram uses BCP-47-ish / short codes depending on model.
+        // Keep it conservative.
+        switch setting {
+        case "en-US":
+            return "en"
+        case "zh-CN":
+            return "zh"
+        case "zh-TW":
+            return "zh-TW"
         default:
             return nil
         }

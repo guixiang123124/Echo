@@ -7,6 +7,7 @@ struct EchoHistoryView: View {
     @State private var entries: [RecordingStore.RecordingEntry] = []
     @State private var keepHistoryDays: Int = KeepHistoryPolicy.read()
     @State private var showKeepHistoryDialog = false
+    @State private var showClearHistoryConfirm = false
 
     var body: some View {
         NavigationStack {
@@ -25,10 +26,7 @@ struct EchoHistoryView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button(role: .destructive) {
-                            Task {
-                                await RecordingStore.shared.deleteAll(userId: authSession.userId)
-                                await refresh()
-                            }
+                            showClearHistoryConfirm = true
                         } label: {
                             Label("Clear History", systemImage: "trash")
                         }
@@ -37,6 +35,7 @@ struct EchoHistoryView: View {
                             .font(.system(size: 16, weight: .semibold))
                             .frame(width: 32, height: 32)
                     }
+                    .accessibilityLabel("History options")
                 }
             }
             .background(EchoMobileTheme.pageBackground)
@@ -53,6 +52,17 @@ struct EchoHistoryView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("How long do you want to keep your dictation history on this device?")
+        }
+        .confirmationDialog("Clear all history?", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
+            Button("Clear History", role: .destructive) {
+                Task {
+                    await RecordingStore.shared.deleteAll(userId: authSession.userId)
+                    await refresh()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete all local dictation history for this account on this device.")
         }
     }
 

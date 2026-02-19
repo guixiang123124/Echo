@@ -45,23 +45,30 @@ struct EchoAccountView: View {
                         .font(.system(size: 18, weight: .semibold))
                 }
 
-                Text("Turn on notifications to get useful tips and be the first to know about new features.")
-                    .font(.system(size: 14))
-                    .foregroundStyle(EchoMobileTheme.mutedText)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    notificationsStatus == .enabled
+                    ? "You’re all set. Echo can now send reminders and feature updates."
+                    : "Turn on notifications to get useful tips and be the first to know about new features."
+                )
+                .font(.system(size: 14))
+                .foregroundStyle(EchoMobileTheme.mutedText)
+                .fixedSize(horizontal: false, vertical: true)
 
                 Button {
                     Task { await requestNotifications() }
                 } label: {
-                    Text("Turn on Notifications")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(EchoMobileTheme.cardBackground)
-                        )
+                    Label(
+                        notificationsStatus == .enabled ? "Notifications Enabled" : "Turn On Notifications",
+                        systemImage: notificationsStatus == .enabled ? "checkmark.circle.fill" : "bell.badge"
+                    )
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(notificationsStatus == .enabled ? .green : .primary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(EchoMobileTheme.cardBackground)
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(notificationsStatus == .enabled)

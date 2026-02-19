@@ -43,11 +43,15 @@ struct ASRBenchmarkCLI {
             }, autoEdit: true))
         }
 
-        let volcanoProvider = VolcanoASRProvider(keyStore: keyStore)
-        if volcanoProvider.isAvailable {
-            cases.append(BenchCase(providerLabel: "volcano", providerFactory: { VolcanoASRProvider(keyStore: keyStore) }, autoEdit: false))
-            cases.append(BenchCase(providerLabel: "volcano", providerFactory: { VolcanoASRProvider(keyStore: keyStore) }, autoEdit: true))
-        }
+        // Always include Volcano in benchmark table so availability issues are visible in report.
+        // CLI can't reliably access Keychain, so prefer env vars / token file.
+        let volcanoKeys = Self.resolveVolcanoKeys()
+        cases.append(BenchCase(providerLabel: "volcano", providerFactory: {
+            VolcanoASRProvider(keyStore: keyStore, appId: volcanoKeys.appId, accessKey: volcanoKeys.accessKey)
+        }, autoEdit: false))
+        cases.append(BenchCase(providerLabel: "volcano", providerFactory: {
+            VolcanoASRProvider(keyStore: keyStore, appId: volcanoKeys.appId, accessKey: volcanoKeys.accessKey)
+        }, autoEdit: true))
 
         var results: [BenchResult] = []
         for file in inputFiles {
@@ -137,6 +141,30 @@ struct ASRBenchmarkCLI {
             format: AudioStreamFormat(sampleRate: wav.sampleRate, channelCount: wav.channels, bitsPerSample: wav.bitsPerSample, encoding: .linearPCM),
             duration: wav.duration
         )
+    }
+
+    // MARK: - Volcano key resolution (env > file > fallback)
+
+    private static func resolveVolcanoKeys() -> (appId: String?, accessKey: String?) {
+        // 1. Environment variables take top priority
+        let envAppId = ProcessInfo.processInfo.environment["VOLCANO_APP_ID"]
+        let envAccessKey = ProcessInfo.processInfo.environment["VOLCANO_ACCESS_KEY"]
+        if let envAccessKey, !envAccessKey.isEmpty {
+            return (appId: envAppId ?? "6490217589", accessKey: envAccessKey)
+        }
+
+        // 2. Token file (~/.volcano_token contains the access key)
+        let tokenPath = NSHomeDirectory() + "/.volcano_token"
+        if let tokenData = FileManager.default.contents(atPath: tokenPath),
+           let token = String(data: tokenData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !token.isEmpty {
+            let appId = envAppId ?? "6490217589"
+            fputs("[bench] Loaded Volcano access key from ~/.volcano_token (appId=\(appId))\n", stderr)
+            return (appId: appId, accessKey: token)
+        }
+
+        // 3. Fall through — provider will try Keychain (may fail in CLI)
+        return (appId: nil, accessKey: nil)
     }
 
     private static func buildReport(results: [BenchResult], files: [URL]) -> String {

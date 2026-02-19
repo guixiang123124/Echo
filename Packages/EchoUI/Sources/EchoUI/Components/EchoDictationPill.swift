@@ -43,7 +43,7 @@ public struct EchoDictationPill: View {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(EchoTheme.accent)
-                    Text("点击说话")
+                    Text("Tap to speak")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.secondary)
                 }
@@ -68,10 +68,10 @@ public struct ListeningPillContent: View {
                 .frame(width: 44, height: 16)
 
             VStack(spacing: 2) {
-                Text("正在倾听 点击结束")
+                Text("Listening · tap to stop")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.primary)
-                Text(tipText ?? "Your voice, refined by ACode.")
+                Text(tipText ?? "Your voice, refined by Echo.")
                     .font(.system(size: 9, weight: .regular))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)

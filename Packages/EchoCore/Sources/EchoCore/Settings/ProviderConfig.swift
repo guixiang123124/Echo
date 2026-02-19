@@ -65,6 +65,13 @@ public enum AvailableProviders {
             requiresApiKey: true
         ),
         ProviderConfig(
+            id: "ark_asr",
+            displayName: "Volcano Ark ASR",
+            type: .asr,
+            isEnabled: false,
+            requiresApiKey: true
+        ),
+        ProviderConfig(
             id: "deepgram",
             displayName: "Deepgram Nova-3",
             type: .asr,

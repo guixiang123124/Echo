@@ -129,6 +129,7 @@ struct EchoDictionaryView: View {
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                    .accessibilityLabel("Dictionary options")
                 }
             }
         }

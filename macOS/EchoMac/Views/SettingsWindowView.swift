@@ -1045,7 +1045,7 @@ struct AuthSheetView: View {
 
     @State private var email = ""
     @State private var password = ""
-    @State private var currentNonce: String?
+    @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1075,27 +1075,30 @@ struct AuthSheetView: View {
                     .buttonStyle(.bordered)
                 }
 
-                Text("Use your Gmail address here, or continue with Apple below.")
+                Text("Use your email address here, or continue with Apple below.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            SignInWithAppleButton(.signIn) { request in
-                let nonce = NonceHelper.randomNonce()
-                currentNonce = nonce
-                request.requestedScopes = [.fullName, .email]
-                request.nonce = NonceHelper.sha256(nonce)
-            } onCompletion: { result in
-                switch result {
-                case .success(let auth):
-                    guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
-                          let nonce = currentNonce else { return }
+            Button {
+                appleCoordinator.start { credential, nonce in
                     Task { await authSession.signInWithApple(credential: credential, nonce: nonce) }
-                case .failure(let error):
+                } onError: { error in
                     authSession.errorMessage = error.localizedDescription
                 }
+            } label: {
+                HStack {
+                    Spacer()
+                    Image(systemName: "applelogo")
+                    Text("Sign in with Apple")
+                        .fontWeight(.semibold)
+                    Spacer()
+                }
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.black))
+                .foregroundColor(.white)
             }
-            .frame(height: 36)
+            .buttonStyle(.plain)
 
             if authSession.isLoading {
                 ProgressView()
@@ -1122,5 +1125,56 @@ struct AuthSheetView: View {
         }
         .padding(20)
         .frame(width: 420)
+    }
+}
+
+@MainActor
+final class AppleSignInCoordinator: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    private var nonce: String?
+    private var onSuccess: ((ASAuthorizationAppleIDCredential, String) -> Void)?
+    private var onError: ((Error) -> Void)?
+    private var controller: ASAuthorizationController?
+
+    func start(
+        onSuccess: @escaping (ASAuthorizationAppleIDCredential, String) -> Void,
+        onError: @escaping (Error) -> Void
+    ) {
+        self.onSuccess = onSuccess
+        self.onError = onError
+
+        let nonce = NonceHelper.randomNonce()
+        self.nonce = nonce
+
+        let provider = ASAuthorizationAppleIDProvider()
+        let request = provider.createRequest()
+        request.requestedScopes = [.fullName, .email]
+        request.nonce = NonceHelper.sha256(nonce)
+
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        self.controller = controller // keep strong reference until callback
+        controller.performRequests()
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        defer { cleanup() }
+        guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+              let nonce else { return }
+        onSuccess?(credential, nonce)
+    }
+
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        defer { cleanup() }
+        onError?(error)
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        NSApp.keyWindow ?? NSApp.windows.first ?? ASPresentationAnchor()
+    }
+
+    private func cleanup() {
+        controller = nil
+        nonce = nil
     }
 }
