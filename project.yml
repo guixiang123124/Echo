@@ -57,7 +57,7 @@ targets:
             CFBundleURLName: com.echo.app
         NSMicrophoneUsageDescription: "Echo needs microphone access to transcribe your speech to text."
         NSSpeechRecognitionUsageDescription: "Echo uses speech recognition to convert your voice to text."
-        GOOGLE_CLIENT_ID: ""
+        GOOGLE_CLIENT_ID_IOS: ""
     entitlements:
       path: iOS/EchoApp/EchoApp.entitlements
       properties:
@@ -128,7 +128,7 @@ targets:
         LSUIElement: true
         NSMicrophoneUsageDescription: "Echo needs microphone access to transcribe your speech to text."
         NSInputMonitoringUsageDescription: "Echo needs input monitoring to detect global hotkeys."
-        GOOGLE_CLIENT_ID: ""
+        GOOGLE_CLIENT_ID_MAC: ""
     entitlements:
       path: macOS/EchoMac/EchoMac.entitlements
       properties:

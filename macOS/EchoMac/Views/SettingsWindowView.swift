@@ -1147,8 +1147,10 @@ struct AuthSheetView: View {
 
     private func signInWithGoogle() async {
         do {
-            if let clientID = Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String,
-               !clientID.isEmpty {
+            let clientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_MAC") as? String)
+                ?? (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String)
+
+            if let clientID, !clientID.isEmpty {
                 GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: clientID)
             }
 
