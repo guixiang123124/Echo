@@ -15,6 +15,10 @@ let package = Package(
         .executable(
             name: "ASRBenchmarkCLI",
             targets: ["ASRBenchmarkCLI"]
+        ),
+        .executable(
+            name: "ASRStreamSmokeCLI",
+            targets: ["ASRStreamSmokeCLI"]
         )
     ],
     dependencies: [],
@@ -28,6 +32,11 @@ let package = Package(
             name: "ASRBenchmarkCLI",
             dependencies: ["EchoCore"],
             path: "Sources/ASRBenchmarkCLI"
+        ),
+        .executableTarget(
+            name: "ASRStreamSmokeCLI",
+            dependencies: ["EchoCore"],
+            path: "Sources/ASRStreamSmokeCLI"
         ),
         .testTarget(
             name: "EchoCoreTests",

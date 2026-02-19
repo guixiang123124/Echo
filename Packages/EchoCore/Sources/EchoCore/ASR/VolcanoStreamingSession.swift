@@ -175,16 +175,14 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
 
         guard let jsonData = try? JSONSerialization.data(withJSONObject: payload) else { return }
 
-        // Compress with gzip
-        let compressed = gzip(jsonData) ?? jsonData
-        let useGzip = (compressed.count < jsonData.count)
-
+        // Use uncompressed JSON payload for protocol stability.
+        // (Volcano expects true gzip when compression=0x1; avoid mismatches.)
         let frame = buildFrame(
             messageType: 0x1,  // full client request
             flags: 0x0,        // no sequence
             serialization: 0x1, // JSON
-            compression: useGzip ? 0x1 : 0x0,
-            payload: useGzip ? compressed : jsonData
+            compression: 0x0,
+            payload: jsonData
         )
 
         task?.send(.data(frame)) { error in
