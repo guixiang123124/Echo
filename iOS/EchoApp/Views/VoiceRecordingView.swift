@@ -9,6 +9,7 @@ struct VoiceRecordingView: View {
     @StateObject private var viewModel = VoiceRecordingViewModel()
     @State private var textInput: String = ""
     @State private var lastCommittedText: String = ""
+    @State private var livePrefixText: String = ""
     @State private var showSettings = false
     @FocusState private var isFocused: Bool
     @Environment(\.dismiss) private var dismiss
@@ -74,10 +75,25 @@ struct VoiceRecordingView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        .onChange(of: viewModel.isRecording) { _, isRecording in
+            if isRecording {
+                livePrefixText = textInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
         .onChange(of: viewModel.transcribedText) { _, newValue in
-            guard !newValue.isEmpty,
-                  !viewModel.isRecording,
-                  !viewModel.isProcessing,
+            guard !newValue.isEmpty else { return }
+
+            if viewModel.isRecording {
+                if livePrefixText.isEmpty {
+                    textInput = newValue
+                } else {
+                    textInput = livePrefixText + " " + newValue
+                }
+                lastCommittedText = newValue
+                return
+            }
+
+            guard !viewModel.isProcessing,
                   newValue != lastCommittedText else { return }
             lastCommittedText = newValue
             if textInput.isEmpty {
@@ -115,6 +131,8 @@ final class VoiceRecordingViewModel: ObservableObject {
     private let authSession = EchoAuthSession.shared
     private var capturedChunks: [AudioChunk] = []
     private var activeASRProvider: (any ASRProvider)?
+    private var isStreamingSession = false
+    private var streamingTask: Task<Void, Never>?
     private var isKeyboardMode = false
     private var recordingTask: Task<Void, Never>?
     private var smoothedLevel: CGFloat = 0
@@ -145,6 +163,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             return
         }
         activeASRProvider = provider
+        isStreamingSession = settings.preferStreaming && provider.supportsStreaming
 
         // Apple Speech requires explicit authorization.
         if provider.id == "apple_speech" {
@@ -171,19 +190,42 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         isRecording = true
         isProcessing = false
-        statusText = "Listening..."
+        statusText = isStreamingSession ? "Streaming..." : "Listening..."
         transcribedText = ""
         tipText = EchoTaglines.random()
+
+        if isStreamingSession {
+            startStreamingResults(provider: provider)
+        }
 
         // Collect audio + update audio levels while recording.
         recordingTask = Task { [weak self] in
             guard let self else { return }
             for await chunk in self.audioService.audioChunks {
                 guard !Task.isCancelled else { break }
+
                 await MainActor.run {
                     self.capturedChunks.append(chunk)
                     let level = AudioLevelCalculator.rmsLevel(from: chunk)
                     self.appendAudioLevel(level)
+                }
+
+                if self.isStreamingSession, let provider = self.activeASRProvider {
+                    var sent = false
+                    for _ in 0..<12 {
+                        do {
+                            try await provider.feedAudio(chunk)
+                            sent = true
+                            break
+                        } catch {
+                            try? await Task.sleep(for: .milliseconds(120))
+                        }
+                    }
+                    if !sent {
+                        await MainActor.run {
+                            self.errorMessage = "Streaming feed lagged; continuing with buffered audio."
+                        }
+                    }
                 }
             }
         }
@@ -191,7 +233,9 @@ final class VoiceRecordingViewModel: ObservableObject {
 
     func stopRecording() async {
         let provider = activeASRProvider
+        let streamingActive = isStreamingSession
         activeASRProvider = nil
+        isStreamingSession = false
 
         audioService.stopRecording()
         recordingTask?.cancel()
@@ -215,7 +259,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             return
         }
 
-        statusText = "Thinking..."
+        statusText = streamingActive ? "Finalizing..." : "Thinking..."
         isProcessing = true
 
         let combinedData = capturedChunks.reduce(Data()) { $0 + $1.data }
@@ -231,9 +275,20 @@ final class VoiceRecordingViewModel: ObservableObject {
         do {
             let totalStart = Date()
 
-            // Transcribe
+            // Transcribe / finalize stream
             let asrStart = Date()
-            let transcription = try await provider.transcribe(audio: combinedChunk)
+            let transcription: TranscriptionResult
+            if streamingActive {
+                let final = try await provider.stopStreaming()
+                stopStreamingResults()
+                let text = (final?.text ?? transcribedText).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+                }
+                transcription = TranscriptionResult(text: text, language: .unknown, isFinal: true)
+            } else {
+                transcription = try await provider.transcribe(audio: combinedChunk)
+            }
             let asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
 
             let rawText = transcription.text
@@ -285,6 +340,10 @@ final class VoiceRecordingViewModel: ObservableObject {
             statusText = "Ready"
             deliverResult()
         } catch {
+            if streamingActive {
+                try? await provider.stopStreaming()
+                stopStreamingResults()
+            }
             await RecordingStore.shared.saveRecording(
                 audio: combinedChunk,
                 asrProviderId: provider.id,
@@ -353,6 +412,28 @@ final class VoiceRecordingViewModel: ObservableObject {
         levels.removeFirst()
         levels.append(smoothedLevel)
         audioLevels = levels
+    }
+
+    private func startStreamingResults(provider: any ASRProvider) {
+        let stream = provider.startStreaming()
+        streamingTask?.cancel()
+        streamingTask = Task { [weak self] in
+            guard let self else { return }
+            for await result in stream {
+                if Task.isCancelled { break }
+                let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { continue }
+                await MainActor.run {
+                    self.transcribedText = text
+                    self.statusText = result.isFinal ? "Refining..." : "Streaming..."
+                }
+            }
+        }
+    }
+
+    private func stopStreamingResults() {
+        streamingTask?.cancel()
+        streamingTask = nil
     }
 
     private func showErrorMessage(_ message: String) {
