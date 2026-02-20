@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var homeWindow: NSWindow?
     private var historyWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
+    private var isStreamingInsertionSessionActive = false
     private let diagnostics = DiagnosticsState.shared
     private var lastExternalApp: NSRunningApplication?
     private var silenceMonitorTask: Task<Void, Never>?
@@ -69,6 +70,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             voiceInputService.$partialTranscription
                 .sink { AppState.shared.partialTranscription = $0 }
+                .store(in: &cancellables)
+
+            voiceInputService.$partialTranscription
+                .sink { [weak self] text in
+                    guard let self else { return }
+                    guard self.isStreamingInsertionSessionActive,
+                          let textInserter else { return }
+
+                    let didUpdate = textInserter.updateStreamingInsertion(text)
+                    if !didUpdate {
+                        textInserter.cancelStreamingInsertion()
+                        self.isStreamingInsertionSessionActive = false
+                        self.diagnostics.log("Streaming insertion canceled (focus/selection changed)")
+                    }
+                }
                 .store(in: &cancellables)
 
             voiceInputService.$finalTranscription
@@ -225,6 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             // Start recording
             do {
                 try await voiceInputService?.startRecording()
+                if voiceInputService?.isStreamingSessionActive == true,
+                   let textInserter {
+                    isStreamingInsertionSessionActive = textInserter.startStreamingInsertionSession()
+                } else {
+                    isStreamingInsertionSessionActive = false
+                }
                 startSilenceMonitorIfNeeded()
             } catch {
                 print("❌ Failed to start recording: \(error)")
@@ -253,10 +275,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor in
             // Update state
             appState.recordingState = .transcribing
+            defer { self.isStreamingInsertionSessionActive = false }
 
             do {
                 // Stop recording and transcribe
                 let text = try await voiceInputService?.stopRecording() ?? ""
+                if isStreamingInsertionSessionActive {
+                    let consumedByStreamingInsertion = textInserter?.finishStreamingInsertion(with: text) ?? false
+                    isStreamingInsertionSessionActive = false
+                    if consumedByStreamingInsertion {
+                        diagnostics.log("Streaming insertion finalized (\(text.count) chars)")
+                        appState.recordingState = .idle
+                        hideRecordingPanel()
+                        return
+                    }
+
+                    textInserter?.cancelStreamingInsertion()
+                    diagnostics.log("Streaming insertion unavailable, falling back to final insert")
+                }
 
                 if text.isEmpty {
                     print("⚠️ No text transcribed")
@@ -287,6 +323,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             } catch {
                 print("❌ Transcription failed: \(error)")
+                if self.isStreamingInsertionSessionActive {
+                    textInserter?.cancelStreamingInsertion()
+                    self.isStreamingInsertionSessionActive = false
+                }
                 diagnostics.recordError(error.localizedDescription)
                 appState.recordingState = .error(error.localizedDescription)
 
