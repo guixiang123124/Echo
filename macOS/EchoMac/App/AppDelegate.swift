@@ -732,7 +732,7 @@ struct RecordingPillView: View {
         Group {
             switch appState.recordingState {
             case .listening:
-                ListeningPillContent(levels: appState.audioLevels)
+                ListeningPillContent(levels: appState.audioLevels, partialText: appState.partialTranscription)
             case .transcribing, .correcting, .inserting:
                 ThinkingSweepView(text: "Thinking", isAnimating: shimmer)
             case .error(let message):
@@ -751,17 +751,28 @@ struct RecordingPillView: View {
 
 struct ListeningPillContent: View {
     let levels: [CGFloat]
+    let partialText: String
 
     var body: some View {
         HStack(spacing: 6) {
             SymmetricBarsView(levels: levels, reverseWeights: false)
-                .frame(width: 52, height: 14)
-            Text("Listening")
+                .frame(width: 42, height: 14)
+
+            Text(displayText)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             SymmetricBarsView(levels: levels, reverseWeights: true)
-                .frame(width: 52, height: 14)
+                .frame(width: 42, height: 14)
         }
+    }
+
+    private var displayText: String {
+        let trimmed = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Listening" : trimmed
     }
 }
 
