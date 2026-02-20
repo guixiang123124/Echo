@@ -149,12 +149,15 @@ app.post("/v1/auth/login", async (req, res) => {
   res.json({ accessToken, token: accessToken, user: userResponseRow(user, "email") });
 });
 
+const emptyToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
 const appleSignInSchema = z.object({
   identityToken: z.string().min(1).optional(),
   idToken: z.string().min(1).optional(),
   nonce: z.string().min(1).optional(),
-  displayName: z.string().min(1).max(100).optional(),
-  fullName: z.string().min(1).max(120).optional()
+  displayName: z.preprocess(emptyToUndefined, z.string().min(1).max(100).optional()),
+  fullName: z.preprocess(emptyToUndefined, z.string().min(1).max(120).optional())
 });
 
 app.post("/v1/auth/apple", async (req, res) => {
