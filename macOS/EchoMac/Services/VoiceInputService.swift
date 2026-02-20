@@ -139,11 +139,39 @@ public final class VoiceInputService: ObservableObject {
                 stopStreamingResults()
                 let text = finalResult?.text ?? partialTranscription
                 let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+
+                if !trimmed.isEmpty {
+                    transcription = TranscriptionResult(text: trimmed, language: .unknown, isFinal: true)
+                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                } else {
+                    // Fallback: stream session may end without final text for very short utterances.
+                    // Retry once with batch transcription using the captured audio chunks.
+                    guard !audioChunks.isEmpty else {
+                        throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+                    }
+
+                    let combinedData = audioChunks.reduce(Data()) { $0 + $1.data }
+                    let totalDuration = audioChunks.reduce(0) { $0 + $1.duration }
+                    let format = audioChunks.first?.format ?? .default
+                    let combinedChunk = AudioChunk(
+                        data: combinedData,
+                        format: format,
+                        duration: totalDuration
+                    )
+
+                    DiagnosticsState.shared.log(
+                        "Streaming final empty -> fallback to batch transcribe (duration=\(totalDuration)s)"
+                    )
+
+                    let fallbackStart = Date()
+                    let fallback = try await provider.transcribe(audio: combinedChunk)
+                    let fallbackText = fallback.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !fallbackText.isEmpty else {
+                        throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+                    }
+                    transcription = TranscriptionResult(text: fallbackText, language: fallback.language, isFinal: true)
+                    asrLatencyMs = Int(Date().timeIntervalSince(fallbackStart) * 1000)
                 }
-                transcription = TranscriptionResult(text: trimmed, language: .unknown, isFinal: true)
-                asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
             } else {
                 // Combine chunks into a single chunk for batch transcription
                 guard !audioChunks.isEmpty else {
