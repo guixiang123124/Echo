@@ -48,6 +48,10 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
     private var pendingAudioFrames: [Data] = []
     private var nextOutboundSequence: UInt32 = 1
 
+    private func diagnosticsLog(_ message: String) {
+        print("🧭 VolcanoDiag: \(message)")
+    }
+
     // MARK: - Init
 
     init(config: Config) {
@@ -139,6 +143,21 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
 
     static func preferredStopResult(final: TranscriptionResult?, partial: TranscriptionResult?) -> TranscriptionResult? {
         final ?? partial
+    }
+
+    static func normalizedStreamingResult(_ incoming: TranscriptionResult, latestPartial: TranscriptionResult?) -> TranscriptionResult {
+        let incomingTrimmed = incoming.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard incoming.isFinal, incomingTrimmed.isEmpty,
+              let latestPartial,
+              !latestPartial.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return incoming
+        }
+
+        return TranscriptionResult(
+            text: latestPartial.text,
+            language: incoming.language,
+            isFinal: true
+        )
     }
 
     // MARK: - WebSocket Connection
@@ -460,21 +479,27 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
     private func handleServerFrame(_ data: Data) {
         guard data.count >= 4 else { return }
         let msgType = (data[1] >> 4) & 0x0F
+        let flags = data[1] & 0x0F
         let compression = data[2] & 0x0F
 
+        diagnosticsLog("rx frame bytes=\(data.count) msgType=0x\(String(msgType, radix: 16)) flags=0x\(String(flags, radix: 16)) compression=0x\(String(compression, radix: 16))")
+
         if msgType == 0xF {
+            diagnosticsLog("rx frame classified=error")
             handleErrorFrame(data)
             return
         }
 
         // Some Volcano responses may arrive as raw JSON payloads. Parse them directly first.
         if let directResult = decodeDirectJsonPayload(from: data) {
+            diagnosticsLog("parser path=direct-json textLen=\(directResult.text.count) isFinal=\(directResult.isFinal)")
             yieldServerResult(directResult)
             return
         }
 
         // Some responses include binary prefix or suffix around JSON payload.
         if let embeddedResult = decodeEmbeddedJsonPayload(from: data) {
+            diagnosticsLog("parser path=embedded-json textLen=\(embeddedResult.text.count) isFinal=\(embeddedResult.isFinal)")
             yieldServerResult(embeddedResult)
             return
         }
@@ -482,16 +507,18 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         // Keep 0x9 for normal ASR result frames, but parse other types defensively.
         // Some endpoints emit useful result frames on variant message types.
         if data.count < 8 {
+            diagnosticsLog("parser skipped: frame too short for payload decode")
             return
         }
 
         let headerSize = Int(data[0] & 0x0F) * 4
-        let flags = data[1] & 0x0F
 
         guard let transcription = decodeFrameAsPayloadCandidates(data, headerSize: headerSize, flags: flags, compression: compression) else {
+            diagnosticsLog("parser path=binary-payload failed; trying raw-json variants")
             tryToDecodeFrameAsRawJSON(data, reason: "payload parse failure")
             return
         }
+        diagnosticsLog("parser path=binary-payload textLen=\(transcription.text.count) isFinal=\(transcription.isFinal)")
         yieldServerResult(transcription)
     }
 
@@ -549,13 +576,16 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         compression: UInt8
     ) -> TranscriptionResult? {
         let payloads = decodePayloadCandidates(data: data, headerSize: headerSize, flags: flags)
-        for payload in payloads {
+        diagnosticsLog("payload candidates count=\(payloads.count) headerSize=\(headerSize)")
+
+        for (idx, payload) in payloads.enumerated() {
             var candidate = payload
             if compression == 0x1 {
                 candidate = gunzip(candidate) ?? candidate
             }
 
             if let transcription = decodeVolcanoTranscript(from: candidate) {
+                diagnosticsLog("payload candidate#\(idx) parsed textLen=\(transcription.text.count) isFinal=\(transcription.isFinal)")
                 return transcription
             }
         }
@@ -564,14 +594,21 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
     }
 
     private func yieldServerResult(_ result: TranscriptionResult) {
+        let priorPartial = withState { latestPartialResult }
+        let normalized = Self.normalizedStreamingResult(result, latestPartial: priorPartial)
+
+        if result.isFinal && result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            diagnosticsLog("received empty final packet -> normalized to textLen=\(normalized.text.count)")
+        }
+
         withState {
-            if result.isFinal {
-                latestFinalResult = result
-            } else if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                latestPartialResult = result
+            if normalized.isFinal {
+                latestFinalResult = normalized
+            } else if !normalized.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                latestPartialResult = normalized
             }
         }
-        continuation?.yield(result)
+        continuation?.yield(normalized)
     }
 
     private func tryToDecodeFrameAsRawJSON(_ data: Data, reason: String) {
@@ -697,22 +734,28 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
 
     private func parseServerResult(from json: [String: Any]) -> TranscriptionResult? {
         let containers = volcanoCandidateContainers(from: json)
+        var sawTerminalWithoutText = false
+
         for container in containers {
             let text = extractVolcanoText(from: container)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let isFinal = resolveVolcanoFinalFlag(from: container)
+            let hasTerminalSignal = resolveVolcanoTerminalFinalFlag(from: container)
 
             if let text, !text.isEmpty {
                 return TranscriptionResult(text: text, language: .unknown, isFinal: isFinal)
             }
-            if isFinal {
-                return TranscriptionResult(text: "", language: .unknown, isFinal: true)
+
+            if hasTerminalSignal {
+                sawTerminalWithoutText = true
             }
         }
 
-        if resolveVolcanoFinalFlag(from: json) {
+        if sawTerminalWithoutText || resolveVolcanoTerminalFinalFlag(from: json) {
+            diagnosticsLog("parser terminal packet without text")
             return TranscriptionResult(text: "", language: .unknown, isFinal: true)
         }
+
         return nil
     }
 
@@ -724,33 +767,32 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
             containers.append(value)
         }
 
-        if let result = json["result"] as? [String: Any] {
-            appendContainer(result)
+        func appendAnyContainer(_ value: Any?) {
+            if let dict = value as? [String: Any] {
+                appendContainer(dict)
+            } else if let list = value as? [[String: Any]] {
+                list.forEach { appendContainer($0) }
+            }
         }
-        if let data = json["data"] as? [String: Any] {
-            appendContainer(data)
+
+        appendAnyContainer(json["result"])
+        appendAnyContainer(json["results"])
+        appendAnyContainer(json["data"])
+        appendAnyContainer(json["output"])
+        appendAnyContainer(json["payload"])
+        appendAnyContainer(json["response"])
+        appendAnyContainer(json["asr"])
+        appendAnyContainer(json["event"])
+
+        if let responseData = json["data"] as? [String: Any] {
+            appendAnyContainer(responseData["output"])
+            appendAnyContainer(responseData["result"])
         }
-        if let output = json["output"] as? [String: Any] {
-            appendContainer(output)
-        }
-        if let payload = json["payload"] as? [String: Any] {
-            appendContainer(payload)
-        }
-        if let response = json["response"] as? [String: Any] {
-            appendContainer(response)
-        }
-        if let responseData = json["data"] as? [String: Any], let output = responseData["output"] as? [String: Any] {
-            appendContainer(output)
-        }
-        if let asr = json["asr"] as? [String: Any] {
-            appendContainer(asr)
-        }
-        if let event = json["event"] as? [String: Any] {
-            appendContainer(event)
-        }
+
         if let textOnly = json["text"] as? String {
             containers.append(["text": textOnly])
         }
+
         appendContainer(json)
         return containers
     }
@@ -867,16 +909,23 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
            ["end", "final", "complete"].contains(where: { status.caseInsensitiveCompare($0) == .orderedSame }) {
             return true
         }
-        if let code = result["code"] as? Int, [2000, 2001, 0].contains(code) {
-            return true
-        }
-        if let code = result["status_code"] as? Int, [2000, 2001, 0].contains(code) {
-            return true
-        }
         if let utterances = result["utterances"] as? [[String: Any]], !utterances.isEmpty {
             return utterances.contains {
-                ($0["definite"] as? Bool) == true || ($0["final"] as? Bool) == true
+                ($0["definite"] as? Bool) == true || ($0["final"] as? Bool) == true || ($0["is_final"] as? Bool) == true
             }
+        }
+        return false
+    }
+
+    private func resolveVolcanoTerminalFinalFlag(from result: [String: Any]) -> Bool {
+        if let isEnd = result["is_end"] as? Bool, isEnd { return true }
+        if let event = result["event"] as? String,
+           ["end", "final", "complete", "completed"].contains(where: { event.caseInsensitiveCompare($0) == .orderedSame }) {
+            return true
+        }
+        if let status = result["status"] as? String,
+           ["final", "finalized", "completed", "ended"].contains(where: { status.caseInsensitiveCompare($0) == .orderedSame }) {
+            return true
         }
         return false
     }

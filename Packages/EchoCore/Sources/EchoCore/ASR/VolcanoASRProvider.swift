@@ -20,6 +20,10 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     private let resourceIdOverride: String?
     private let endpointOverride: String?
 
+    private func diagnosticsLog(_ message: String) {
+        print("🧭 VolcanoDiag: \(message)")
+    }
+
     public init(
         keyStore: SecureKeyStore = SecureKeyStore(),
         appId: String? = nil,
@@ -108,7 +112,9 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
             do {
                 let resolved = try resolvedStreamingResourceId()
                 resourceId = resolved
+                diagnosticsLog("stream resource selected=\(resourceId)")
             } catch {
+                diagnosticsLog("stream resource resolution failed: \(error.localizedDescription)")
                 return AsyncStream { $0.finish() }
             }
 
@@ -146,20 +152,54 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     private func resolvedStreamingResourceId() throws -> String {
-        // Allow UI-configured resource_id override for stream as well.
-        // If user provided an AUC resource id, map to SAUC when obvious.
         let configured = try (resourceIdOverride ?? keyStore.retrieve(for: Self.resourceIdKeyId))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let configured, !configured.isEmpty {
-            if configured.contains(".auc") {
-                return configured.replacingOccurrences(of: ".auc", with: ".sauc")
+        let mapped = Self.mapStreamingResourceId(configured)
+        if let configured, !configured.isEmpty, configured != mapped {
+            diagnosticsLog("stream resource remapped from=\(configured) to=\(mapped)")
+        }
+        return mapped
+    }
+
+    static func mapStreamingResourceId(_ configured: String?) -> String {
+        guard let configured, !configured.isEmpty else {
+            return "volc.seedasr.sauc.duration"
+        }
+
+        let configuredLower = configured.lowercased()
+        if configuredLower.hasSuffix(".sauc") || configuredLower.contains(".sauc.") {
+            if configuredLower.contains("bigasr") {
+                return "volc.seedasr.sauc.duration"
             }
             return configured
         }
 
-        // Default streaming resource
-        return "volc.seedasr.sauc.duration"
+        let aucBasedSuffixes = [
+            ".auc_turbo",
+            ".auc.duration",
+            ".auc_duration",
+            ".auc"
+        ]
+
+        for suffix in aucBasedSuffixes where configuredLower.hasSuffix(suffix) {
+            let trimCount = suffix.count
+            let base = String(configured[..<configured.index(configured.endIndex, offsetBy: -trimCount)])
+            if base.lowercased().contains("bigasr") {
+                return "volc.seedasr.sauc.duration"
+            }
+            return "\(base).sauc.duration"
+        }
+
+        if configuredLower.contains(".auc") {
+            let mapped = configured.replacingOccurrences(of: ".auc", with: ".sauc", options: .literal, range: nil)
+            if mapped.lowercased().contains("bigasr") {
+                return "volc.seedasr.sauc.duration"
+            }
+            return mapped
+        }
+
+        return configured
     }
 
     // MARK: - Private
