@@ -118,11 +118,15 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
                 return AsyncStream { $0.finish() }
             }
 
+            guard let streamEndpoint = URL(string: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async") else {
+                diagnosticsLog("invalid stream endpoint URL")
+                return AsyncStream { $0.finish() }
+            }
             let config = VolcanoStreamingSession.Config(
                 appId: appId,
                 accessKey: accessKey,
                 resourceId: resourceId,
-                endpoint: URL(string: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async")!,
+                endpoint: streamEndpoint,
                 sampleRate: 16000,
                 enableITN: true,
                 enablePunc: true,
@@ -156,22 +160,28 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         let mapped = Self.mapStreamingResourceId(configured)
+        if !Self.isStreamingResourceId(mapped) {
+            diagnosticsLog("stream resource remapped to default sauc resource from non-stream pattern: \(mapped)")
+            return "volc.bigasr.sauc.duration"
+        }
         if let configured, !configured.isEmpty, configured != mapped {
             diagnosticsLog("stream resource remapped from=\(configured) to=\(mapped)")
         }
         return mapped
     }
 
+    static func isStreamingResourceId(_ resourceId: String) -> Bool {
+        let lower = resourceId.lowercased()
+        return lower.contains(".sauc") || lower.hasSuffix(".sauc")
+    }
+
     static func mapStreamingResourceId(_ configured: String?) -> String {
         guard let configured, !configured.isEmpty else {
-            return "volc.seedasr.sauc.duration"
+            return "volc.bigasr.sauc.duration"
         }
 
         let configuredLower = configured.lowercased()
         if configuredLower.hasSuffix(".sauc") || configuredLower.contains(".sauc.") {
-            if configuredLower.contains("bigasr") {
-                return "volc.seedasr.sauc.duration"
-            }
             return configured
         }
 
@@ -185,17 +195,11 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
         for suffix in aucBasedSuffixes where configuredLower.hasSuffix(suffix) {
             let trimCount = suffix.count
             let base = String(configured[..<configured.index(configured.endIndex, offsetBy: -trimCount)])
-            if base.lowercased().contains("bigasr") {
-                return "volc.seedasr.sauc.duration"
-            }
             return "\(base).sauc.duration"
         }
 
         if configuredLower.contains(".auc") {
             let mapped = configured.replacingOccurrences(of: ".auc", with: ".sauc", options: .literal, range: nil)
-            if mapped.lowercased().contains("bigasr") {
-                return "volc.seedasr.sauc.duration"
-            }
             return mapped
         }
 

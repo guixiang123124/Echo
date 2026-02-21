@@ -334,7 +334,10 @@ struct AuthSheetView: View {
                         switch result {
                         case .success(let auth):
                             guard let credential = auth.credential as? ASAuthorizationAppleIDCredential,
-                                  let nonce = currentNonce else { return }
+                                  let nonce = currentNonce else {
+                                authSession.errorMessage = "Apple sign-in missing nonce."
+                                return
+                            }
                             Task { await authSession.signInWithApple(credential: credential, nonce: nonce) }
                         case .failure(let error):
                             authSession.errorMessage = error.localizedDescription
@@ -364,10 +367,16 @@ struct AuthSheetView: View {
 
     @MainActor
     private func signInWithGoogle() {
-        guard let root = UIApplication.shared.connectedScenes
+        let activeScenes = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
+            .filter { !$0.windows.isEmpty }
+
+        guard let root = activeScenes
             .flatMap(\.windows)
-            .first(where: { $0.isKeyWindow })?.rootViewController else {
+            .first(where: { $0.isKeyWindow })?.rootViewController
+            ?? activeScenes
+                .flatMap(\.windows)
+                .first(where: { $0.rootViewController != nil })?.rootViewController else {
             authSession.errorMessage = "Unable to find active window for Google sign-in."
             return
         }

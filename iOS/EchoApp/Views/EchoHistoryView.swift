@@ -238,6 +238,19 @@ private func autoEditSummary(for entry: RecordingStore.RecordingEntry) -> String
 
     var suffix = modified.isEmpty ? "" : " (\(modified))"
 
+    if let streamMode = entry.streamMode, !streamMode.isEmpty {
+        suffix += " • mode \(streamMode)"
+        if entry.fallbackUsed {
+            suffix += " + fallback"
+        }
+        if let firstPartial = entry.firstPartialMs {
+            suffix += " • p=\(firstPartial)ms"
+        }
+        if let firstFinal = entry.firstFinalMs {
+            suffix += " • f=\(firstFinal)ms"
+        }
+    }
+
     if let asr = entry.asrLatencyMs, let total = entry.totalLatencyMs {
         let editPart: String
         if let edit = entry.correctionLatencyMs {

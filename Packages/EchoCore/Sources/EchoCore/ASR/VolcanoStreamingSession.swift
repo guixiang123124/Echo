@@ -133,7 +133,15 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         }
 
         let finalResult = withState {
-            Self.preferredStopResult(final: latestFinalResult, partial: latestPartialResult)
+            let candidate = Self.preferredStopResult(final: latestFinalResult, partial: latestPartialResult)
+            if let candidate {
+                diagnosticsLog(
+                    "stop result source=\(Self.stopResultSource(final: latestFinalResult, partial: latestPartialResult, selected: candidate)) textLen=\(candidate.text.count) isFinal=\(candidate.isFinal)"
+                )
+            } else {
+                diagnosticsLog("stop result no final/partial available")
+            }
+            return candidate
         }
         disconnect()
         return finalResult
@@ -142,7 +150,65 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
     // MARK: - Testability Helpers
 
     static func preferredStopResult(final: TranscriptionResult?, partial: TranscriptionResult?) -> TranscriptionResult? {
-        final ?? partial
+        if let final {
+            let finalTrimmed = final.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partialTrimmed = partial?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            if !partialTrimmed.isEmpty,
+               !finalTrimmed.isEmpty,
+               Self.shouldUsePartialOverFinal(finalText: finalTrimmed, partialText: partialTrimmed) {
+                return TranscriptionResult(text: partialTrimmed, language: final.language, isFinal: true)
+            }
+
+            if !finalTrimmed.isEmpty {
+                return final
+            }
+        }
+        if let partial, !partial.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return partial
+        }
+        return final
+    }
+
+    static func stopResultSource(
+        final: TranscriptionResult?,
+        partial: TranscriptionResult?,
+        selected: TranscriptionResult?
+    ) -> String {
+        let finalTrimmed = final?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let selected, let final,
+           selected.text == final.text && selected.isFinal == final.isFinal,
+           !finalTrimmed.isEmpty {
+            return "final"
+        }
+        if let selected {
+            let selectedTrimmed = selected.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let partialTrimmed = partial?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !selectedTrimmed.isEmpty && finalTrimmed.isEmpty && !partialTrimmed.isEmpty {
+                return "partial-fallback-empty-final"
+            }
+            if selectedTrimmed.isEmpty && !partialTrimmed.isEmpty && selectedTrimmed != partialTrimmed {
+                return "partial"
+            }
+            if selectedTrimmed == partialTrimmed,
+               !selectedTrimmed.isEmpty,
+               Self.shouldUsePartialOverFinal(finalText: finalTrimmed, partialText: partialTrimmed) {
+                return "partial-fallback-short-final"
+            }
+        }
+        return "partial"
+    }
+
+    private static func shouldUsePartialOverFinal(finalText: String, partialText: String) -> Bool {
+        let finalTrimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let partialTrimmed = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !finalTrimmed.isEmpty, !partialTrimmed.isEmpty else { return false }
+        if finalTrimmed.count >= partialTrimmed.count { return false }
+        if partialTrimmed.count >= 12 && finalTrimmed.count <= partialTrimmed.count - 6 { return true }
+        if partialTrimmed.count >= 10 && finalTrimmed.count <= 3 { return true }
+        if Double(finalTrimmed.count) <= Double(partialTrimmed.count) * 0.55 { return true }
+        return false
     }
 
     static func normalizedStreamingResult(_ incoming: TranscriptionResult, latestPartial: TranscriptionResult?) -> TranscriptionResult {
@@ -741,13 +807,23 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let isFinal = resolveVolcanoFinalFlag(from: container)
             let hasTerminalSignal = resolveVolcanoTerminalFinalFlag(from: container)
+            let finalSignals = resolveVolcanoFinalSignals(from: container)
+            if let finalSignals {
+                diagnosticsLog("parser final decision source=\(finalSignals) final=\(isFinal)")
+            } else {
+                diagnosticsLog("parser final decision source=none final=\(isFinal)")
+            }
 
             if let text, !text.isEmpty {
+                diagnosticsLog("parser result textLen=\(text.count) final=\(isFinal)")
                 return TranscriptionResult(text: text, language: .unknown, isFinal: isFinal)
             }
 
             if hasTerminalSignal {
                 sawTerminalWithoutText = true
+                if let terminalSignals = resolveVolcanoTerminalSignals(from: container) {
+                    diagnosticsLog("parser terminal container signals=\(terminalSignals)")
+                }
             }
         }
 
@@ -917,6 +993,32 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         return false
     }
 
+    private func resolveVolcanoFinalSignals(from result: [String: Any]) -> String? {
+        var signals: [String] = []
+
+        if let value = result["is_final"] as? Bool {
+            signals.append("is_final=\(value)")
+        }
+        if let value = result["final"] as? Bool {
+            signals.append("final=\(value)")
+        }
+        if let value = result["definite"] as? Bool {
+            signals.append("definite=\(value)")
+        }
+        if let value = result["is_end"] as? Bool {
+            signals.append("is_end=\(value)")
+        }
+        if let status = result["status"] as? String {
+            signals.append("status=\(status)")
+        }
+        if let event = result["event"] as? String {
+            signals.append("event=\(event)")
+        }
+
+        guard !signals.isEmpty else { return nil }
+        return signals.joined(separator: ",")
+    }
+
     private func resolveVolcanoTerminalFinalFlag(from result: [String: Any]) -> Bool {
         if let isEnd = result["is_end"] as? Bool, isEnd { return true }
         if let event = result["event"] as? String,
@@ -928,6 +1030,23 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
             return true
         }
         return false
+    }
+
+    private func resolveVolcanoTerminalSignals(from result: [String: Any]) -> String? {
+        var signals: [String] = []
+
+        if let isEnd = result["is_end"] as? Bool, isEnd {
+            signals.append("is_end=true")
+        }
+        if let event = result["event"] as? String {
+            signals.append("event=\(event)")
+        }
+        if let status = result["status"] as? String {
+            signals.append("status=\(status)")
+        }
+
+        guard !signals.isEmpty else { return nil }
+        return signals.joined(separator: ",")
     }
 
     private func jsonTextFallback(from result: [String: Any]) -> String? {

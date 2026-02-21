@@ -9,6 +9,17 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 public actor RecordingStore {
     public static let shared = RecordingStore()
 
+    public struct SchemaHealth: Sendable {
+        public let databasePath: String
+        public let schemaVersion: Int
+        public let requiredColumns: [String]
+        public let missingColumns: [String]
+
+        public var isHealthy: Bool {
+            missingColumns.isEmpty
+        }
+    }
+
     public struct RecordingEntry: Identifiable, Sendable, Hashable {
         public let id: Int64
         public let createdAt: Date
@@ -55,6 +66,34 @@ public actor RecordingStore {
     private let databaseURL: URL
     private var db: OpaquePointer?
     private var lastCleanup: Date?
+    private static let targetSchemaVersion = 3
+    private static let requiredColumns: [String] = [
+        "created_at",
+        "duration",
+        "sample_rate",
+        "channel_count",
+        "bits_per_sample",
+        "encoding",
+        "audio_path",
+        "asr_provider_id",
+        "asr_provider_name",
+        "correction_provider_id",
+        "transcript_raw",
+        "transcript_final",
+        "word_count",
+        "error",
+        "status",
+        "user_id",
+        "asr_latency_ms",
+        "correction_latency_ms",
+        "total_latency_ms",
+        "stream_mode",
+        "first_partial_ms",
+        "first_final_ms",
+        "fallback_used",
+        "error_code",
+        "trace_id"
+    ]
     private var retentionDays: Int {
         let stored = UserDefaults.standard.integer(forKey: "echo.history.retentionDays")
         return stored == 0 ? 7 : stored
@@ -74,6 +113,12 @@ public actor RecordingStore {
         db = Self.openDatabase(at: databaseURL)
         Self.createTables(in: db)
         Self.migrateSchemaIfNeeded(in: db)
+        Self.ensureTargetSchemaVersion(in: db)
+        Self.backfillStreamingDefaults(in: db)
+        let health = Self.reportSchemaHealth(databaseURL: databaseURL, db: db, requiredColumns: Self.requiredColumns, targetVersion: Self.targetSchemaVersion)
+        if !health.isHealthy {
+            print("❌ RecordingStore: startup schema health failed. missing=\(health.missingColumns.joined(separator: ","))")
+        }
     }
 
     deinit {
@@ -105,6 +150,16 @@ public actor RecordingStore {
     ) {
         guard let db else {
             print("❌ RecordingStore: database not available")
+            return
+        }
+        let health = Self.reportSchemaHealth(
+            databaseURL: databaseURL,
+            db: db,
+            requiredColumns: Self.requiredColumns,
+            targetVersion: Self.targetSchemaVersion
+        )
+        guard health.isHealthy else {
+            print("❌ RecordingStore: aborting save. required columns missing=\(health.missingColumns.joined(separator: ","))")
             return
         }
 
@@ -262,6 +317,15 @@ public actor RecordingStore {
                 await CloudSyncService.shared.syncRecording(payload, audioURL: audioURL)
             }
         }
+    }
+
+    public func schemaHealth() -> SchemaHealth {
+        Self.reportSchemaHealth(
+            databaseURL: databaseURL,
+            db: db,
+            requiredColumns: Self.requiredColumns,
+            targetVersion: Self.targetSchemaVersion
+        )
     }
 
     public func fetchRecent(limit: Int = 100, userId: String? = nil) -> [RecordingEntry] {
@@ -432,6 +496,33 @@ public actor RecordingStore {
         return handle
     }
 
+    private static func currentSchemaVersion(in db: OpaquePointer) -> Int {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &statement, nil) == SQLITE_OK,
+              let stmt = statement else {
+            return 0
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int(stmt, 0))
+    }
+
+    private static func setSchemaVersion(in db: OpaquePointer, version: Int) {
+        let sql = "PRAGMA user_version = \(version);"
+        if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+            print("❌ RecordingStore: failed to set schema version \(version)")
+        }
+    }
+
+    private static func ensureTargetSchemaVersion(in db: OpaquePointer?) {
+        guard let db else { return }
+        let version = currentSchemaVersion(in: db)
+        if version != targetSchemaVersion {
+            setSchemaVersion(in: db, version: targetSchemaVersion)
+        }
+    }
+
     private static func createTables(in db: OpaquePointer?) {
         guard let db else { return }
 
@@ -472,6 +563,42 @@ public actor RecordingStore {
         if sqlite3_exec(db, createSQL, nil, nil, nil) != SQLITE_OK {
             print("❌ RecordingStore: Failed to create tables")
         }
+    }
+
+    private static func reportSchemaHealth(
+        databaseURL: URL,
+        db: OpaquePointer?,
+        requiredColumns: [String],
+        targetVersion: Int
+    ) -> SchemaHealth {
+        guard let db else {
+            return SchemaHealth(
+                databasePath: databaseURL.path,
+                schemaVersion: 0,
+                requiredColumns: requiredColumns,
+                missingColumns: requiredColumns
+            )
+        }
+
+        let version = currentSchemaVersion(in: db)
+        let existing = Set(columns(in: db, table: "recordings"))
+        let missing = requiredColumns
+            .map { $0.lowercased() }
+            .filter { !existing.contains($0) }
+
+        if !missing.isEmpty {
+            print("⚠️ RecordingStore: schema health missing columns: \(missing.joined(separator: ","))")
+        }
+        if version != targetVersion {
+            print("⚠️ RecordingStore: schema version mismatch expected=\(targetVersion) actual=\(version)")
+        }
+
+        return SchemaHealth(
+            databasePath: databaseURL.path,
+            schemaVersion: version,
+            requiredColumns: requiredColumns,
+            missingColumns: missing
+        )
     }
 
     private static func migrateSchemaIfNeeded(in db: OpaquePointer?) {
@@ -541,6 +668,43 @@ public actor RecordingStore {
         if sqlite3_exec(db, backfillSQL, nil, nil, nil) != SQLITE_OK {
             print("❌ RecordingStore: Failed to backfill trace_id")
         }
+    }
+
+    private static func backfillStreamingDefaults(in db: OpaquePointer?) {
+        guard let db else { return }
+
+        let statements: [String] = [
+            "UPDATE recordings SET stream_mode = 'batch' WHERE stream_mode IS NULL OR trim(stream_mode) = '';",
+            "UPDATE recordings SET first_partial_ms = -1 WHERE first_partial_ms IS NULL;",
+            "UPDATE recordings SET first_final_ms = -1 WHERE first_final_ms IS NULL;",
+            "UPDATE recordings SET fallback_used = 0 WHERE fallback_used IS NULL;",
+            "UPDATE recordings SET error_code = 'none' WHERE error_code IS NULL OR trim(error_code) = '';",
+            "UPDATE recordings SET trace_id = lower(hex(randomblob(16))) WHERE trace_id IS NULL OR trim(trace_id) = '';"
+        ]
+
+        for statement in statements {
+            if sqlite3_exec(db, statement, nil, nil, nil) != SQLITE_OK {
+                print("⚠️ RecordingStore: backfill failed -> \(statement)")
+            }
+        }
+    }
+
+    private static func columns(in db: OpaquePointer?, table: String) -> [String] {
+        guard let db else { return [] }
+        let sql = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            return []
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var output: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cString = sqlite3_column_text(stmt, 1) {
+                output.append(String(cString: cString).lowercased())
+            }
+        }
+        return output
     }
 
     private static func columnExists(_ db: OpaquePointer, table: String, column: String) -> Bool {

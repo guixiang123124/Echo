@@ -15,6 +15,17 @@ struct VolcanoStreamingSessionTests {
         #expect(selected?.isFinal == true)
     }
 
+    @Test("stop falls back to partial when final is clearly shorter than partial")
+    func stopFallsBackToPartialWhenFinalLooksLikeTail() {
+        let partial = TranscriptionResult(text: "i input the auto old and other words", language: .unknown, isFinal: false)
+        let final = TranscriptionResult(text: "I", language: .unknown, isFinal: true)
+
+        let selected = VolcanoStreamingSession.preferredStopResult(final: final, partial: partial)
+
+        #expect(selected?.text == "i input the auto old and other words")
+        #expect(selected?.isFinal == true)
+    }
+
     @Test("stop falls back to partial result when final is missing")
     func stopFallsBackToPartialResult() {
         let partial = TranscriptionResult(text: "partial text", language: .unknown, isFinal: false)
@@ -55,12 +66,12 @@ struct VolcanoStreamingSessionTests {
 }
 
 @Suite("VolcanoASRProvider streaming resource mapping")
-struct VolcanoASRProviderStreamingResourceTests {
+    struct VolcanoASRProviderStreamingResourceTests {
 
-    @Test("maps bigasr auc resources to seedasr sauc duration")
+    @Test("maps bigasr auc resources to bigasr sauc duration")
     func mapBigasrAucToSeedasrSauc() {
-        #expect(VolcanoASRProvider.mapStreamingResourceId("volc.bigasr.auc_turbo") == "volc.seedasr.sauc.duration")
-        #expect(VolcanoASRProvider.mapStreamingResourceId("volc.bigasr.auc") == "volc.seedasr.sauc.duration")
+        #expect(VolcanoASRProvider.mapStreamingResourceId("volc.bigasr.auc_turbo") == "volc.bigasr.sauc.duration")
+        #expect(VolcanoASRProvider.mapStreamingResourceId("volc.bigasr.auc") == "volc.bigasr.sauc.duration")
     }
 
     @Test("keeps non-bigasr sauc resources unchanged")

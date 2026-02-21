@@ -19,13 +19,32 @@ struct ASRStreamSmokeCLI {
         }
 
         let provider: any ASRProvider
+        let startupDelayMs: UInt64
+        let feedRetryCount: Int
+        let feedRetryDelayMs: UInt64
+        let postSendDrainMs: UInt64
+
         switch providerName {
         case "deepgram":
             let key = resolveDeepgramKey()
             provider = DeepgramASRProvider(apiKey: key, model: "nova-3", language: nil)
+            startupDelayMs = 900
+            feedRetryCount = 8
+            feedRetryDelayMs = 120
+            postSendDrainMs = 400
         case "volcano":
             let v = resolveVolcanoKeys()
-            provider = VolcanoASRProvider(appId: v.appId, accessKey: v.accessKey)
+            provider = VolcanoASRProvider(
+                appId: v.appId,
+                accessKey: v.accessKey,
+                resourceId: "volc.seedasr.sauc.duration"
+            )
+            // Volcano streaming may require full-request ACK / reconnect backoff before first audio is accepted.
+            // Give it a longer warm-up and retry window to avoid racey early stop in short clips.
+            startupDelayMs = 2500
+            feedRetryCount = 40
+            feedRetryDelayMs = 150
+            postSendDrainMs = 1200
         default:
             fputs("Unknown provider: \(providerName)\n", stderr)
             exit(1)
@@ -43,8 +62,8 @@ struct ASRStreamSmokeCLI {
              }
          }
 
-        // Give provider a brief moment to establish WS session.
-        try? await Task.sleep(for: .milliseconds(900))
+        // Give provider time to establish WS session (provider-specific warm-up).
+        try? await Task.sleep(for: .milliseconds(startupDelayMs))
 
         let bytesPerSecond = audio.format.bytesPerSecond
         let chunkDuration: Double = 0.2
@@ -56,14 +75,14 @@ struct ASRStreamSmokeCLI {
             let slice = audio.data.subdata(in: offset..<end)
             let chunk = AudioChunk(data: slice, format: audio.format, duration: Double(slice.count) / Double(bytesPerSecond))
             var sent = false
-            for _ in 0..<8 {
+            for _ in 0..<feedRetryCount {
                 do {
                     try await provider.feedAudio(chunk)
                     sent = true
                     break
                 } catch {
-                    // Stream may still be connecting.
-                    try? await Task.sleep(for: .milliseconds(120))
+                    // Stream may still be connecting / reconnecting.
+                    try? await Task.sleep(for: .milliseconds(feedRetryDelayMs))
                 }
             }
             if !sent {
@@ -73,6 +92,9 @@ struct ASRStreamSmokeCLI {
             offset = end
             try? await Task.sleep(for: .milliseconds(200))
         }
+
+        // Give backend a brief drain window before explicit stop/finalize.
+        try? await Task.sleep(for: .milliseconds(postSendDrainMs))
 
         do {
             let final = try await provider.stopStreaming()

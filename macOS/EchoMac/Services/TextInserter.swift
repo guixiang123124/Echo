@@ -8,14 +8,32 @@ import Carbon.HIToolbox
 public final class TextInserter {
     // MARK: - Properties
 
+    public struct StreamingInsertFailure: Sendable {
+        public enum Category: String, Sendable {
+            case focus
+            case selection
+            case accessibility
+            case state
+            case unknown
+        }
+
+        public let category: Category
+        public let details: String
+
+        public init(category: Category, details: String) {
+            self.category = category
+            self.details = details
+        }
+    }
+
     public enum StreamingAttachResult {
         case attached
-        case failed(String)
+        case failed(StreamingInsertFailure)
     }
 
     public enum StreamingUpdateResult {
         case updated(method: String, characterCount: Int)
-        case failed(String)
+        case failed(StreamingInsertFailure)
     }
 
     private struct StreamingInsertionState {
@@ -71,11 +89,11 @@ public final class TextInserter {
     /// Start a replacement-based streaming insertion session against the focused UI element.
     public func startStreamingInsertionSession() -> StreamingAttachResult {
         guard let focusedElement = focusedElement() else {
-            return .failed("no focused element")
+            return .failed(.init(category: .focus, details: "focus missing: no focused UI element"))
         }
 
         guard let selectedRange = selectedTextRange(for: focusedElement) else {
-            return .failed("focused element has no selected range")
+            return .failed(.init(category: .selection, details: "selection unavailable (focused element may not support selected-text insertion)"))
         }
 
         let normalizedRange = normalizedRange(for: focusedElement, selectedRange)
@@ -89,11 +107,13 @@ public final class TextInserter {
 
     /// Replace the currently active streaming insertion segment with the latest partial text.
     public func updateStreamingInsertion(_ text: String) -> StreamingUpdateResult {
-        guard var state = streamingState else { return .failed("no active streaming session") }
+        guard var state = streamingState else {
+            return .failed(.init(category: .state, details: "session inactive"))
+        }
 
         guard let focused = focusedElement(), axElementsEqual(focused, state.targetElement) else {
             streamingState = nil
-            return .failed("focus moved to different element")
+            return .failed(.init(category: .focus, details: "focus moved away from insertion target"))
         }
 
         let replacementRange = normalizedRange(for: state.targetElement, state.insertionRange)
@@ -110,26 +130,26 @@ public final class TextInserter {
 
         guard let currentValue = elementValue(for: state.targetElement) else {
             streamingState = nil
-            return .failed("unable to read element value for fallback replacement")
+            return .failed(.init(category: .accessibility, details: "AX read failed while applying fallback replacement"))
         }
 
         let nsText = currentValue as NSString
         let safeRange = normalizedRange(forLength: nsText.length, range: replacementRange)
         guard safeRange.location != NSNotFound else {
             streamingState = nil
-            return .failed("replacement range invalid")
+            return .failed(.init(category: .selection, details: "selection range invalid (AX replacement range resolved outside element length)"))
         }
 
         let currentSegment = nsText.substring(with: safeRange)
         if !state.expectedInsertedText.isEmpty && currentSegment != state.expectedInsertedText {
             streamingState = nil
-            return .failed("insertion segment diverged from expected text")
+            return .failed(.init(category: .selection, details: "selection drifted (current segment diverged from expected inserted text)"))
         }
 
         let replaced = nsText.replacingCharacters(in: safeRange, with: text)
         guard setElementValue(state.targetElement, replaced) else {
             streamingState = nil
-            return .failed("set value replacement failed")
+            return .failed(.init(category: .accessibility, details: "set value replacement failed"))
         }
 
         let updatedRange = NSRange(location: safeRange.location, length: (text as NSString).length)

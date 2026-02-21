@@ -123,6 +123,16 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var tipText = EchoTaglines.random()
     @Published var showError = false
     @Published var errorMessage = ""
+    private struct StreamingMetrics {
+        let providerId: String
+        let providerName: String
+        let mode: String
+        let startDate: Date
+        var firstPartialMs: Int?
+        var firstFinalMs: Int?
+        var fallbackUsed: Bool = false
+        var error: String?
+    }
 
     private var audioService = AudioCaptureService()
     private let settings = AppSettings()
@@ -135,6 +145,7 @@ final class VoiceRecordingViewModel: ObservableObject {
     private var streamingTask: Task<Void, Never>?
     private var isKeyboardMode = false
     private var recordingTask: Task<Void, Never>?
+    private var streamMetrics: StreamingMetrics?
     private var smoothedLevel: CGFloat = 0
 
     func toggleRecording() async {
@@ -158,12 +169,31 @@ final class VoiceRecordingViewModel: ObservableObject {
         }
 
         // Resolve ASR provider based on Settings.
-        guard let provider = resolveASRProvider() else {
+        guard let providerResult = resolveASRProvider() else {
             showErrorMessage("Speech recognition is not configured. Add your API key in Settings > API Keys.")
             return
         }
+        let provider = providerResult.provider
         activeASRProvider = provider
+        if providerResult.usedFallback {
+            statusText = providerResult.fallbackMessage
+        }
         isStreamingSession = settings.preferStreaming && provider.supportsStreaming
+        if isStreamingSession {
+            streamMetrics = StreamingMetrics(
+                providerId: provider.id,
+                providerName: provider.displayName,
+                mode: "stream",
+                startDate: Date()
+            )
+        } else {
+            streamMetrics = StreamingMetrics(
+                providerId: provider.id,
+                providerName: provider.displayName,
+                mode: "batch",
+                startDate: Date()
+            )
+        }
 
         // Apple Speech requires explicit authorization.
         if provider.id == "apple_speech" {
@@ -250,6 +280,7 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         guard let provider else {
             statusText = "Ready"
+            streamMetrics = nil
             return
         }
 
@@ -271,9 +302,20 @@ final class VoiceRecordingViewModel: ObservableObject {
             format: format,
             duration: totalDuration
         )
+        let sessionStartDate = streamMetrics?.startDate
+        let sessionMode = streamMetrics?.mode ?? (streamingActive ? "stream" : "batch")
+        var streamFirstPartialMs = streamMetrics?.firstPartialMs
+        var streamFirstFinalMs = streamMetrics?.firstFinalMs
+        var providerForStorage: (any ASRProvider)? = provider
+        var fallbackUsed = false
+        var asrLatencyMs: Int?
+        var totalLatencyMs: Int?
+        var correctionLatencyMs: Int?
+        var rawText = ""
 
         do {
             let totalStart = Date()
+            totalLatencyMs = nil
 
             // Transcribe / finalize stream
             let asrStart = Date()
@@ -281,22 +323,83 @@ final class VoiceRecordingViewModel: ObservableObject {
             if streamingActive {
                 let final = try await provider.stopStreaming()
                 stopStreamingResults()
-                let text = (final?.text ?? transcribedText).trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else {
-                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
-                }
-                transcription = TranscriptionResult(text: text, language: .unknown, isFinal: true)
-            } else {
-                transcription = try await provider.transcribe(audio: combinedChunk)
-            }
-            let asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                let merged = mergedStreamingText(finalText: final?.text, accumulatedText: transcribedText)
+                let mergedText = merged.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            let rawText = transcription.text
+                if shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: transcribedText) {
+                    let fallbackProvider = fallbackASRProvider(for: provider.id)
+                    let fallbackStart = Date()
+
+                    if let fallbackProvider {
+                        let fallbackResult = try await transcribeAudioWithFallback(
+                            primaryProvider: provider,
+                            fallbackProvider: fallbackProvider,
+                            audio: combinedChunk
+                        )
+                        transcription = fallbackResult.result
+                        providerForStorage = fallbackResult.provider
+                        if fallbackProvider.id != provider.id {
+                            fallbackUsed = true
+                        }
+                        asrLatencyMs = Int(Date().timeIntervalSince(fallbackStart) * 1000)
+                    } else {
+                        let directResult = try await provider.transcribe(audio: combinedChunk)
+                        let directText = directResult.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !directText.isEmpty else {
+                            throw ASRError.transcriptionFailed("Streaming returned empty transcription")
+                        }
+                        transcription = directResult
+                        asrLatencyMs = Int(Date().timeIntervalSince(fallbackStart) * 1000)
+                    }
+                } else {
+                    transcription = TranscriptionResult(
+                        text: mergedText,
+                        language: final?.language ?? .unknown,
+                        isFinal: true
+                    )
+                }
+
+                if asrLatencyMs == nil {
+                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                }
+            } else {
+                let fallbackProvider = fallbackASRProvider(for: provider.id)
+                let batchStart = Date()
+                let batchResult = try await transcribeAudioWithFallback(
+                    primaryProvider: provider,
+                    fallbackProvider: fallbackProvider,
+                    audio: combinedChunk
+                )
+                transcription = batchResult.result
+                providerForStorage = batchResult.provider
+                if batchResult.provider.id != provider.id {
+                    fallbackUsed = true
+                }
+                if batchResult.provider.id == provider.id {
+                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                } else {
+                    asrLatencyMs = Int(Date().timeIntervalSince(batchStart) * 1000)
+                }
+            }
+
+            let now = Date()
+            let resolvedSessionStart = sessionStartDate ?? asrStart
+            let sessionElapsedMs = Int(now.timeIntervalSince(resolvedSessionStart) * 1000)
+            if streamFirstFinalMs == nil {
+                streamFirstFinalMs = sessionElapsedMs
+            }
+            if streamFirstPartialMs == nil {
+                streamFirstPartialMs = min(
+                    asrLatencyMs ?? sessionElapsedMs,
+                    streamFirstFinalMs ?? sessionElapsedMs
+                )
+            }
+
+            rawText = transcription.text
             var finalText = rawText
 
             // Auto Edit (optional)
             var correctionProviderId: String? = nil
-            var correctionLatencyMs: Int? = nil
             if settings.correctionEnabled,
                let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider) {
                 correctionProviderId = correctionProvider.id
@@ -319,12 +422,12 @@ final class VoiceRecordingViewModel: ObservableObject {
 
             await contextStore.addTranscription(finalText)
 
-            let totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
+            totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
 
             await RecordingStore.shared.saveRecording(
                 audio: combinedChunk,
-                asrProviderId: provider.id,
-                asrProviderName: provider.displayName,
+                asrProviderId: providerForStorage?.id ?? provider.id,
+                asrProviderName: providerForStorage?.displayName ?? provider.displayName,
                 correctionProviderId: correctionProviderId,
                 transcriptRaw: rawText,
                 transcriptFinal: finalText,
@@ -332,32 +435,110 @@ final class VoiceRecordingViewModel: ObservableObject {
                 userId: authSession.userId,
                 asrLatencyMs: asrLatencyMs,
                 correctionLatencyMs: correctionLatencyMs,
-                totalLatencyMs: totalLatencyMs
+                totalLatencyMs: totalLatencyMs,
+                streamMode: sessionMode,
+                firstPartialMs: streamFirstPartialMs,
+                firstFinalMs: streamFirstFinalMs,
+                fallbackUsed: fallbackUsed
             )
 
             transcribedText = finalText
             isProcessing = false
             statusText = "Ready"
+            let finalMetrics = StreamingMetrics(
+                providerId: providerForStorage?.id ?? provider.id,
+                providerName: providerForStorage?.displayName ?? provider.displayName,
+                mode: fallbackUsed ? "batch-fallback" : sessionMode,
+                startDate: streamMetrics?.startDate ?? Date(),
+                firstPartialMs: streamFirstPartialMs,
+                firstFinalMs: streamFirstFinalMs,
+                fallbackUsed: fallbackUsed,
+                error: nil
+            )
+            logStreamingMetrics(finalMetrics, totalMs: totalLatencyMs, asrMs: asrLatencyMs, correctionMs: correctionLatencyMs)
             deliverResult()
         } catch {
             if streamingActive {
                 try? await provider.stopStreaming()
                 stopStreamingResults()
+
+                do {
+                    let fallbackProvider = fallbackASRProvider(for: provider.id)
+                    let recovered = try await transcribeAudioWithFallback(
+                        primaryProvider: provider,
+                        fallbackProvider: fallbackProvider,
+                        audio: combinedChunk
+                    )
+                    let fallbackRaw = recovered.result.text
+                    let finalText = fallbackRaw.isEmpty ? transcribedText : fallbackRaw
+                    let recoveredFallbackUsed = recovered.provider.id != provider.id
+
+                    let finalMetrics = StreamingMetrics(
+                        providerId: recovered.provider.id,
+                        providerName: recovered.provider.displayName,
+                        mode: recoveredFallbackUsed ? "batch-fallback" : "stream-recovered",
+                        startDate: streamMetrics?.startDate ?? Date(),
+                        firstPartialMs: streamFirstPartialMs,
+                        firstFinalMs: streamFirstFinalMs,
+                        fallbackUsed: recoveredFallbackUsed || streamingActive,
+                        error: nil
+                    )
+
+                    await RecordingStore.shared.saveRecording(
+                        audio: combinedChunk,
+                        asrProviderId: recovered.provider.id,
+                        asrProviderName: recovered.provider.displayName,
+                        correctionProviderId: nil,
+                        transcriptRaw: fallbackRaw,
+                        transcriptFinal: finalText,
+                        error: nil,
+                        userId: authSession.userId,
+                        asrLatencyMs: asrLatencyMs,
+                        correctionLatencyMs: correctionLatencyMs,
+                        totalLatencyMs: totalLatencyMs,
+                        streamMode: recovered.provider.id == provider.id ? "stream-recovered" : "batch-fallback",
+                        firstPartialMs: streamFirstPartialMs,
+                        firstFinalMs: streamFirstFinalMs,
+                        fallbackUsed: recoveredFallbackUsed || streamingActive
+                    )
+
+                    transcribedText = finalText
+                    isProcessing = false
+                    statusText = "Ready"
+                    logStreamingMetrics(finalMetrics, totalMs: totalLatencyMs, asrMs: asrLatencyMs, correctionMs: correctionLatencyMs)
+                    deliverResult()
+                    streamMetrics = nil
+                    return
+                } catch {
+                    // keep fallback failure and continue normal error handling
+                }
+            } else {
+                try? await provider.stopStreaming()
+                stopStreamingResults()
+            }
+
+            if var metrics = streamMetrics {
+                metrics.error = "Stop pipeline failed: \(error.localizedDescription)"
+                logStreamingMetrics(metrics, totalMs: nil, asrMs: nil, correctionMs: nil)
             }
             await RecordingStore.shared.saveRecording(
                 audio: combinedChunk,
-                asrProviderId: provider.id,
-                asrProviderName: provider.displayName,
+                asrProviderId: providerForStorage?.id ?? provider.id,
+                asrProviderName: providerForStorage?.displayName ?? provider.displayName,
                 correctionProviderId: nil,
                 transcriptRaw: nil,
                 transcriptFinal: nil,
                 error: error.localizedDescription,
-                userId: authSession.userId
+                userId: authSession.userId,
+                streamMode: sessionMode,
+                fallbackUsed: streamingActive,
+                errorCode: "\(type(of: error)):\(errorCodeValue(for: error))"
             )
             isProcessing = false
             statusText = "Ready"
             showErrorMessage("Could not process audio: \(error.localizedDescription)")
         }
+        streamMetrics = nil
     }
 
     func startRecordingForKeyboard() async {
@@ -376,8 +557,41 @@ final class VoiceRecordingViewModel: ObservableObject {
         }
     }
 
-    private func resolveASRProvider() -> (any ASRProvider)? {
-        switch settings.selectedASRProvider {
+    private struct ASRProviderResolutionResult {
+        let provider: any ASRProvider
+        let usedFallback: Bool
+        let fallbackMessage: String
+    }
+
+    private func resolveASRProvider() -> ASRProviderResolutionResult? {
+        let selectedId = settings.selectedASRProvider
+
+        if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+            return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
+        }
+
+        if selectedId == "openai_whisper" || selectedId == "apple_speech" {
+            let provider = OpenAIWhisperProvider(keyStore: keyStore)
+            if provider.isAvailable {
+                return ASRProviderResolutionResult(provider: provider, usedFallback: false, fallbackMessage: "")
+            }
+            return nil
+        }
+
+        let fallback = OpenAIWhisperProvider(keyStore: keyStore)
+        if fallback.isAvailable {
+            return ASRProviderResolutionResult(
+                provider: fallback,
+                usedFallback: true,
+                fallbackMessage: "fallback: selected provider unavailable, using OpenAI"
+            )
+        }
+
+        return nil
+    }
+
+    private func asrProvider(for providerId: String) -> (any ASRProvider)? {
+        switch providerId {
         case "apple_speech":
             let provider = AppleLegacySpeechProvider(localeIdentifier: nil)
             return provider.isAvailable ? provider : nil
@@ -396,12 +610,36 @@ final class VoiceRecordingViewModel: ObservableObject {
             let provider = ArkASRProvider(keyStore: keyStore)
             return provider.isAvailable ? provider : nil
         case "deepgram":
-            let provider = DeepgramASRProvider(keyStore: keyStore)
+            let languageHint = deepgramLanguageHint(from: settings.defaultInputMode)
+            let resolvedModel = deepgramModelHint(from: settings.defaultInputMode)
+            let provider = DeepgramASRProvider(
+                keyStore: keyStore,
+                model: resolvedModel,
+                language: languageHint
+            )
             return provider.isAvailable ? provider : nil
         default:
-            // Default to OpenAI Whisper (batch transcription)
+            // Default to OpenAI Whisper (batch transcription).
             let provider = OpenAIWhisperProvider(keyStore: keyStore)
             return provider.isAvailable ? provider : nil
+        }
+    }
+
+    private func deepgramModelHint(from inputMode: String) -> String {
+        switch inputMode {
+        case "pinyin":
+            return "nova-2"
+        default:
+            return "nova-3"
+        }
+    }
+
+    private func deepgramLanguageHint(from inputMode: String) -> String? {
+        switch inputMode {
+        case "pinyin":
+            return "zh-CN"
+        default:
+            return nil
         }
     }
 
@@ -424,7 +662,16 @@ final class VoiceRecordingViewModel: ObservableObject {
                 let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { continue }
                 await MainActor.run {
-                    self.transcribedText = text
+                    if var metrics = self.streamMetrics {
+                        if metrics.firstPartialMs == nil {
+                            metrics.firstPartialMs = Int(Date().timeIntervalSince(metrics.startDate) * 1000)
+                        }
+                        if result.isFinal, metrics.firstFinalMs == nil {
+                            metrics.firstFinalMs = Int(Date().timeIntervalSince(metrics.startDate) * 1000)
+                        }
+                        self.streamMetrics = metrics
+                    }
+                    self.transcribedText = self.mergeStreamingText(text, into: self.transcribedText)
                     self.statusText = result.isFinal ? "Refining..." : "Streaming..."
                 }
             }
@@ -436,9 +683,167 @@ final class VoiceRecordingViewModel: ObservableObject {
         streamingTask = nil
     }
 
+    private func mergedStreamingText(finalText: String?, accumulatedText: String) -> String {
+        let final = finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let accumulated = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if final.isEmpty { return accumulated }
+        if accumulated.isEmpty { return final }
+        if final == accumulated { return accumulated }
+        if final.hasPrefix(accumulated) { return final }
+        if accumulated.hasSuffix(final) { return accumulated }
+        return mergeStreamingText(final, into: accumulated)
+    }
+
+    private func mergeStreamingText(_ incomingText: String, into accumulatedText: String) -> String {
+        let incoming = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accumulated = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if incoming.isEmpty { return accumulated }
+        if accumulated.isEmpty { return incoming }
+        if incoming == accumulated { return accumulated }
+        if incoming.hasPrefix(accumulated) { return incoming }
+        if accumulated.hasSuffix(incoming) { return accumulated }
+
+        let overlap = longestSuffixPrefixOverlap(accumulated, incoming)
+        if overlap > 0 {
+            let suffix = incoming.dropFirst(overlap)
+            if suffix.isEmpty { return accumulated }
+            if CharacterSet.alphanumerics.contains(incoming.unicodeScalars.first!),
+               CharacterSet.alphanumerics.contains(accumulated.unicodeScalars.last!) {
+                return accumulated + String(suffix)
+            }
+            return "\(accumulated) \(String(suffix))"
+        }
+
+        if shouldInsertSpace(between: accumulated, and: incoming) {
+            return "\(accumulated) \(incoming)"
+        }
+
+        return accumulated + incoming
+    }
+
+    private func shouldInsertSpace(between accumulated: String, and incoming: String) -> Bool {
+        guard let leftLast = accumulated.unicodeScalars.last,
+              let rightFirst = incoming.unicodeScalars.first else {
+            return false
+        }
+
+        let leftIsWordLike = CharacterSet.alphanumerics.contains(leftLast)
+        let rightIsWordLike = CharacterSet.alphanumerics.contains(rightFirst)
+        let rightIsPunctuation = CharacterSet.punctuationCharacters.contains(rightFirst)
+        return leftIsWordLike && rightIsWordLike && !rightIsPunctuation
+    }
+
+    private func longestSuffixPrefixOverlap(_ accumulated: String, _ incoming: String) -> Int {
+        let leftChars = Array(accumulated)
+        let rightChars = Array(incoming)
+        let maxLength = min(leftChars.count, rightChars.count)
+
+        if maxLength == 0 { return 0 }
+
+        for length in stride(from: maxLength, through: 1, by: -1) {
+            let left = String(leftChars[(leftChars.count - length)..<leftChars.count])
+            let right = String(rightChars[..<length])
+            if left == right {
+                return length
+            }
+        }
+        return 0
+    }
+
+    private func shouldFallbackToBatchFromStreaming(finalText: String, accumulatedText: String) -> Bool {
+        let final = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if final.isEmpty {
+            return true
+        }
+        let accumulated = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if accumulated.isEmpty {
+            return false
+        }
+        if final.count < 3 {
+            return true
+        }
+        if accumulated.count >= 8 && final.count < max(3, accumulated.count / 2) {
+            return true
+        }
+        return false
+    }
+
+    private func fallbackASRProvider(for providerId: String) -> (any ASRProvider)? {
+        if providerId == "openai_whisper" {
+            return nil
+        }
+        let fallback = OpenAIWhisperProvider(keyStore: keyStore)
+        guard fallback.isAvailable else { return nil }
+        return fallback
+    }
+
+    private func transcribeAudioWithFallback(
+        primaryProvider: any ASRProvider,
+        fallbackProvider: (any ASRProvider)?,
+        audio: AudioChunk
+    ) async throws -> (provider: any ASRProvider, result: TranscriptionResult) {
+        do {
+            let result = try await primaryProvider.transcribe(audio: audio)
+            if !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return (provider: primaryProvider, result: result)
+            }
+            throw ASRError.transcriptionFailed("Primary provider returned empty transcription")
+        } catch {
+            if let fallbackProvider {
+                let result = try await fallbackProvider.transcribe(audio: audio)
+                let fallbackText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !fallbackText.isEmpty else {
+                    throw ASRError.transcriptionFailed("Fallback provider returned empty transcription")
+                }
+                return (provider: fallbackProvider, result: result)
+            }
+            throw error
+        }
+    }
+
     private func showErrorMessage(_ message: String) {
         errorMessage = message
         showError = true
+    }
+
+    private func errorCodeValue(for error: Error) -> String {
+        if let ns = error as NSError? {
+            return "\(ns.domain):\(ns.code)"
+        }
+        return String(describing: type(of: error))
+    }
+
+    private func logStreamingMetrics(
+        _ metrics: StreamingMetrics,
+        totalMs: Int?,
+        asrMs: Int?,
+        correctionMs: Int?
+    ) {
+        let asr = asrMs.map(String.init) ?? "-"
+        let total = totalMs.map(String.init) ?? "-"
+        let edit = correctionMs.map(String.init) ?? "-"
+        let firstPartial = metrics.firstPartialMs.map(String.init) ?? "-"
+        let firstFinal = metrics.firstFinalMs.map(String.init) ?? "-"
+        let mode = metrics.mode
+        let fallback = metrics.fallbackUsed ? "true" : "false"
+        let status = metrics.error == nil ? "success" : "error"
+        print(
+            """
+            streaming_metrics \
+            provider=\(metrics.providerId) \
+            mode=\(mode) \
+            first_partial_ms=\(firstPartial) \
+            first_final_ms=\(firstFinal) \
+            asr_ms=\(asr) \
+            correction_ms=\(edit) \
+            total_ms=\(total) \
+            fallback=\(fallback) \
+            status=\(status) \
+            error=\(metrics.error ?? "none")
+            """
+        )
     }
 }
 

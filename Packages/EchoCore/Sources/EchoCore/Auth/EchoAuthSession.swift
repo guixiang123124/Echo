@@ -97,15 +97,19 @@ public final class EchoAuthSession: ObservableObject {
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedEmail.isEmpty, !password.isEmpty else {
             errorMessage = "Email and password are required."
+            print("⚠️ Email Auth: Empty email or password")
             return
         }
 
         if normalizedBackendURLString == nil {
             // Local-only fallback for privacy-first mode.
+            print("ℹ️ Email Auth: Using local-only mode (no backend configured)")
             let localUser = makeLocalEmailUser(email: normalizedEmail)
             persistSession(user: localUser, accessToken: nil, refreshToken: nil)
             return
         }
+
+        print("ℹ️ Email Auth: Signing in user \(normalizedEmail)")
 
         isLoading = true
         defer { isLoading = false }
@@ -114,9 +118,12 @@ public final class EchoAuthSession: ObservableObject {
                 path: "/v1/auth/login",
                 payload: EmailPasswordPayload(email: normalizedEmail, password: password)
             )
+            print("✅ Email Auth: Successfully authenticated user \(result.user.uid)")
             persistSession(user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken)
         } catch {
-            errorMessage = error.localizedDescription
+            let detailedError = formatAuthError(error, provider: "Email")
+            errorMessage = detailedError
+            print("⚠️ Email Auth: Failed - \(detailedError)")
         }
     }
 
@@ -125,14 +132,18 @@ public final class EchoAuthSession: ObservableObject {
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedEmail.isEmpty, !password.isEmpty else {
             errorMessage = "Email and password are required."
+            print("⚠️ Email Signup: Empty email or password")
             return
         }
 
         if normalizedBackendURLString == nil {
+            print("ℹ️ Email Signup: Using local-only mode (no backend configured)")
             let localUser = makeLocalEmailUser(email: normalizedEmail)
             persistSession(user: localUser, accessToken: nil, refreshToken: nil)
             return
         }
+
+        print("ℹ️ Email Signup: Registering user \(normalizedEmail)")
 
         isLoading = true
         defer { isLoading = false }
@@ -141,9 +152,12 @@ public final class EchoAuthSession: ObservableObject {
                 path: "/v1/auth/register",
                 payload: EmailPasswordPayload(email: normalizedEmail, password: password)
             )
+            print("✅ Email Signup: Successfully registered user \(result.user.uid)")
             persistSession(user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken)
         } catch {
-            errorMessage = error.localizedDescription
+            let detailedError = formatAuthError(error, provider: "Email")
+            errorMessage = detailedError
+            print("⚠️ Email Signup: Failed - \(detailedError)")
         }
     }
 
@@ -152,14 +166,19 @@ public final class EchoAuthSession: ObservableObject {
 
         guard let backendBaseURL = normalizedBackendURLString else {
             errorMessage = "Apple sign-in requires Cloud API URL in Settings."
+            print("⚠️ Apple Auth: No backend URL configured")
             return
         }
 
         guard let identityToken = credential.identityToken,
               let tokenString = String(data: identityToken, encoding: .utf8) else {
             errorMessage = "Unable to fetch Apple identity token."
+            print("⚠️ Apple Auth: Failed to extract identity token from credential")
             return
         }
+
+        print("ℹ️ Apple Auth: Starting authentication with backend at \(backendBaseURL)")
+        print("ℹ️ Apple Auth: User ID: \(credential.user)")
 
         isLoading = true
         defer { isLoading = false }
@@ -176,9 +195,12 @@ public final class EchoAuthSession: ObservableObject {
                 ),
                 baseURLString: backendBaseURL
             )
+            print("✅ Apple Auth: Successfully authenticated user \(result.user.uid)")
             persistSession(user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken)
         } catch {
-            errorMessage = error.localizedDescription
+            let detailedError = formatAuthError(error, provider: "Apple")
+            errorMessage = detailedError
+            print("⚠️ Apple Auth: Failed - \(detailedError)")
         }
     }
 
@@ -187,16 +209,20 @@ public final class EchoAuthSession: ObservableObject {
 
         guard let backendBaseURL = normalizedBackendURLString else {
             errorMessage = "Google sign-in requires Cloud API URL in Settings."
+            print("⚠️ Google Auth: No backend URL configured")
             return
         }
 
         guard !idToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             errorMessage = "Missing Google ID token."
+            print("⚠️ Google Auth: Empty ID token provided")
             return
         }
 
         isLoading = true
         defer { isLoading = false }
+
+        print("ℹ️ Google Auth: Starting authentication with backend at \(backendBaseURL)")
 
         do {
             let result = try await authenticate(
@@ -204,9 +230,12 @@ public final class EchoAuthSession: ObservableObject {
                 payload: GoogleSignInPayload(idToken: idToken),
                 baseURLString: backendBaseURL
             )
+            print("✅ Google Auth: Successfully authenticated user \(result.user.uid)")
             persistSession(user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken)
         } catch {
-            errorMessage = error.localizedDescription
+            let detailedError = formatAuthError(error, provider: "Google")
+            errorMessage = detailedError
+            print("⚠️ Google Auth: Failed - \(detailedError)")
         }
     }
 
@@ -314,9 +343,40 @@ private extension EchoAuthSession {
         guard let http = response as? HTTPURLResponse else {
             throw AuthError.invalidResponse
         }
+
+        // Extract diagnostic headers
+        let backendErrorCode = http.value(forHTTPHeaderField: "X-Error-Code")
+        let backendErrorReason = http.value(forHTTPHeaderField: "X-Error-Reason")
+        let requestId = http.value(forHTTPHeaderField: "X-Request-Id")
+
         guard (200..<300).contains(http.statusCode) else {
-            let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
-            throw AuthError.server(message)
+            var message = "HTTP \(http.statusCode)"
+
+            // Try to parse error response
+            if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: data) {
+                message = errorResponse.message ?? errorResponse.error ?? message
+                if let code = errorResponse.code {
+                    message = "[\(code)] \(message)"
+                }
+                if let details = errorResponse.details {
+                    message += " - \(details)"
+                }
+            } else if let plainMessage = String(data: data, encoding: .utf8), !plainMessage.isEmpty {
+                message = plainMessage
+            }
+
+            // Add backend diagnostic info
+            if let errorCode = backendErrorCode {
+                message += " (Backend Code: \(errorCode))"
+            }
+            if let errorReason = backendErrorReason {
+                message += " (Reason: \(errorReason))"
+            }
+            if let requestId {
+                print("ℹ️ Auth Request ID: \(requestId)")
+            }
+
+            throw AuthError.server(message, statusCode: http.statusCode)
         }
 
         let envelope = try JSONDecoder().decode(AuthEnvelope.self, from: data)
@@ -329,6 +389,47 @@ private extension EchoAuthSession {
             accessToken: envelope.accessToken ?? envelope.token,
             refreshToken: envelope.refreshToken
         )
+    }
+
+    func formatAuthError(_ error: Error, provider: String) -> String {
+        if let authError = error as? AuthError {
+            switch authError {
+            case .backendNotConfigured:
+                return "\(provider) sign-in requires Cloud API URL in Settings. Please configure it in the app settings."
+            case .invalidResponse:
+                return "\(provider) authentication response is invalid. Please check your backend configuration or try again."
+            case .server(let message, let statusCode):
+                // Format server errors for better user understanding
+                if statusCode == 401 {
+                    return "\(provider) authentication failed: Invalid credentials or expired token. Please try signing in again."
+                } else if statusCode == 403 {
+                    return "\(provider) authentication forbidden: Your account may not have permission. Contact support if this persists."
+                } else if statusCode == 404 {
+                    return "\(provider) authentication endpoint not found. Please verify your Cloud API URL is correct."
+                } else if statusCode == 500 || statusCode == 502 || statusCode == 503 {
+                    return "\(provider) service temporarily unavailable. Please try again in a few moments."
+                } else if message.contains("token") || message.contains("Token") {
+                    return "\(provider) token validation failed: \(message)"
+                } else if message.contains("email") || message.contains("Email") {
+                    return "\(provider) email verification issue: \(message)"
+                } else {
+                    return "\(provider) authentication failed: \(message)"
+                }
+            }
+        } else if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet:
+                return "No internet connection. Please check your network and try again."
+            case .timedOut:
+                return "\(provider) authentication timed out. Please check your connection and try again."
+            case .cannotFindHost, .cannotConnectToHost:
+                return "Cannot connect to authentication server. Please verify your Cloud API URL."
+            default:
+                return "Network error during \(provider) sign-in: \(urlError.localizedDescription)"
+            }
+        }
+
+        return "\(provider) sign-in error: \(error.localizedDescription)"
     }
 }
 
@@ -386,7 +487,7 @@ private struct EchoUserDTO: Decodable {
 private enum AuthError: LocalizedError {
     case backendNotConfigured
     case invalidResponse
-    case server(String)
+    case server(String, statusCode: Int)
 
     var errorDescription: String? {
         switch self {
@@ -394,8 +495,15 @@ private enum AuthError: LocalizedError {
             return "Cloud API URL is not configured."
         case .invalidResponse:
             return "Authentication response format is invalid."
-        case .server(let message):
+        case .server(let message, _):
             return message
         }
     }
+}
+
+private struct ErrorResponse: Decodable {
+    let error: String?
+    let message: String?
+    let code: String?
+    let details: String?
 }

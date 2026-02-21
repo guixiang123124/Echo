@@ -75,31 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             voiceInputService.$partialTranscription
                 .sink { [weak self] text in
-                    guard let self, let textInserter else { return }
+                    guard let self else { return }
                     guard voiceInputService.isStreamingSessionActive else { return }
 
-                    if !self.isStreamingInsertionSessionActive {
-                        switch textInserter.startStreamingInsertionSession() {
-                        case .attached:
-                            self.isStreamingInsertionSessionActive = true
-                            self.diagnostics.log("Streaming insertion attached")
-                        case .failed(let reason):
-                            self.diagnostics.log("Streaming insertion attach pending: \(reason)")
-                            return
-                        }
-                    }
-
-                    switch textInserter.updateStreamingInsertion(text) {
-                    case .updated(let method, let characterCount):
-                        if self.lastStreamingUpdateMethod != method {
-                            self.lastStreamingUpdateMethod = method
-                            self.diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
-                        }
-                    case .failed(let reason):
-                        textInserter.cancelStreamingInsertion()
-                        self.isStreamingInsertionSessionActive = false
-                        self.lastStreamingUpdateMethod = nil
-                        self.diagnostics.log("Streaming insertion canceled: \(reason)")
+                    let insertionText = (voiceInputService.bestStreamingPartialTranscription.isEmpty
+                                         ? text
+                                         : voiceInputService.bestStreamingPartialTranscription).trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task { @MainActor in
+                        await self.handleStreamingInsertionUpdate(insertionText)
                     }
                 }
                 .store(in: &cancellables)
@@ -187,12 +170,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             runScreenshotAutomation()
         }
 
+        logStartupDiagnostics()
         print("✅ EchoMac started successfully")
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopHotkeyMonitoring()
         print("👋 EchoMac terminated")
+    }
+
+    private func logStartupDiagnostics() {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        let commit = resolveGitCommit() ?? "unknown"
+
+        Task {
+            let storageInfo = await RecordingStore.shared.storageInfo()
+            let health = await RecordingStore.shared.schemaHealth()
+
+            print("🧾 Startup diagnostics: version=\(version) build=\(build) commit=\(commit)")
+            print("🧾 Startup diagnostics DB path: \(storageInfo.databaseURL.path)")
+            print("🧾 Startup diagnostics schema version: \(health.schemaVersion)")
+            print("🧾 Startup diagnostics schema required columns: \(health.requiredColumns.count)")
+            print("🧾 Startup diagnostics schema missing columns: \(health.missingColumns)")
+
+            if health.isHealthy {
+                print("✅ Startup diagnostics: schema health check passed")
+            } else {
+                print("❌ Startup diagnostics: schema health check failed")
+            }
+        }
+    }
+
+    private func resolveGitCommit() -> String? {
+        for candidate in resolveProjectRoots() {
+            let arguments = ["-C", candidate.path, "rev-parse", "--short", "HEAD"]
+            guard let resolved = runShellCommand("/usr/bin/env", arguments: ["git"] + arguments),
+                  !resolved.isEmpty else {
+                continue
+            }
+            return resolved
+        }
+        return nil
+    }
+
+    private func resolveProjectRoots() -> [URL] {
+        let fileManager = FileManager.default
+        var candidates: [URL] = []
+
+        let cwd = URL(fileURLWithPath: fileManager.currentDirectoryPath)
+        let bundleURL = URL(fileURLWithPath: Bundle.main.bundlePath)
+        var current = bundleURL
+
+        candidates.append(bundleURL)
+        candidates.append(cwd)
+        candidates.append(cwd.appendingPathComponent("..").standardizedFileURL)
+        candidates.append(cwd.appendingPathComponent("../..").standardizedFileURL)
+        candidates.append(cwd.appendingPathComponent("../../..").standardizedFileURL)
+
+        for _ in 0..<8 {
+            current = current.deletingLastPathComponent()
+            candidates.append(current)
+            if current.path == "/" { break }
+        }
+
+        return candidates
+            .filter { fileManager.fileExists(atPath: $0.path) }
+            .filter { !$0.path.hasPrefix(NSHomeDirectory() + "/Library/Developer/Xcode/DerivedData") }
+            .filter { fileManager.fileExists(atPath: $0.appendingPathComponent(".git").path) }
+    }
+
+    private func runShellCommand(_ executablePath: String, arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+
+        guard process.terminationStatus == 0 else { return nil }
+        let raw = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let line = raw.split { $0 == "\n" || $0 == "\r" }.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return line?.isEmpty == false ? line : nil
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -267,9 +334,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         isStreamingInsertionSessionActive = true
                         lastStreamingUpdateMethod = nil
                         diagnostics.log("Streaming insertion attached at record start")
-                    case .failed(let reason):
+                    case .failed(let failure):
                         isStreamingInsertionSessionActive = false
-                        diagnostics.log("Streaming insertion attach deferred: \(reason)")
+                        self.logStreamingInsertionFailure("attach", reason: failure)
                     }
                 } else {
                     isStreamingInsertionSessionActive = false
@@ -323,8 +390,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     text = bestObservedText
                 }
 
-                if isStreamingInsertionSessionActive {
-                    let finishOutcome = textInserter?.finishStreamingInsertion(with: text)
+                    if isStreamingInsertionSessionActive {
+                        let finishOutcome = textInserter?.finishStreamingInsertion(with: text)
                     isStreamingInsertionSessionActive = false
                     lastStreamingUpdateMethod = nil
 
@@ -334,8 +401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         appState.recordingState = .idle
                         hideRecordingPanel()
                         return
-                    case .failed(let reason)?:
-                        diagnostics.log("Streaming insertion finalize fallback: \(reason)")
+                    case .failed(let failure)?:
+                        self.logStreamingInsertionFailure("finalize", reason: failure)
                     case nil:
                         diagnostics.log("Streaming insertion finalize fallback: no active session")
                     }
@@ -389,6 +456,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     }
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func handleStreamingInsertionUpdate(_ text: String) async {
+        guard let textInserter else { return }
+
+        func attachStreamingSession() async -> Bool {
+            await reactivateInsertionTarget()
+            switch textInserter.startStreamingInsertionSession() {
+            case .attached:
+                self.isStreamingInsertionSessionActive = true
+                self.lastStreamingUpdateMethod = nil
+                diagnostics.log("Streaming insertion attached")
+                return true
+            case .failed(let failure):
+                self.logStreamingInsertionFailure("attach", reason: failure)
+                return false
+            }
+        }
+
+        if !isStreamingInsertionSessionActive {
+            let attached = await attachStreamingSession()
+            if !attached {
+                return
+            }
+        }
+
+        func applyStreamingUpdate() -> TextInserter.StreamingUpdateResult {
+            textInserter.updateStreamingInsertion(text)
+        }
+
+        let outcome = applyStreamingUpdate()
+        switch outcome {
+        case .updated(let method, let characterCount):
+            if self.lastStreamingUpdateMethod != method {
+                self.lastStreamingUpdateMethod = method
+                diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
+            }
+        case .failed(let failure):
+            if failure.category == .focus {
+                diagnostics.log("Streaming insertion focus lost, reattach & retry")
+
+                textInserter.cancelStreamingInsertion()
+                self.isStreamingInsertionSessionActive = false
+                self.lastStreamingUpdateMethod = nil
+
+                guard await attachStreamingSession() else { return }
+
+                switch applyStreamingUpdate() {
+                case .updated(let method, let characterCount):
+                    if self.lastStreamingUpdateMethod != method {
+                        self.lastStreamingUpdateMethod = method
+                        diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
+                    }
+                case .failed(let retryFailure):
+                    textInserter.cancelStreamingInsertion()
+                    self.isStreamingInsertionSessionActive = false
+                    self.lastStreamingUpdateMethod = nil
+                    self.logStreamingInsertionFailure("update", reason: retryFailure)
+                }
+                return
+            }
+
+            textInserter.cancelStreamingInsertion()
+            self.isStreamingInsertionSessionActive = false
+            self.lastStreamingUpdateMethod = nil
+            self.logStreamingInsertionFailure("update", reason: failure)
         }
     }
 
@@ -511,6 +646,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
            frontApp.bundleIdentifier != Bundle.main.bundleIdentifier {
             lastExternalApp = frontApp
         }
+    }
+
+    private func logStreamingInsertionFailure(_ stage: String, reason: TextInserter.StreamingInsertFailure) {
+        diagnostics.log("Streaming insertion \(stage) failed [\(reason.category.rawValue)] \(reason.details)")
     }
 
     private func reactivateInsertionTarget() async {
