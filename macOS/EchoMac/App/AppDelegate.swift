@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let diagnostics = DiagnosticsState.shared
     private var lastExternalApp: NSRunningApplication?
     private var silenceMonitorTask: Task<Void, Never>?
+    private var lastStreamingUpdateMethod: String?
 
     // Services
     private var voiceInputService: VoiceInputService?
@@ -74,15 +75,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             voiceInputService.$partialTranscription
                 .sink { [weak self] text in
-                    guard let self else { return }
-                    guard self.isStreamingInsertionSessionActive,
-                          let textInserter else { return }
+                    guard let self, let textInserter else { return }
+                    guard voiceInputService.isStreamingSessionActive else { return }
 
-                    let didUpdate = textInserter.updateStreamingInsertion(text)
-                    if !didUpdate {
+                    if !self.isStreamingInsertionSessionActive {
+                        switch textInserter.startStreamingInsertionSession() {
+                        case .attached:
+                            self.isStreamingInsertionSessionActive = true
+                            self.diagnostics.log("Streaming insertion attached")
+                        case .failed(let reason):
+                            self.diagnostics.log("Streaming insertion attach pending: \(reason)")
+                            return
+                        }
+                    }
+
+                    switch textInserter.updateStreamingInsertion(text) {
+                    case .updated(let method, let characterCount):
+                        if self.lastStreamingUpdateMethod != method {
+                            self.lastStreamingUpdateMethod = method
+                            self.diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
+                        }
+                    case .failed(let reason):
                         textInserter.cancelStreamingInsertion()
                         self.isStreamingInsertionSessionActive = false
-                        self.diagnostics.log("Streaming insertion canceled (focus/selection changed)")
+                        self.lastStreamingUpdateMethod = nil
+                        self.diagnostics.log("Streaming insertion canceled: \(reason)")
                     }
                 }
                 .store(in: &cancellables)
@@ -243,7 +260,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 try await voiceInputService?.startRecording()
                 if voiceInputService?.isStreamingSessionActive == true,
                    let textInserter {
-                    isStreamingInsertionSessionActive = textInserter.startStreamingInsertionSession()
+                    // Keep target app focused during live streaming insertion.
+                    await reactivateInsertionTarget()
+                    switch textInserter.startStreamingInsertionSession() {
+                    case .attached:
+                        isStreamingInsertionSessionActive = true
+                        lastStreamingUpdateMethod = nil
+                        diagnostics.log("Streaming insertion attached at record start")
+                    case .failed(let reason):
+                        isStreamingInsertionSessionActive = false
+                        diagnostics.log("Streaming insertion attach deferred: \(reason)")
+                    }
                 } else {
                     isStreamingInsertionSessionActive = false
                 }
@@ -275,19 +302,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         Task { @MainActor in
             // Update state
             appState.recordingState = .transcribing
-            defer { self.isStreamingInsertionSessionActive = false }
+            defer {
+                self.isStreamingInsertionSessionActive = false
+                self.lastStreamingUpdateMethod = nil
+            }
 
             do {
                 // Stop recording and transcribe
-                let text = try await voiceInputService?.stopRecording() ?? ""
+                let rawText = try await voiceInputService?.stopRecording() ?? ""
+                let pillText = (voiceInputService?.partialTranscription ?? appState.partialTranscription)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let bestPartialText = voiceInputService?.bestStreamingPartialTranscription
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let bestObservedText = bestPartialText.count >= pillText.count ? bestPartialText : pillText
+                var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                // Keep insertion result aligned with what user saw during streaming when provider final collapses.
+                if bestObservedText.count >= 12 && text.count + 6 <= bestObservedText.count {
+                    diagnostics.log("Using best partial fallback for insertion (final=\(text.count), partial=\(bestObservedText.count))")
+                    text = bestObservedText
+                }
+
                 if isStreamingInsertionSessionActive {
-                    let consumedByStreamingInsertion = textInserter?.finishStreamingInsertion(with: text) ?? false
+                    let finishOutcome = textInserter?.finishStreamingInsertion(with: text)
                     isStreamingInsertionSessionActive = false
-                    if consumedByStreamingInsertion {
-                        diagnostics.log("Streaming insertion finalized (\(text.count) chars)")
+                    lastStreamingUpdateMethod = nil
+
+                    switch finishOutcome {
+                    case .updated(let method, _)?:
+                        diagnostics.log("Streaming insertion finalized via \(method) (\(text.count) chars)")
                         appState.recordingState = .idle
                         hideRecordingPanel()
                         return
+                    case .failed(let reason)?:
+                        diagnostics.log("Streaming insertion finalize fallback: \(reason)")
+                    case nil:
+                        diagnostics.log("Streaming insertion finalize fallback: no active session")
                     }
 
                     textInserter?.cancelStreamingInsertion()

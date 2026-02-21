@@ -8,6 +8,16 @@ import Carbon.HIToolbox
 public final class TextInserter {
     // MARK: - Properties
 
+    public enum StreamingAttachResult {
+        case attached
+        case failed(String)
+    }
+
+    public enum StreamingUpdateResult {
+        case updated(method: String, characterCount: Int)
+        case failed(String)
+    }
+
     private struct StreamingInsertionState {
         let targetElement: AXUIElement
         var insertionRange: NSRange
@@ -59,87 +69,84 @@ public final class TextInserter {
     // MARK: - Streaming Insertion
 
     /// Start a replacement-based streaming insertion session against the focused UI element.
-    /// Returns true when the focused element supports Accessibility replacement.
-    public func startStreamingInsertionSession() -> Bool {
-        guard let focusedElement = focusedElement(),
-              let currentValue = elementValue(for: focusedElement),
-              let selectedRange = selectedTextRange(for: focusedElement) else {
-            return false
+    public func startStreamingInsertionSession() -> StreamingAttachResult {
+        guard let focusedElement = focusedElement() else {
+            return .failed("no focused element")
         }
 
-        let nsText = currentValue as NSString
-        let normalizedStart = max(0, min(Int(selectedRange.location), nsText.length))
-        let normalizedLength = max(0, min(Int(selectedRange.length), nsText.length - normalizedStart))
-        let normalizedRange = NSRange(location: normalizedStart, length: normalizedLength)
-
-        let initialInsertedText: String
-        if normalizedRange.length > 0 {
-            initialInsertedText = nsText.substring(with: normalizedRange)
-        } else {
-            initialInsertedText = ""
+        guard let selectedRange = selectedTextRange(for: focusedElement) else {
+            return .failed("focused element has no selected range")
         }
 
+        let normalizedRange = normalizedRange(for: focusedElement, selectedRange)
         streamingState = StreamingInsertionState(
             targetElement: focusedElement,
             insertionRange: normalizedRange,
-            expectedInsertedText: initialInsertedText
+            expectedInsertedText: ""
         )
-        return true
+        return .attached
     }
 
     /// Replace the currently active streaming insertion segment with the latest partial text.
-    /// Returns false when the Accessibility session can no longer be maintained.
-    public func updateStreamingInsertion(_ text: String) -> Bool {
-        guard var state = streamingState else { return false }
-        guard isStreamingTargetStillValid(for: state) else {
+    public func updateStreamingInsertion(_ text: String) -> StreamingUpdateResult {
+        guard var state = streamingState else { return .failed("no active streaming session") }
+
+        guard let focused = focusedElement(), axElementsEqual(focused, state.targetElement) else {
             streamingState = nil
-            return false
+            return .failed("focus moved to different element")
+        }
+
+        let replacementRange = normalizedRange(for: state.targetElement, state.insertionRange)
+        state.insertionRange = replacementRange
+
+        if replaceSelectedRange(on: state.targetElement, range: replacementRange, with: text) {
+            let updatedRange = NSRange(location: replacementRange.location, length: (text as NSString).length)
+            state.insertionRange = updatedRange
+            state.expectedInsertedText = text
+            streamingState = state
+            _ = setSelectedRange(state.targetElement, location: updatedRange.location + updatedRange.length, length: 0)
+            return .updated(method: "selected-text", characterCount: text.count)
         }
 
         guard let currentValue = elementValue(for: state.targetElement) else {
             streamingState = nil
-            return false
+            return .failed("unable to read element value for fallback replacement")
         }
 
         let nsText = currentValue as NSString
-        let safeRange = state.insertionRange
-        guard safeRange.location != NSNotFound,
-              safeRange.location >= 0,
-              safeRange.length >= 0,
-              safeRange.location <= nsText.length,
-              safeRange.location + safeRange.length <= nsText.length else {
+        let safeRange = normalizedRange(forLength: nsText.length, range: replacementRange)
+        guard safeRange.location != NSNotFound else {
             streamingState = nil
-            return false
+            return .failed("replacement range invalid")
         }
 
         let currentSegment = nsText.substring(with: safeRange)
-        guard currentSegment == state.expectedInsertedText else {
-            // External edits touched our insertion segment; abort streaming mode to avoid corrupting text.
+        if !state.expectedInsertedText.isEmpty && currentSegment != state.expectedInsertedText {
             streamingState = nil
-            return false
+            return .failed("insertion segment diverged from expected text")
         }
 
         let replaced = nsText.replacingCharacters(in: safeRange, with: text)
         guard setElementValue(state.targetElement, replaced) else {
             streamingState = nil
-            return false
+            return .failed("set value replacement failed")
         }
 
         let updatedRange = NSRange(location: safeRange.location, length: (text as NSString).length)
         state.insertionRange = updatedRange
         state.expectedInsertedText = text
         streamingState = state
-
         _ = setSelectedRange(state.targetElement, location: updatedRange.location + updatedRange.length, length: 0)
-        return true
+        return .updated(method: "ax-value", characterCount: text.count)
     }
 
     /// Finish streaming insertion and replace the active segment with final text.
-    /// Returns false if streaming session was not active.
-    public func finishStreamingInsertion(with finalText: String) -> Bool {
-        guard updateStreamingInsertion(finalText) else { return false }
-        streamingState = nil
-        return true
+    public func finishStreamingInsertion(with finalText: String) -> StreamingUpdateResult {
+        let outcome = updateStreamingInsertion(finalText)
+        if case .updated = outcome {
+            streamingState = nil
+        }
+        return outcome
     }
 
     /// Cancel any active streaming insertion session.
@@ -147,36 +154,41 @@ public final class TextInserter {
         streamingState = nil
     }
 
-    private func isStreamingTargetStillValid(for state: StreamingInsertionState) -> Bool {
-        guard let focusedElement = focusedElement(),
-              axElementsEqual(focusedElement, state.targetElement) else {
+    private func normalizedRange(for element: AXUIElement, _ range: CFRange) -> NSRange {
+        if let value = elementValue(for: element) {
+            let nsText = value as NSString
+            return normalizedRange(forLength: nsText.length, range: NSRange(location: range.location, length: range.length))
+        }
+        return NSRange(location: max(0, range.location), length: max(0, range.length))
+    }
+
+    private func normalizedRange(for element: AXUIElement, _ range: NSRange) -> NSRange {
+        if let value = elementValue(for: element) {
+            let nsText = value as NSString
+            return normalizedRange(forLength: nsText.length, range: range)
+        }
+        return NSRange(location: max(0, range.location), length: max(0, range.length))
+    }
+
+    private func normalizedRange(forLength length: Int, range: NSRange) -> NSRange {
+        guard length >= 0 else { return NSRange(location: NSNotFound, length: 0) }
+        let start = max(0, min(range.location, length))
+        let maxLen = max(0, length - start)
+        let normalizedLength = max(0, min(range.length, maxLen))
+        return NSRange(location: start, length: normalizedLength)
+    }
+
+    private func replaceSelectedRange(on element: AXUIElement, range: NSRange, with text: String) -> Bool {
+        guard setSelectedRange(element, location: range.location, length: range.length) else {
             return false
         }
 
-        guard let selectedRange = selectedTextRange(for: state.targetElement) else {
-            return false
-        }
-
-        let caretLocation = state.insertionRange.location + state.insertionRange.length
-        let isCaretAtExpectedEnd = selectedRange.location == caretLocation && selectedRange.length == 0
-        let isSegmentSelected = selectedRange.location == state.insertionRange.location
-            && selectedRange.length == state.insertionRange.length
-        guard isCaretAtExpectedEnd || isSegmentSelected else {
-            return false
-        }
-
-        guard let currentValue = elementValue(for: state.targetElement) else {
-            return false
-        }
-
-        let nsText = currentValue as NSString
-        guard state.insertionRange.location >= 0,
-              state.insertionRange.location + state.insertionRange.length <= nsText.length else {
-            return false
-        }
-
-        let actualInsertedText = nsText.substring(with: state.insertionRange)
-        return actualInsertedText == state.expectedInsertedText
+        let status = AXUIElementSetAttributeValue(
+            element,
+            kAXSelectedTextAttribute as CFString,
+            text as CFTypeRef
+        )
+        return status == .success
     }
 
     // MARK: - Pasteboard Management
