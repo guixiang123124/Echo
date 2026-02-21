@@ -37,6 +37,8 @@ public final class VoiceInputService: ObservableObject {
     private var streamingFirstPartialMs: Int?
     private var streamingFirstFinalMs: Int?
     private var streamMode: String = "batch"
+    private var currentTraceId: String?
+    private var didLogFirstCaptureChunk = false
 
     // MARK: - Initialization
 
@@ -65,6 +67,10 @@ public final class VoiceInputService: ObservableObject {
         streamingFirstPartialMs = nil
         streamingFirstFinalMs = nil
         streamingStartDate = nil
+        didLogFirstCaptureChunk = false
+
+        let traceId = UUID().uuidString.lowercased()
+        currentTraceId = traceId
 
         do {
             // Recreate audio capture service per session to avoid stale engine state
@@ -87,6 +93,7 @@ public final class VoiceInputService: ObservableObject {
             streamingStartDate = Date()
             streamingFirstPartialMs = nil
             streamingFirstFinalMs = nil
+            logStage("capture", traceId: traceId, message: "start mode=\(streamMode) provider=\(provider.id)")
 
             if isStreamingSession {
                 startStreamingResults(provider: provider)
@@ -105,6 +112,7 @@ public final class VoiceInputService: ObservableObject {
             print("🎤 Recording started")
         } catch {
             activeProvider = nil
+            currentTraceId = nil
             errorMessage = "Failed to start recording: \(error.localizedDescription)"
             throw error
         }
@@ -113,6 +121,9 @@ public final class VoiceInputService: ObservableObject {
     /// Stop recording and begin transcription
     public func stopRecording() async throws -> String {
         guard isRecording else { return "" }
+
+        let traceId = currentTraceId ?? UUID().uuidString.lowercased()
+        currentTraceId = traceId
 
         isRecording = false
         // Stop audio capture first so we can flush any in-flight buffers
@@ -125,6 +136,7 @@ public final class VoiceInputService: ObservableObject {
         await stopAudioCollectionGracefully()
 
         print("🎤 Recording stopped, starting transcription...")
+        logStage("capture", traceId: traceId, message: "stop chunks=\(audioChunks.count)")
 
         // Transcribe the audio
         isTranscribing = true
@@ -137,8 +149,8 @@ public final class VoiceInputService: ObservableObject {
         var totalStart = Date()
         let sessionMode = streamMode
         let streamSessionActive = isStreamingSession
-        let firstPartialMs = streamingFirstPartialMs
-        let firstFinalMs = streamingFirstFinalMs
+        let firstPartialMs = streamingFirstPartialMs ?? -1
+        let firstFinalMs = streamingFirstFinalMs ?? -1
         var fallbackUsed = false
         var asrLatencyMs: Int?
 
@@ -173,10 +185,18 @@ public final class VoiceInputService: ObservableObject {
                 stopStreamingResults()
 
                 let accumulatedText = partialTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
+                logStage("stream", traceId: traceId, message: "stop partial_len=\(accumulatedText.count)")
                 let bestPartialText = bestStreamingPartialTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
                 let strongestPartial = bestPartialText.count >= accumulatedText.count ? bestPartialText : accumulatedText
                 let merged = mergedStreamingText(finalText: finalResult?.text, accumulatedText: strongestPartial)
                 var mergedText = merged.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                if shouldPreferStreamingPartial(finalText: mergedText, accumulatedText: strongestPartial) {
+                    DiagnosticsState.shared.log(
+                        "Replacing final with strongest partial (final=\(mergedText.count), partial=\(strongestPartial.count))"
+                    )
+                    mergedText = strongestPartial
+                }
 
                 // Deepgram commonly emits cumulative partials but shorter final utterance chunks.
                 // When we have a clearly richer accumulated partial transcript, prefer it.
@@ -187,6 +207,8 @@ public final class VoiceInputService: ObservableObject {
                     mergedText = strongestPartial
                 }
 
+                logStage("merge", traceId: traceId, message: "stream merged_len=\(mergedText.count) partial_len=\(strongestPartial.count)")
+
                 if !mergedText.isEmpty && !shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: strongestPartial, audioDuration: totalDuration) {
                     transcription = TranscriptionResult(text: mergedText, language: finalResult?.language ?? .unknown, isFinal: true)
                     asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
@@ -194,6 +216,7 @@ public final class VoiceInputService: ObservableObject {
                     DiagnosticsState.shared.log(
                         "Streaming final weak -> fallback batch transcribe (duration=\(String(format: "%.2f", totalDuration))s)"
                     )
+                    logStage("merge", traceId: traceId, message: "fallback_to_batch duration_s=\(String(format: "%.2f", totalDuration))")
                     let fallback = try await transcribeAudioWithFallback(
                         primaryProvider: provider,
                         fallbackProvider: fallbackProvider,
@@ -222,6 +245,7 @@ public final class VoiceInputService: ObservableObject {
                 if batch.provider.id != provider.id {
                     fallbackUsed = true
                 }
+                logStage("merge", traceId: traceId, message: "batch transcript_len=\(transcription.text.count)")
                 asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
             }
 
@@ -276,6 +300,7 @@ public final class VoiceInputService: ObservableObject {
             }
             finalTranscription = result
             finalTranscriptValue = result
+            logStage("ui", traceId: traceId, message: "final_text_len=\(result.count)")
 
             let totalLatencyMs = Int(Date().timeIntervalSince(totalStart) * 1000)
             let combinedDataForSave = audioChunks.reduce(Data()) { $0 + $1.data }
@@ -287,6 +312,7 @@ public final class VoiceInputService: ObservableObject {
                 duration: totalDurationForSave
             )
 
+            logStage("store", traceId: traceId, message: "save status=success mode=\(sessionMode) fallback=\(fallbackUsed)")
             await recordingStore.saveRecording(
                 audio: recordingChunk,
                 asrProviderId: providerForStorage?.id ?? provider.id,
@@ -302,7 +328,9 @@ public final class VoiceInputService: ObservableObject {
                 streamMode: sessionMode,
                 firstPartialMs: firstPartialMs,
                 firstFinalMs: firstFinalMs,
-                fallbackUsed: fallbackUsed
+                fallbackUsed: fallbackUsed,
+                errorCode: "none",
+                traceId: traceId
             )
 
             let autoEditLatencyText = correctionLatencyMs.map(String.init) ?? "-"
@@ -310,6 +338,7 @@ public final class VoiceInputService: ObservableObject {
                 "Latency(ms): asr=\(resolvedAsrLatencyMs) autoEdit=\(autoEditLatencyText) total=\(totalLatencyMs)"
             )
 
+            currentTraceId = nil
             return result
         } catch {
             if isStreamingSession, let provider = providerForStorage {
@@ -347,6 +376,8 @@ public final class VoiceInputService: ObservableObject {
                         if !recoveredText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             await contextStore.addTranscription(recoveredText)
                         }
+                        let recoveredMode = recovered.provider.id == (providerForStorage?.id ?? recovered.provider.id) ? "stream-recovered" : "batch-fallback"
+                        logStage("store", traceId: traceId, message: "save status=recovered mode=\(recoveredMode) fallback=\(fallbackUsed)")
                         await recordingStore.saveRecording(
                             audio: combinedChunk,
                             asrProviderId: recovered.provider.id,
@@ -359,12 +390,15 @@ public final class VoiceInputService: ObservableObject {
                             asrLatencyMs: asrLatencyMs ?? 0,
                             correctionLatencyMs: nil,
                             totalLatencyMs: Int(Date().timeIntervalSince(totalStart) * 1000),
-                            streamMode: recovered.provider.id == (providerForStorage?.id ?? recovered.provider.id) ? "stream-recovered" : "batch-fallback",
+                            streamMode: recoveredMode,
                             firstPartialMs: firstPartialMs,
                             firstFinalMs: firstFinalMs,
-                            fallbackUsed: fallbackUsed
+                            fallbackUsed: fallbackUsed,
+                            errorCode: "none",
+                            traceId: traceId
                         )
                         finalTranscription = recoveredText
+                        currentTraceId = nil
                         return recoveredText
                     } catch {
                         // Keep the original error path if fallback recovery fails.
@@ -373,6 +407,7 @@ public final class VoiceInputService: ObservableObject {
 
                 let fallbackProviderId = fallbackTarget?.id ?? providerForStorage?.id ?? "openai_whisper"
                 let fallbackProviderName = fallbackTarget?.displayName ?? providerForStorage?.displayName ?? "OpenAI Whisper"
+                logStage("store", traceId: traceId, message: "save status=error mode=\(sessionMode) fallback=\(fallbackUsed || streamSessionActive)")
                 await recordingStore.saveRecording(
                     audio: combinedChunk,
                     asrProviderId: fallbackTarget?.id ?? fallbackProviderId,
@@ -386,10 +421,12 @@ public final class VoiceInputService: ObservableObject {
                     firstPartialMs: firstPartialMs,
                     firstFinalMs: firstFinalMs,
                     fallbackUsed: fallbackUsed || streamSessionActive,
-                    errorCode: "\(type(of: error)):\(errorCodeValue(for: error))"
+                    errorCode: "\(type(of: error)):\(errorCodeValue(for: error))",
+                    traceId: traceId
                 )
             }
             errorMessage = "Transcription failed: \(error.localizedDescription)"
+            currentTraceId = nil
             throw error
         }
     }
@@ -411,6 +448,8 @@ public final class VoiceInputService: ObservableObject {
         partialTranscription = ""
         bestStreamingPartialTranscription = ""
 
+        logStage("capture", traceId: currentTraceId, message: "cancel")
+        currentTraceId = nil
         print("🎤 Recording cancelled")
     }
 
@@ -422,6 +461,10 @@ public final class VoiceInputService: ObservableObject {
                 guard !Task.isCancelled else { break }
                 await MainActor.run {
                     self.audioChunks.append(chunk)
+                    if !self.didLogFirstCaptureChunk {
+                        self.didLogFirstCaptureChunk = true
+                        self.logStage("capture", traceId: self.currentTraceId, message: "first_chunk bytes=\(chunk.data.count)")
+                    }
                 }
 
                 if isStreamingSession, let provider = activeProvider {
@@ -435,6 +478,7 @@ public final class VoiceInputService: ObservableObject {
                         } catch {
                             if attempt + 1 >= maxFeedRetries {
                                 DiagnosticsState.shared.log("Streaming feed error: \(error.localizedDescription)")
+                                self.logStage("stream", traceId: self.currentTraceId, message: "feed_error=\(errorCodeValue(for: error))")
                                 break
                             }
                             try? await Task.sleep(for: .milliseconds(100))
@@ -521,9 +565,11 @@ public final class VoiceInputService: ObservableObject {
                     if let startDate = self.streamingStartDate {
                         if self.streamingFirstPartialMs == nil {
                             self.streamingFirstPartialMs = Int(Date().timeIntervalSince(startDate) * 1000)
+                            self.logStage("stream", traceId: self.currentTraceId, message: "first_partial_ms=\(self.streamingFirstPartialMs ?? -1)")
                         }
                         if result.isFinal, self.streamingFirstFinalMs == nil {
                             self.streamingFirstFinalMs = Int(Date().timeIntervalSince(startDate) * 1000)
+                            self.logStage("stream", traceId: self.currentTraceId, message: "first_final_ms=\(self.streamingFirstFinalMs ?? -1)")
                         }
                     }
                     let mergedPartial = self.mergeStreamingText(result.text, into: self.partialTranscription)
@@ -542,6 +588,9 @@ public final class VoiceInputService: ObservableObject {
     }
 
     private func stopStreamingResults() {
+        if isStreamingSession {
+            logStage("stream", traceId: currentTraceId, message: "result_stream_closed")
+        }
         streamingResultTask?.cancel()
         streamingResultTask = nil
         isStreamingSession = false
@@ -671,6 +720,9 @@ public final class VoiceInputService: ObservableObject {
         if accumulated.count >= 8 && final.count < max(3, accumulated.count / 2) {
             return true
         }
+        if shouldPreferStreamingPartial(finalText: final, accumulatedText: accumulated) {
+            return true
+        }
 
         // Heuristic: for longer utterances, a very short final is usually a weak stream tail.
         if audioDuration >= 2.2 {
@@ -683,11 +735,29 @@ public final class VoiceInputService: ObservableObject {
         return false
     }
 
+    private func shouldPreferStreamingPartial(finalText: String, accumulatedText: String) -> Bool {
+        let finalTrimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accumulatedTrimmed = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !finalTrimmed.isEmpty, !accumulatedTrimmed.isEmpty else { return false }
+        if finalTrimmed.count >= accumulatedTrimmed.count { return false }
+        if accumulatedTrimmed.count >= 12 && finalTrimmed.count <= accumulatedTrimmed.count - 6 { return true }
+        if accumulatedTrimmed.count >= 10 && finalTrimmed.count <= 3 { return true }
+        if Double(finalTrimmed.count) <= Double(accumulatedTrimmed.count) * 0.55 { return true }
+        return false
+    }
+
     private func errorCodeValue(for error: Error) -> String {
         if let nsError = error as NSError? {
             return "\(nsError.domain):\(nsError.code)"
         }
         return String(describing: type(of: error))
+    }
+
+    private func logStage(_ stage: String, traceId: String?, message: String) {
+        let candidate = traceId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTraceId = candidate.flatMap { $0.isEmpty ? nil : $0 } ?? "missing-trace"
+        DiagnosticsState.shared.log("[trace:\(resolvedTraceId)] \(stage): \(message)")
     }
 
     // MARK: - Configuration

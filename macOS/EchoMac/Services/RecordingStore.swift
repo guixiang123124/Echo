@@ -30,6 +30,12 @@ public actor RecordingStore {
         public let asrLatencyMs: Int?
         public let correctionLatencyMs: Int?
         public let totalLatencyMs: Int?
+        public let streamMode: String?
+        public let firstPartialMs: Int?
+        public let firstFinalMs: Int?
+        public let fallbackUsed: Bool
+        public let errorCode: String?
+        public let traceId: String
 
         public var audioURL: URL? {
             audioPath.isEmpty ? nil : URL(fileURLWithPath: audioPath)
@@ -89,12 +95,40 @@ public actor RecordingStore {
         userId: String?,
         asrLatencyMs: Int? = nil,
         correctionLatencyMs: Int? = nil,
-        totalLatencyMs: Int? = nil
+        totalLatencyMs: Int? = nil,
+        streamMode: String? = nil,
+        firstPartialMs: Int? = nil,
+        firstFinalMs: Int? = nil,
+        fallbackUsed: Bool = false,
+        errorCode: String? = nil,
+        traceId: String? = nil
     ) {
         guard let db else {
             print("❌ RecordingStore: database not available")
             return
         }
+
+        let normalizedStreamMode: String = {
+            if let mode = streamMode?.trimmingCharacters(in: .whitespacesAndNewlines), !mode.isEmpty {
+                return mode
+            }
+            return "batch"
+        }()
+
+        let normalizedFirstPartialMs = firstPartialMs ?? -1
+        let normalizedFirstFinalMs = firstFinalMs ?? -1
+        let normalizedErrorCode: String = {
+            if let code = errorCode?.trimmingCharacters(in: .whitespacesAndNewlines), !code.isEmpty {
+                return code
+            }
+            return "none"
+        }()
+        let normalizedTraceId: String = {
+            if let traceId = traceId?.trimmingCharacters(in: .whitespacesAndNewlines), !traceId.isEmpty {
+                return traceId
+            }
+            return UUID().uuidString.lowercased()
+        }()
 
         let createdAt = Date().timeIntervalSince1970
         let fileName = "\(Int(createdAt * 1000))-\(UUID().uuidString).wav"
@@ -135,8 +169,14 @@ public actor RecordingStore {
             user_id,
             asr_latency_ms,
             correction_latency_ms,
-            total_latency_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            total_latency_ms,
+            stream_mode,
+            first_partial_ms,
+            first_final_ms,
+            fallback_used,
+            error_code,
+            trace_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
 
         var statement: OpaquePointer?
@@ -177,6 +217,12 @@ public actor RecordingStore {
         } else {
             sqlite3_bind_null(stmt, 19)
         }
+        bindText(stmt, index: 20, value: normalizedStreamMode)
+        sqlite3_bind_int(stmt, 21, Int32(normalizedFirstPartialMs))
+        sqlite3_bind_int(stmt, 22, Int32(normalizedFirstFinalMs))
+        sqlite3_bind_int(stmt, 23, fallbackUsed ? 1 : 0)
+        bindText(stmt, index: 24, value: normalizedErrorCode)
+        bindText(stmt, index: 25, value: normalizedTraceId)
 
         var insertedId: Int64?
         if sqlite3_step(stmt) != SQLITE_DONE {
@@ -232,7 +278,8 @@ public actor RecordingStore {
                    encoding, audio_path, asr_provider_id, asr_provider_name,
                    correction_provider_id, transcript_raw, transcript_final,
                    word_count, error, status, user_id,
-                   asr_latency_ms, correction_latency_ms, total_latency_ms
+                   asr_latency_ms, correction_latency_ms, total_latency_ms,
+                   stream_mode, first_partial_ms, first_final_ms, fallback_used, error_code, trace_id
             FROM recordings
             WHERE user_id = ? OR user_id IS NULL OR user_id = ''
             ORDER BY created_at DESC
@@ -244,7 +291,8 @@ public actor RecordingStore {
                encoding, audio_path, asr_provider_id, asr_provider_name,
                correction_provider_id, transcript_raw, transcript_final,
                word_count, error, status, user_id,
-               asr_latency_ms, correction_latency_ms, total_latency_ms
+               asr_latency_ms, correction_latency_ms, total_latency_ms,
+               stream_mode, first_partial_ms, first_final_ms, fallback_used, error_code, trace_id
         FROM recordings
         ORDER BY created_at DESC
         LIMIT ?;
@@ -286,6 +334,12 @@ public actor RecordingStore {
             let asrLatencyMs = sqlite3_column_type(stmt, 17) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 17))
             let correctionLatencyMs = sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 18))
             let totalLatencyMs = sqlite3_column_type(stmt, 19) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 19))
+            let streamMode = columnText(stmt, index: 20)
+            let firstPartialMs = sqlite3_column_type(stmt, 21) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 21))
+            let firstFinalMs = sqlite3_column_type(stmt, 22) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 22))
+            let fallbackUsed = sqlite3_column_int(stmt, 23) != 0
+            let errorCode = columnText(stmt, index: 24)
+            let traceId = columnText(stmt, index: 25) ?? "missing-trace"
 
             entries.append(
                 RecordingEntry(
@@ -308,7 +362,13 @@ public actor RecordingStore {
                     userId: userId,
                     asrLatencyMs: asrLatencyMs,
                     correctionLatencyMs: correctionLatencyMs,
-                    totalLatencyMs: totalLatencyMs
+                    totalLatencyMs: totalLatencyMs,
+                    streamMode: streamMode,
+                    firstPartialMs: firstPartialMs,
+                    firstFinalMs: firstFinalMs,
+                    fallbackUsed: fallbackUsed,
+                    errorCode: errorCode,
+                    traceId: traceId
                 )
             )
         }
@@ -376,7 +436,7 @@ public actor RecordingStore {
         guard let db else { return }
 
         let createSQL = """
-        CREATE TABLE IF NOT EXISTS recordings (
+            CREATE TABLE IF NOT EXISTS recordings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at REAL NOT NULL,
             duration REAL NOT NULL,
@@ -396,7 +456,13 @@ public actor RecordingStore {
             user_id TEXT,
             asr_latency_ms INTEGER,
             correction_latency_ms INTEGER,
-            total_latency_ms INTEGER
+            total_latency_ms INTEGER,
+            stream_mode TEXT,
+            first_partial_ms INTEGER,
+            first_final_ms INTEGER,
+            fallback_used INTEGER DEFAULT 0,
+            error_code TEXT,
+            trace_id TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at
@@ -433,6 +499,47 @@ public actor RecordingStore {
             if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
                 print("❌ RecordingStore: Failed to add total_latency_ms column")
             }
+        }
+        if !columnExists(db, table: "recordings", column: "stream_mode") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN stream_mode TEXT;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add stream_mode column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "first_partial_ms") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN first_partial_ms INTEGER;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add first_partial_ms column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "first_final_ms") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN first_final_ms INTEGER;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add first_final_ms column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "fallback_used") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN fallback_used INTEGER DEFAULT 0;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add fallback_used column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "error_code") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN error_code TEXT;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add error_code column")
+            }
+        }
+        if !columnExists(db, table: "recordings", column: "trace_id") {
+            let alterSQL = "ALTER TABLE recordings ADD COLUMN trace_id TEXT;"
+            if sqlite3_exec(db, alterSQL, nil, nil, nil) != SQLITE_OK {
+                print("❌ RecordingStore: Failed to add trace_id column")
+            }
+        }
+
+        let backfillSQL = "UPDATE recordings SET trace_id = lower(hex(randomblob(16))) WHERE trace_id IS NULL OR trim(trace_id) = '';"
+        if sqlite3_exec(db, backfillSQL, nil, nil, nil) != SQLITE_OK {
+            print("❌ RecordingStore: Failed to backfill trace_id")
         }
     }
 
