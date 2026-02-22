@@ -498,7 +498,7 @@ app.post("/v1/billing/create-portal-session", authMiddleware, async (req, res) =
 const flatSyncRecordingSchema = z.object({
   id: z.string().min(1).optional(),
   text: z.string().min(1),
-  createdAt: z.string().optional(),
+  createdAt: z.union([z.string(), z.number()]).optional(),
   durationMs: z.number().int().nonnegative().optional(),
   provider: z.string().max(120).optional(),
   locale: z.string().max(32).optional(),
@@ -509,7 +509,7 @@ const flatSyncRecordingSchema = z.object({
 const nestedSyncRecordingSchema = z.object({
   recording: z.object({
     id: z.string().min(1),
-    createdAt: z.string(),
+    createdAt: z.union([z.string(), z.number()]),
     duration: z.number().nonnegative(),
     asrProviderId: z.string().max(120).optional(),
     transcriptRaw: z.string().optional().nullable(),
@@ -531,10 +531,39 @@ type NormalizedSyncPayload = {
   audioContentType: string | null;
 };
 
+function parseFlexibleCreatedAt(input: string | number | undefined): Date {
+  if (typeof input === "string") {
+    const parsed = new Date(input);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+    return new Date();
+  }
+
+  if (typeof input === "number" && Number.isFinite(input)) {
+    const APPLE_REFERENCE_UNIX_OFFSET_SECONDS = 978_307_200;
+
+    if (input > 10_000_000_000) {
+      // Milliseconds since Unix epoch.
+      return new Date(input);
+    }
+
+    if (input > 1_500_000_000) {
+      // Seconds since Unix epoch.
+      return new Date(input * 1000);
+    }
+
+    // Likely Apple reference date seconds (2001-01-01 based).
+    return new Date((input + APPLE_REFERENCE_UNIX_OFFSET_SECONDS) * 1000);
+  }
+
+  return new Date();
+}
+
 function normalizeSyncPayload(payload: unknown): NormalizedSyncPayload | null {
   const flat = flatSyncRecordingSchema.safeParse(payload);
   if (flat.success) {
-    const createdAt = flat.data.createdAt ? new Date(flat.data.createdAt) : new Date();
+    const createdAt = parseFlexibleCreatedAt(flat.data.createdAt);
     return {
       sourceId: flat.data.id ?? randomUUID(),
       text: flat.data.text,
@@ -556,7 +585,7 @@ function normalizeSyncPayload(payload: unknown): NormalizedSyncPayload | null {
   if (!text) {
     return null;
   }
-  const createdAt = new Date(recording.createdAt);
+  const createdAt = parseFlexibleCreatedAt(recording.createdAt);
   return {
     sourceId: recording.id,
     text,

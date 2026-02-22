@@ -14,10 +14,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var historyWindow: NSWindow?
     private var cancellables: Set<AnyCancellable> = []
     private var isStreamingInsertionSessionActive = false
+    private var didUseStreamingKeyboardFallback = false
     private let diagnostics = DiagnosticsState.shared
     private var lastExternalApp: NSRunningApplication?
     private var silenceMonitorTask: Task<Void, Never>?
     private var lastStreamingUpdateMethod: String?
+    private var isAwaitingDeferredPolish = false
+    private var deferredPolishCloseTask: Task<Void, Never>?
+    private var lastStreamingSanitizedText: String = ""
+    private var pendingDeferredPolishText: String?
+    private var pendingDeferredPolishTraceId: String?
+    private var activeDeferredPolishTraceId: String?
+    private var lastFinalizeTextForPolish: String = ""
+    private struct AutoEditUndoSnapshot {
+        let finalizedText: String
+        let polishedText: String
+        let traceId: String?
+        let createdAt: Date
+    }
+    private var lastAutoEditUndoSnapshot: AutoEditUndoSnapshot?
 
     // Services
     private var voiceInputService: VoiceInputService?
@@ -70,22 +85,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 .store(in: &cancellables)
 
             voiceInputService.$partialTranscription
-                .sink { AppState.shared.partialTranscription = $0 }
-                .store(in: &cancellables)
-
-            voiceInputService.$partialTranscription
-                .sink { [weak self] text in
-                    guard let self else { return }
-                    guard voiceInputService.isStreamingSessionActive else { return }
-
-                    let insertionText = (voiceInputService.bestStreamingPartialTranscription.isEmpty
-                                         ? text
-                                         : voiceInputService.bestStreamingPartialTranscription).trimmingCharacters(in: .whitespacesAndNewlines)
-                    Task { @MainActor in
-                        await self.handleStreamingInsertionUpdate(insertionText)
+                .sink { text in
+                    if !AppState.shared.isStreamingModeActive {
+                        AppState.shared.partialTranscription = text
                     }
                 }
                 .store(in: &cancellables)
+
+            voiceInputService.onStreamingTextUpdate = { [weak self, weak voiceInputService] text in
+                guard let self, let voiceInputService else { return }
+                guard voiceInputService.isStreamingSessionActive else { return }
+
+                let insertionText = (voiceInputService.bestStreamingPartialTranscription.isEmpty
+                                     ? text
+                                     : voiceInputService.bestStreamingPartialTranscription).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !insertionText.isEmpty else { return }
+
+                Task { @MainActor in
+                    await self.handleStreamingInsertionUpdate(insertionText)
+                }
+            }
+
+            voiceInputService.onDeferredPolishReady = { [weak self] text, traceId in
+                guard let self else { return }
+                Task { @MainActor in
+                    if self.isAwaitingDeferredPolish {
+                        await self.handleDeferredPolishUpdate(text, traceId: traceId)
+                    } else {
+                        self.pendingDeferredPolishText = text
+                        self.pendingDeferredPolishTraceId = traceId
+                        self.diagnostics.log("Deferred polish buffered before finalize handoff")
+                    }
+                }
+            }
 
             voiceInputService.$finalTranscription
                 .sink { AppState.shared.finalTranscription = $0 }
@@ -124,6 +156,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.publisher(for: .echoToggleRecording)
             .sink { [weak self] _ in
                 self?.toggleManualRecording()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .echoUndoLastAutoEdit)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor in
+                    await self.undoLastAutoEdit()
+                }
             }
             .store(in: &cancellables)
 
@@ -175,6 +216,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        voiceInputService?.onStreamingTextUpdate = nil
+        voiceInputService?.onDeferredPolishReady = nil
+        deferredPolishCloseTask?.cancel()
         stopHotkeyMonitoring()
         print("👋 EchoMac terminated")
     }
@@ -304,48 +348,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         switch appState.recordingState {
         case .idle, .error:
             break
+        case .correcting:
+            diagnostics.log("Recording start during polish; cancelling pending polish and restarting")
+            clearDeferredPolishState()
+            appState.recordingState = .idle
+            hideRecordingPanel()
+        case .listening, .transcribing, .inserting:
+            diagnostics.log("Recording start ignored (busy=\(String(describing: appState.recordingState)))")
+            return
         default:
+            diagnostics.log("Recording start ignored (unhandled busy state)")
             return
         }
 
         Task { @MainActor in
             // Update state
-            appState.recordingState = .listening
+                appState.recordingState = .listening
+                appState.isStreamingModeActive = settings.asrMode == .stream
+                didUseStreamingKeyboardFallback = false
+                textInserter?.cancelStreamingInsertion()
+                textInserter?.resetStreamingFallbackState()
+                lastStreamingUpdateMethod = nil
+                lastStreamingSanitizedText = ""
+                isAwaitingDeferredPolish = false
+                deferredPolishCloseTask?.cancel()
+                deferredPolishCloseTask = nil
+                clearAutoEditUndoSnapshot()
 
-            // Play sound
+                // Play sound
             if settings.playSoundEffects {
                 NSSound(named: "Morse")?.play()
-            }
-
-            // Show recording panel
-            if settings.showRecordingPanel {
-                showRecordingPanel()
             }
 
             // Start recording
             do {
                 try await voiceInputService?.startRecording()
-                if voiceInputService?.isStreamingSessionActive == true,
+                let isStreamingMode = voiceInputService?.isStreamingSessionActive == true
+                appState.isStreamingModeActive = isStreamingMode
+
+                if isStreamingMode,
                    let textInserter {
                     // Keep target app focused during live streaming insertion.
                     await reactivateInsertionTarget()
-                    switch textInserter.startStreamingInsertionSession() {
-                    case .attached:
-                        isStreamingInsertionSessionActive = true
-                        lastStreamingUpdateMethod = nil
-                        diagnostics.log("Streaming insertion attached at record start")
-                    case .failed(let failure):
-                        isStreamingInsertionSessionActive = false
-                        self.logStreamingInsertionFailure("attach", reason: failure)
-                    }
-                } else {
+                    textInserter.resetStreamingFallbackState()
+                    didUseStreamingKeyboardFallback = false
                     isStreamingInsertionSessionActive = false
+                    lastStreamingUpdateMethod = nil
+                    diagnostics.log("Streaming insertion prepared; attempting direct streaming insertion")
+                    showRecordingPanel()
+                } else if isStreamingMode {
+                    diagnostics.log("Streaming insertion target unavailable; showing stream status panel only")
+                    showRecordingPanel()
+                } else if settings.showRecordingPanel {
+                    showRecordingPanel()
                 }
+
                 startSilenceMonitorIfNeeded()
             } catch {
                 print("❌ Failed to start recording: \(error)")
                 diagnostics.recordError(error.localizedDescription)
                 appState.recordingState = .error(error.localizedDescription)
+                appState.isStreamingModeActive = false
                 // Reset after a short delay so the UI isn't stuck in error state
                 Task {
                     try? await Task.sleep(for: .seconds(1.5))
@@ -367,67 +430,197 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard appState.recordingState == .listening else { return }
 
         Task { @MainActor in
+            let wasStreamingSession = appState.isStreamingModeActive
+            diagnostics.log("Stage[stream] stop mode=\(wasStreamingSession ? "stream" : "batch") autoEdit=\(settings.correctionEnabled ? "on" : "off")")
+
             // Update state
             appState.recordingState = .transcribing
             defer {
-                self.isStreamingInsertionSessionActive = false
-                self.lastStreamingUpdateMethod = nil
+                if !self.isAwaitingDeferredPolish {
+                    self.isStreamingInsertionSessionActive = false
+                    self.didUseStreamingKeyboardFallback = false
+                    self.lastStreamingUpdateMethod = nil
+                }
+                appState.isStreamingModeActive = false
             }
 
             do {
                 // Stop recording and transcribe
+                let finalizeStart = Date()
                 let rawText = try await voiceInputService?.stopRecording() ?? ""
                 let pillText = (voiceInputService?.partialTranscription ?? appState.partialTranscription)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let bestPartialText = voiceInputService?.bestStreamingPartialTranscription
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let bestObservedText = bestPartialText.count >= pillText.count ? bestPartialText : pillText
-                var text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
-
-                // Keep insertion result aligned with what user saw during streaming when provider final collapses.
-                if bestObservedText.count >= 12 && text.count + 6 <= bestObservedText.count {
-                    diagnostics.log("Using best partial fallback for insertion (final=\(text.count), partial=\(bestObservedText.count))")
-                    text = bestObservedText
+                let finalText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let finalizeMs = Int(Date().timeIntervalSince(finalizeStart) * 1000)
+                diagnostics.log("Stage[finalize] done ms=\(finalizeMs) final_len=\(finalText.count) partial_len=\(bestObservedText.count)")
+                let insertionText: String
+                let shouldDeferPolish = wasStreamingSession && settings.streamFastEnabled && (voiceInputService?.hasDeferredPolish == true)
+                if shouldDeferPolish {
+                    activeDeferredPolishTraceId = voiceInputService?.deferredPolishTraceId
+                } else {
+                    activeDeferredPolishTraceId = nil
+                }
+                if shouldDeferPolish {
+                    diagnostics.log("Stage[polish] queued")
+                } else {
+                    let reason: String
+                    if !wasStreamingSession {
+                        reason = "not_streaming"
+                    } else if !settings.streamFastEnabled {
+                        reason = "streamfast_off"
+                    } else if !settings.correctionEnabled {
+                        reason = "autoedit_off"
+                    } else {
+                        reason = "not_available"
+                    }
+                    diagnostics.log("Stage[polish] skipped reason=\(reason)")
                 }
 
-                    if isStreamingInsertionSessionActive {
-                        let finishOutcome = textInserter?.finishStreamingInsertion(with: text)
-                    isStreamingInsertionSessionActive = false
-                    lastStreamingUpdateMethod = nil
+                if wasStreamingSession {
+                    if !finalText.isEmpty {
+                        insertionText = finalText
+                        diagnostics.log("Streaming finalize completed (\(finalText.count) chars)")
+                    } else {
+                        insertionText = self.bestInsertionText(
+                            finalText: finalText,
+                            streamingText: bestObservedText
+                        )
+                        diagnostics.log("Streaming finalize missing; fallback to strongest partial (\(insertionText.count) chars)")
+                    }
+                    if shouldDeferPolish {
+                        appState.recordingState = .correcting
+                        showRecordingPanel()
+                    }
+                } else {
+                    var text = finalText
+                    if bestObservedText.count >= 12 && text.count + 6 <= bestObservedText.count {
+                        diagnostics.log("Using best partial fallback for insertion (final=\(text.count), partial=\(bestObservedText.count))")
+                        text = bestObservedText
+                    }
+                    insertionText = self.bestInsertionText(
+                        finalText: text,
+                        streamingText: bestObservedText
+                    )
+                }
 
-                    switch finishOutcome {
-                    case .updated(let method, _)?:
-                        diagnostics.log("Streaming insertion finalized via \(method) (\(text.count) chars)")
-                        appState.recordingState = .idle
-                        hideRecordingPanel()
-                        return
-                    case .failed(let failure)?:
-                        self.logStreamingInsertionFailure("finalize", reason: failure)
-                    case nil:
-                        diagnostics.log("Streaming insertion finalize fallback: no active session")
+                await reactivateInsertionTarget()
+
+                if wasStreamingSession {
+                    if didUseStreamingKeyboardFallback,
+                       !isStreamingInsertionSessionActive,
+                       let textInserter {
+                        switch textInserter.startStreamingInsertionSession() {
+                        case .attached:
+                            isStreamingInsertionSessionActive = true
+                            didUseStreamingKeyboardFallback = false
+                            diagnostics.log("Streaming finalize recovered from keyboard fallback")
+                        case .failed(let failure):
+                            logStreamingInsertionFailure("final-reattach", reason: failure)
+                        }
                     }
 
-                    textInserter?.cancelStreamingInsertion()
-                    diagnostics.log("Streaming insertion unavailable, falling back to final insert")
+                    if insertionText.isEmpty {
+                        diagnostics.log("Streaming finalize skipped to avoid empty overwrite")
+                        hideRecordingPanel()
+                        appState.recordingState = .idle
+                        return
+                    }
+
+                    if isStreamingInsertionSessionActive && !didUseStreamingKeyboardFallback {
+                        let streamOutcome: TextInserter.StreamingUpdateResult?
+                        if shouldDeferPolish {
+                            streamOutcome = textInserter?.updateStreamingInsertion(insertionText)
+                        } else {
+                            streamOutcome = textInserter?.finishStreamingInsertion(with: insertionText)
+                        }
+
+                        switch streamOutcome {
+                        case .updated(let method, let characterCount):
+                            if shouldDeferPolish {
+                                diagnostics.log("Streaming finalize committed via \(method) (\(characterCount) chars), deferred polish pending")
+                                lastFinalizeTextForPolish = insertionText
+                                if activeDeferredPolishTraceId == nil {
+                                    activeDeferredPolishTraceId = voiceInputService?.deferredPolishTraceId
+                                }
+                                isAwaitingDeferredPolish = true
+                                scheduleDeferredPolishAutoClose()
+                                await consumePendingDeferredPolishIfNeeded()
+                            } else {
+                                textInserter?.cancelStreamingInsertion()
+                                diagnostics.log("Streaming final via \(method) (\(characterCount) chars)")
+                            }
+                            if settings.playSoundEffects {
+                                NSSound(named: "Glass")?.play()
+                            }
+                            if shouldDeferPolish {
+                                appState.recordingState = .correcting
+                            } else {
+                                appState.recordingState = .idle
+                                hideRecordingPanel()
+                            }
+                            return
+                        case .failed(let failure):
+                            self.logStreamingInsertionFailure("final-stream", reason: failure)
+                            self.didUseStreamingKeyboardFallback = true
+                            textInserter?.cancelStreamingInsertion()
+                            self.isStreamingInsertionSessionActive = false
+                            self.isAwaitingDeferredPolish = false
+                        default:
+                            diagnostics.log("Streaming final stream finalization unavailable (no inserter)")
+                        }
+                    }
+
+                    switch textInserter?.applyStreamingKeyboardFallback(insertionText) {
+                    case .updated(let method, let characterCount):
+                        if shouldDeferPolish {
+                            diagnostics.log("Streaming finalize via keyboard fallback \(method) (\(characterCount) chars), deferred polish pending")
+                            lastFinalizeTextForPolish = insertionText
+                            if activeDeferredPolishTraceId == nil {
+                                activeDeferredPolishTraceId = voiceInputService?.deferredPolishTraceId
+                            }
+                            isAwaitingDeferredPolish = true
+                            scheduleDeferredPolishAutoClose()
+                            await consumePendingDeferredPolishIfNeeded()
+                        } else {
+                            textInserter?.cancelStreamingInsertion()
+                            diagnostics.log("Streaming final via keyboard fallback \(method) (\(characterCount) chars)")
+                        }
+                        if settings.playSoundEffects {
+                            NSSound(named: "Glass")?.play()
+                        }
+                        if shouldDeferPolish {
+                            appState.recordingState = .correcting
+                        } else {
+                            appState.recordingState = .idle
+                            hideRecordingPanel()
+                        }
+                        return
+                    case .failed(let failure):
+                        self.logStreamingInsertionFailure("final-fallback", reason: failure)
+                    case nil:
+                        diagnostics.log("Streaming final fallback unavailable: no active inserter")
+                    }
                 }
 
-                if text.isEmpty {
+                if insertionText.isEmpty {
                     print("⚠️ No text transcribed")
                     appState.recordingState = .idle
                     hideRecordingPanel()
+                    appState.isStreamingModeActive = false
                     return
                 }
 
-                print("📝 Transcribed: \(text)")
+                print("📝 Transcribed: \(insertionText)")
                 diagnostics.log("Transcription completed")
 
                 // Re-activate the last external app (in case menu bar stole focus)
-                await reactivateInsertionTarget()
-
                 // Insert text
                 appState.recordingState = .inserting
-                await textInserter?.insert(text, restoreClipboard: false)
-                diagnostics.log("Inserted text (\(text.count) chars)")
+                await textInserter?.insert(insertionText, restoreClipboard: false)
+                diagnostics.log("Inserted text (\(insertionText.count) chars)")
 
                 // Play completion sound
                 if settings.playSoundEffects {
@@ -436,10 +629,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
                 // Done
                 appState.recordingState = .idle
+                appState.isStreamingModeActive = false
                 hideRecordingPanel()
 
             } catch {
                 print("❌ Transcription failed: \(error)")
+                appState.isStreamingModeActive = false
+                clearDeferredPolishState()
                 if self.isStreamingInsertionSessionActive {
                     textInserter?.cancelStreamingInsertion()
                     self.isStreamingInsertionSessionActive = false
@@ -462,14 +658,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @MainActor
     private func handleStreamingInsertionUpdate(_ text: String) async {
         guard let textInserter else { return }
+        let normalizedText = sanitizeLiveStreamingInsertionText(
+            text.trimmingCharacters(in: .whitespacesAndNewlines),
+            previousText: lastStreamingSanitizedText
+        )
+        guard !normalizedText.isEmpty else { return }
+        if normalizedText == lastStreamingSanitizedText { return }
+        if !lastStreamingSanitizedText.isEmpty,
+           normalizedText.count < lastStreamingSanitizedText.count,
+           lastStreamingSanitizedText.hasPrefix(normalizedText) {
+            return
+        }
+        lastStreamingSanitizedText = normalizedText
+
+        await reactivateInsertionTarget()
+
+        func applyKeyboardFallback(_ insertionText: String, stage: String) {
+            let fallbackOutcome = textInserter.applyStreamingKeyboardFallback(insertionText)
+            switch fallbackOutcome {
+            case .updated(let method, let characterCount):
+                if self.lastStreamingUpdateMethod != method {
+                    self.lastStreamingUpdateMethod = method
+                    diagnostics.log("Streaming insertion fallback-\(stage) via \(method) (\(characterCount) chars)")
+                }
+                self.didUseStreamingKeyboardFallback = true
+                self.isStreamingInsertionSessionActive = false
+            case .failed(let failure):
+                self.logStreamingInsertionFailure("fallback-\(stage)", reason: failure)
+                self.didUseStreamingKeyboardFallback = false
+            }
+        }
 
         func attachStreamingSession() async -> Bool {
-            await reactivateInsertionTarget()
+            let start = Date()
             switch textInserter.startStreamingInsertionSession() {
             case .attached:
                 self.isStreamingInsertionSessionActive = true
                 self.lastStreamingUpdateMethod = nil
-                diagnostics.log("Streaming insertion attached")
+                let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+                diagnostics.log("Streaming insertion attached (\(elapsed)ms)")
                 return true
             case .failed(let failure):
                 self.logStreamingInsertionFailure("attach", reason: failure)
@@ -477,36 +704,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
 
+        if didUseStreamingKeyboardFallback {
+            if !isStreamingInsertionSessionActive {
+                if lastExternalApp == nil { captureInsertionTarget() }
+                let reattached = await attachStreamingSession()
+                if reattached {
+                    didUseStreamingKeyboardFallback = false
+                    diagnostics.log("Streaming insertion recovered from keyboard fallback")
+                } else {
+                    applyKeyboardFallback(normalizedText, stage: "update")
+                    return
+                }
+            } else {
+                didUseStreamingKeyboardFallback = false
+            }
+        }
+
         if !isStreamingInsertionSessionActive {
+            if lastExternalApp == nil { captureInsertionTarget() }
             let attached = await attachStreamingSession()
             if !attached {
+                applyKeyboardFallback(normalizedText, stage: "attach")
                 return
             }
         }
 
         func applyStreamingUpdate() -> TextInserter.StreamingUpdateResult {
-            textInserter.updateStreamingInsertion(text)
+            textInserter.updateStreamingInsertion(normalizedText)
         }
 
         let outcome = applyStreamingUpdate()
         switch outcome {
         case .updated(let method, let characterCount):
+            if method.hasPrefix("keyboard-fallback") {
+                didUseStreamingKeyboardFallback = true
+            } else {
+                didUseStreamingKeyboardFallback = false
+            }
+
             if self.lastStreamingUpdateMethod != method {
                 self.lastStreamingUpdateMethod = method
                 diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
             }
         case .failed(let failure):
-            if failure.category == .focus {
-                diagnostics.log("Streaming insertion focus lost, reattach & retry")
+            if failure.category == .focus || failure.category == .selection || failure.category == .accessibility {
+                diagnostics.log("Streaming insertion \(failure.category.rawValue) failed, retry attach")
 
                 textInserter.cancelStreamingInsertion()
                 self.isStreamingInsertionSessionActive = false
                 self.lastStreamingUpdateMethod = nil
 
-                guard await attachStreamingSession() else { return }
+                guard await attachStreamingSession() else {
+                    applyKeyboardFallback(normalizedText, stage: "retry-attach")
+                    return
+                }
 
                 switch applyStreamingUpdate() {
                 case .updated(let method, let characterCount):
+                    if method.hasPrefix("keyboard-fallback") {
+                        didUseStreamingKeyboardFallback = true
+                    } else {
+                        didUseStreamingKeyboardFallback = false
+                    }
+
                     if self.lastStreamingUpdateMethod != method {
                         self.lastStreamingUpdateMethod = method
                         diagnostics.log("Streaming insertion update via \(method) (\(characterCount) chars)")
@@ -516,15 +776,433 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.isStreamingInsertionSessionActive = false
                     self.lastStreamingUpdateMethod = nil
                     self.logStreamingInsertionFailure("update", reason: retryFailure)
+                    applyKeyboardFallback(normalizedText, stage: "retry")
                 }
                 return
             }
 
+            applyKeyboardFallback(normalizedText, stage: "update")
             textInserter.cancelStreamingInsertion()
             self.isStreamingInsertionSessionActive = false
             self.lastStreamingUpdateMethod = nil
             self.logStreamingInsertionFailure("update", reason: failure)
         }
+    }
+
+    @MainActor
+    private func handleDeferredPolishUpdate(_ text: String, traceId: String? = nil) async {
+        guard isAwaitingDeferredPolish else { return }
+        let resolvedTraceId = (traceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? traceId
+            : activeDeferredPolishTraceId
+        if let resolvedTraceId {
+            await RecordingStore.shared.appendAuditEvent(
+                traceId: resolvedTraceId,
+                stage: "autoedit_ui",
+                event: "received"
+            )
+        }
+        defer {
+            textInserter?.cancelStreamingInsertion()
+            AppState.shared.recordingState = .idle
+            hideRecordingPanel()
+            clearDeferredPolishState()
+        }
+
+        let polished = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !polished.isEmpty else {
+            diagnostics.log("Stage[polish] empty_result keep_finalize")
+            if let resolvedTraceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: resolvedTraceId,
+                    stage: "autoedit_ui",
+                    event: "empty_result"
+                )
+            }
+            return
+        }
+        let finalized = lastFinalizeTextForPolish.trimmingCharacters(in: .whitespacesAndNewlines)
+        let changed = !finalized.isEmpty && finalized != polished
+        if changed && settings.autoEditApplyMode == .confirmDiff {
+            let shouldApply = confirmDeferredPolishReplacement(finalized: finalized, polished: polished)
+            if !shouldApply {
+                diagnostics.log("Stage[polish] confirm_diff skipped")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "confirm_skipped",
+                        changed: false
+                    )
+                }
+                return
+            }
+        }
+        diagnostics.log("Stage[polish] apply len=\(polished.count) changed=\(changed ? "yes" : "no")")
+        if let resolvedTraceId {
+            await RecordingStore.shared.appendAuditEvent(
+                traceId: resolvedTraceId,
+                stage: "autoedit_ui",
+                event: "apply",
+                changed: changed,
+                message: "len=\(polished.count)"
+            )
+        }
+
+        await reactivateInsertionTarget()
+
+        if didUseStreamingKeyboardFallback,
+           !isStreamingInsertionSessionActive,
+           let textInserter {
+            switch textInserter.startStreamingInsertionSession() {
+            case .attached:
+                isStreamingInsertionSessionActive = true
+                didUseStreamingKeyboardFallback = false
+                diagnostics.log("Deferred polish recovered from keyboard fallback")
+            case .failed(let failure):
+                logStreamingInsertionFailure("deferred-reattach", reason: failure)
+            }
+        }
+
+        if didUseStreamingKeyboardFallback {
+            switch textInserter?.applyStreamingKeyboardFallback(polished) {
+            case .updated(let method, let characterCount):
+                diagnostics.log("Deferred polish applied via keyboard fallback \(method) (\(characterCount) chars)")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "applied",
+                        changed: changed,
+                        message: "\(method) chars=\(characterCount)"
+                    )
+                }
+                if changed {
+                    storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
+                }
+            case .failed(let failure):
+                logStreamingInsertionFailure("deferred-fallback", reason: failure)
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "failed",
+                        changed: changed,
+                        message: "fallback \(failure.category.rawValue) \(failure.details)"
+                    )
+                }
+            case nil:
+                diagnostics.log("Deferred polish unavailable: no text inserter for fallback path")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "unavailable",
+                        message: "no_text_inserter_fallback_path"
+                    )
+                }
+            }
+            return
+        }
+
+        if isStreamingInsertionSessionActive {
+            switch textInserter?.finishStreamingInsertion(with: polished) {
+            case .updated(let method, let characterCount):
+                diagnostics.log("Deferred polish applied via \(method) (\(characterCount) chars)")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "applied",
+                        changed: changed,
+                        message: "\(method) chars=\(characterCount)"
+                    )
+                }
+                if changed {
+                    storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
+                }
+            case .failed(let failure):
+                logStreamingInsertionFailure("deferred-stream", reason: failure)
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "failed",
+                        changed: changed,
+                        message: "stream \(failure.category.rawValue) \(failure.details)"
+                    )
+                }
+            case nil:
+                diagnostics.log("Deferred polish unavailable: no active streaming inserter")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "unavailable",
+                        message: "no_active_streaming_inserter"
+                    )
+                }
+            }
+            return
+        }
+
+        switch textInserter?.applyStreamingKeyboardFallback(polished) {
+        case .updated(let method, let characterCount):
+            diagnostics.log("Deferred polish fallback applied via \(method) (\(characterCount) chars)")
+            if let resolvedTraceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: resolvedTraceId,
+                    stage: "autoedit_ui",
+                    event: "applied",
+                    changed: changed,
+                    message: "fallback \(method) chars=\(characterCount)"
+                )
+            }
+            if changed {
+                storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
+            }
+        case .failed(let failure):
+            logStreamingInsertionFailure("deferred-no-session", reason: failure)
+            if let resolvedTraceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: resolvedTraceId,
+                    stage: "autoedit_ui",
+                    event: "failed",
+                    changed: changed,
+                    message: "no_session \(failure.category.rawValue) \(failure.details)"
+                )
+            }
+        case nil:
+            diagnostics.log("Deferred polish unavailable: no text inserter")
+            if let resolvedTraceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: resolvedTraceId,
+                    stage: "autoedit_ui",
+                    event: "unavailable",
+                    message: "no_text_inserter"
+                )
+            }
+        }
+    }
+
+    private func scheduleDeferredPolishAutoClose() {
+        deferredPolishCloseTask?.cancel()
+        deferredPolishCloseTask = Task { [weak self] in
+            // Keep polishing window alive long enough for normal LLM completion.
+            // A short timeout was dropping valid AutoEdit results on slower calls.
+            do {
+                try await Task.sleep(for: .seconds(12))
+            } catch {
+                return
+            }
+
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self else { return }
+                guard self.isAwaitingDeferredPolish else { return }
+                self.diagnostics.log("Stage[polish] timeout keep_finalize")
+                if let traceId = self.activeDeferredPolishTraceId {
+                    Task { await RecordingStore.shared.appendAuditEvent(traceId: traceId, stage: "autoedit_ui", event: "timeout") }
+                }
+                self.textInserter?.cancelStreamingInsertion()
+                AppState.shared.recordingState = .idle
+                self.hideRecordingPanel()
+                self.clearDeferredPolishState()
+            }
+        }
+    }
+
+    private func clearDeferredPolishState() {
+        deferredPolishCloseTask?.cancel()
+        deferredPolishCloseTask = nil
+        isAwaitingDeferredPolish = false
+        pendingDeferredPolishText = nil
+        pendingDeferredPolishTraceId = nil
+        activeDeferredPolishTraceId = nil
+        voiceInputService?.markDeferredPolishConsumed()
+        lastFinalizeTextForPolish = ""
+        isStreamingInsertionSessionActive = false
+        didUseStreamingKeyboardFallback = false
+        lastStreamingUpdateMethod = nil
+        lastStreamingSanitizedText = ""
+    }
+
+    private func storeAutoEditUndoSnapshot(finalized: String, polished: String, traceId: String?) {
+        let finalizedTrimmed = finalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let polishedTrimmed = polished.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !finalizedTrimmed.isEmpty,
+              !polishedTrimmed.isEmpty,
+              finalizedTrimmed != polishedTrimmed else { return }
+        lastAutoEditUndoSnapshot = AutoEditUndoSnapshot(
+            finalizedText: finalizedTrimmed,
+            polishedText: polishedTrimmed,
+            traceId: traceId,
+            createdAt: Date()
+        )
+        AppState.shared.canUndoLastAutoEdit = true
+    }
+
+    private func clearAutoEditUndoSnapshot() {
+        lastAutoEditUndoSnapshot = nil
+        AppState.shared.canUndoLastAutoEdit = false
+    }
+
+    private func confirmDeferredPolishReplacement(finalized: String, polished: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Apply Auto Edit changes?"
+        let beforePreview = String(finalized.prefix(90))
+        let afterPreview = String(polished.prefix(90))
+        alert.informativeText = "Before: \(beforePreview)\nAfter: \(afterPreview)"
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Keep Finalize")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @MainActor
+    private func undoLastAutoEdit() async {
+        guard let snapshot = lastAutoEditUndoSnapshot else {
+            diagnostics.log("AutoEdit undo skipped: no snapshot")
+            AppState.shared.canUndoLastAutoEdit = false
+            return
+        }
+
+        guard Date().timeIntervalSince(snapshot.createdAt) <= 180 else {
+            diagnostics.log("AutoEdit undo expired")
+            clearAutoEditUndoSnapshot()
+            return
+        }
+
+        guard let textInserter else {
+            diagnostics.log("AutoEdit undo unavailable: no text inserter")
+            return
+        }
+
+        await reactivateInsertionTarget()
+        switch textInserter.undoKeyboardReplacement(from: snapshot.polishedText, to: snapshot.finalizedText) {
+        case .updated(let method, let characterCount):
+            diagnostics.log("AutoEdit undo applied via \(method) (\(characterCount) chars)")
+            if let traceId = snapshot.traceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit_ui",
+                    event: "undo",
+                    changed: true,
+                    message: "\(method) chars=\(characterCount)"
+                )
+            }
+            clearAutoEditUndoSnapshot()
+        case .failed(let failure):
+            diagnostics.log("AutoEdit undo failed [\(failure.category.rawValue)] \(failure.details)")
+            if let traceId = snapshot.traceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit_ui",
+                    event: "undo_failed",
+                    message: "\(failure.category.rawValue) \(failure.details)"
+                )
+            }
+        }
+    }
+
+    @MainActor
+    private func consumePendingDeferredPolishIfNeeded() async {
+        guard isAwaitingDeferredPolish else { return }
+        guard let pending = pendingDeferredPolishText?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !pending.isEmpty else { return }
+        let pendingTraceId = pendingDeferredPolishTraceId
+        pendingDeferredPolishText = nil
+        pendingDeferredPolishTraceId = nil
+        diagnostics.log("Stage[polish] consumed_buffered_result")
+        await handleDeferredPolishUpdate(pending, traceId: pendingTraceId)
+    }
+
+    private func sanitizeLiveStreamingInsertionText(_ text: String, previousText: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return "" }
+
+        let dedupedSelf = collapseDuplicateLeadingRuns(incoming)
+        let dedupedAnchored = collapseRepeatedPrefix(around: previousText, candidate: dedupedSelf)
+        return dedupedAnchored.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func collapseRepeatedPrefix(around baseText: String, candidate text: String) -> String {
+        let base = baseText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty, !candidate.isEmpty else { return candidate }
+        guard candidate.hasPrefix(base), candidate != base else { return candidate }
+
+        var remaining = candidate
+        var runCount = 0
+        while remaining.hasPrefix(base) {
+            remaining = String(remaining.dropFirst(base.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            runCount += 1
+            if remaining.isEmpty { break }
+        }
+
+        guard runCount >= 2 else { return candidate }
+        if remaining.isEmpty { return base }
+        if shouldInsertSpaceBetween(base, remaining) {
+            return "\(base) \(remaining)"
+        }
+        return base + remaining
+    }
+
+    private func collapseDuplicateLeadingRuns(_ text: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return incoming }
+
+        let tokens = incoming.split { $0.isWhitespace || $0.isNewline }
+        if tokens.count >= 2 {
+            for unitLength in stride(from: tokens.count / 2, through: 1, by: -1) {
+                let unit = Array(tokens.prefix(unitLength))
+                var cursor = unitLength
+                var runs = 1
+                while cursor + unitLength <= tokens.count,
+                      Array(tokens[cursor..<(cursor + unitLength)]) == unit {
+                    runs += 1
+                    cursor += unitLength
+                }
+                if runs >= 2 {
+                    let unitText = unit.joined(separator: " ")
+                    let tail = tokens.dropFirst(unitLength * runs).joined(separator: " ")
+                    if tail.isEmpty { return unitText }
+                    return "\(unitText) \(tail)"
+                }
+            }
+        }
+
+        let chars = Array(incoming)
+        let maxUnitLength = chars.count / 2
+        guard maxUnitLength > 0 else { return incoming }
+        for unitLength in stride(from: maxUnitLength, through: 1, by: -1) {
+            let unit = Array(chars[0..<unitLength])
+            var cursor = unitLength
+            var runs = 1
+            while cursor + unitLength <= chars.count,
+                  Array(chars[cursor..<(cursor + unitLength)]) == unit {
+                runs += 1
+                cursor += unitLength
+            }
+            if runs >= 2 {
+                let unitText = String(unit)
+                let tail = String(chars.dropFirst(unitLength * runs)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if tail.isEmpty { return unitText }
+                if shouldInsertSpaceBetween(unitText, tail) {
+                    return "\(unitText) \(tail)"
+                }
+                return unitText + tail
+            }
+        }
+        return incoming
+    }
+
+    private func shouldInsertSpaceBetween(_ left: String, _ right: String) -> Bool {
+        guard let leftLast = left.unicodeScalars.last,
+              let rightFirst = right.unicodeScalars.first else { return false }
+        let leftWord = CharacterSet.alphanumerics.contains(leftLast)
+        let rightWord = CharacterSet.alphanumerics.contains(rightFirst)
+        return leftWord && rightWord
     }
 
     // MARK: - Manual Recording (No Hotkey)
@@ -652,9 +1330,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         diagnostics.log("Streaming insertion \(stage) failed [\(reason.category.rawValue)] \(reason.details)")
     }
 
+    private func bestInsertionText(finalText: String, streamingText: String) -> String {
+        let finalTrimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let streamingTrimmed = streamingText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !streamingTrimmed.isEmpty else {
+            return finalTrimmed
+        }
+
+        if finalTrimmed.isEmpty {
+            return streamingTrimmed
+        }
+
+        if shouldPreferStreamingPartial(finalText: finalTrimmed, partialText: streamingTrimmed) {
+            return streamingTrimmed
+        }
+
+        if finalTrimmed.count + 6 < streamingTrimmed.count &&
+            streamingTrimmed.count >= 12 {
+            return streamingTrimmed
+        }
+
+        return finalTrimmed
+    }
+
+    private func shouldPreferStreamingPartial(finalText: String, partialText: String) -> Bool {
+        let finalTrimmed = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let partialTrimmed = partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !finalTrimmed.isEmpty, !partialTrimmed.isEmpty else { return false }
+        if finalTrimmed.count >= partialTrimmed.count { return false }
+        if partialTrimmed.count >= 12 && finalTrimmed.count <= partialTrimmed.count - 6 { return true }
+        if partialTrimmed.count >= 10 && finalTrimmed.count <= 3 { return true }
+        if Double(finalTrimmed.count) <= Double(partialTrimmed.count) * 0.55 { return true }
+        return false
+    }
+
     private func reactivateInsertionTarget() async {
+        if lastExternalApp == nil {
+            captureInsertionTarget()
+        }
         guard let app = lastExternalApp else { return }
-        app.activate(options: [.activateAllWindows])
+        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
         try? await Task.sleep(for: .milliseconds(80))
     }
 
@@ -669,22 +1386,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let panelView = RecordingPillView(appState: AppState.shared)
         let hostingController = NSHostingController(rootView: panelView)
 
-        let window = NSWindow(contentViewController: hostingController)
-        window.styleMask = [.borderless]
+        let window = NSPanel(contentViewController: hostingController)
+        window.styleMask = [.borderless, .nonactivatingPanel]
         window.level = .floating
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
         window.ignoresMouseEvents = true
+        window.hidesOnDeactivate = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // Position at bottom-center so the indicator stays close to where users type.
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
-            let windowWidth: CGFloat = 240
-            let windowHeight: CGFloat = 44
+            let windowWidth: CGFloat = 224
+            let windowHeight: CGFloat = 48
             let x = screenFrame.midX - windowWidth / 2
-            let y = screenFrame.minY + 56
+            let y = screenFrame.minY + 54
             window.setFrame(NSRect(x: x, y: y, width: windowWidth, height: windowHeight), display: true)
         }
 
@@ -884,7 +1602,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 struct RecordingPillView: View {
     @ObservedObject var appState: AppState
-    @State private var shimmer = false
+    @State private var highlightPhase = false
 
     private var isProcessing: Bool {
         switch appState.recordingState {
@@ -900,19 +1618,38 @@ struct RecordingPillView: View {
             Capsule()
                 .fill(backgroundGradient)
                 .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                 )
-                .shadow(color: Color.black.opacity(0.18), radius: 12, y: 5)
+                .overlay {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.02),
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.02)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .blur(radius: 5)
+                        .offset(x: highlightPhase ? 62 : -62)
+                        .opacity(appState.recordingState == .listening || isProcessing ? 0.36 : 0.16)
+                }
+                .mask(Capsule())
+                .shadow(color: Color.black.opacity(0.24), radius: 10, y: 4)
 
             content
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
         }
-        .frame(width: 188, height: 32)
+        .frame(width: 204, height: 34)
         .clipShape(Capsule())
         .onAppear {
-            shimmer = true
+            withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
+                highlightPhase.toggle()
+            }
         }
     }
 
@@ -921,8 +1658,8 @@ struct RecordingPillView: View {
         case .listening:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.12, green: 0.14, blue: 0.18),
-                    Color(red: 0.10, green: 0.16, blue: 0.22)
+                    Color(red: 0.10, green: 0.11, blue: 0.14),
+                    Color(red: 0.08, green: 0.12, blue: 0.18)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -930,8 +1667,8 @@ struct RecordingPillView: View {
         case .transcribing, .correcting, .inserting:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.12, green: 0.12, blue: 0.14),
-                    Color(red: 0.08, green: 0.08, blue: 0.10)
+                    Color(red: 0.10, green: 0.10, blue: 0.12),
+                    Color(red: 0.07, green: 0.07, blue: 0.09)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -948,8 +1685,8 @@ struct RecordingPillView: View {
         case .idle:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.14, green: 0.14, blue: 0.16),
-                    Color(red: 0.12, green: 0.12, blue: 0.14)
+                    Color(red: 0.11, green: 0.11, blue: 0.13),
+                    Color(red: 0.09, green: 0.09, blue: 0.11)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -961,41 +1698,129 @@ struct RecordingPillView: View {
         Group {
             switch appState.recordingState {
             case .listening:
-                ListeningPillContent(levels: appState.audioLevels, partialText: appState.partialTranscription)
-            case .transcribing, .correcting, .inserting:
-                ThinkingSweepView(text: "Thinking", isAnimating: shimmer)
-            case .error(let message):
-                Text(message)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.white.opacity(0.9))
+                ListeningPillContent(
+                    levels: appState.audioLevels,
+                    partialText: appState.partialTranscription,
+                    isStreamingMode: appState.isStreamingModeActive
+                )
+            case .transcribing:
+                StageLoadingContent(
+                    title: appState.isStreamingModeActive ? "Finalize" : "Transcribing",
+                    tint: Color(red: 0.39, green: 0.76, blue: 1.0)
+                )
+            case .correcting:
+                StageLoadingContent(
+                    title: "Polish",
+                    tint: Color(red: 0.22, green: 0.88, blue: 0.73)
+                )
+            case .inserting:
+                StageLoadingContent(
+                    title: "Applying",
+                    tint: Color(red: 0.98, green: 0.74, blue: 0.38)
+                )
+            case .error:
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Error")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                }
+                .lineLimit(1)
+                .foregroundStyle(Color.white.opacity(0.9))
             case .idle:
-                Text("Ready")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.9))
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Ready")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(Color.white.opacity(0.9))
+            }
+        }
+    }
+}
+
+private struct StageLoadingContent: View {
+    let title: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CapsuleLoader(tint: tint)
+                .frame(width: 24, height: 10)
+
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.94))
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Circle()
+                .fill(tint.opacity(0.9))
+                .frame(width: 5.5, height: 5.5)
+                .shadow(color: tint.opacity(0.45), radius: 2, y: 0)
+        }
+    }
+}
+
+private struct CapsuleLoader: View {
+    let tint: Color
+    @State private var active = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+
+            Capsule()
+                .fill(tint.opacity(0.35))
+                .frame(width: 10)
+                .offset(x: active ? 12 : 2)
+
+            Circle()
+                .fill(tint)
+                .frame(width: 5, height: 5)
+                .offset(x: active ? 13 : 3)
+                .shadow(color: tint.opacity(0.52), radius: 3, y: 0)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) {
+                active.toggle()
             }
         }
     }
 }
 
 struct ListeningPillContent: View {
+
     let levels: [CGFloat]
     let partialText: String
+    let isStreamingMode: Bool
+    @State private var pulse = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            SymmetricBarsView(levels: levels, reverseWeights: false)
-                .frame(width: 42, height: 14)
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color(red: 0.96, green: 0.33, blue: 0.28))
+                .frame(width: 6, height: 6)
+                .scaleEffect(pulse ? 1.22 : 0.82)
+                .opacity(pulse ? 1 : 0.5)
 
-            Text(displayText)
-                .font(.system(size: 11, weight: .semibold))
+            SymmetricBarsView(levels: levels, reverseWeights: false)
+                .frame(width: 52, height: 12)
+
+            Text(isStreamingMode ? "Recording" : displayText)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.white.opacity(0.92))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-
-            SymmetricBarsView(levels: levels, reverseWeights: true)
-                .frame(width: 42, height: 14)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                pulse.toggle()
+            }
         }
     }
 
@@ -1006,6 +1831,7 @@ struct ListeningPillContent: View {
 }
 
 struct SymmetricBarsView: View {
+
     let levels: [CGFloat]
     let reverseWeights: Bool
 
@@ -1013,9 +1839,9 @@ struct SymmetricBarsView: View {
         TimelineView(.animation) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
-                let count = 16
-                let barWidth: CGFloat = 2.1
-                let spacing: CGFloat = 1.9
+                let count = 12
+                let barWidth: CGFloat = 1.8
+                let spacing: CGFloat = 1.6
                 let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
                 let startX = (size.width - totalWidth) / 2
                 let midY = size.height / 2
@@ -1968,6 +2794,7 @@ private enum HistoryRetention: String, CaseIterable, Identifiable {
 
 extension Notification.Name {
     static let echoToggleRecording = Notification.Name("echo.toggleRecording")
+    static let echoUndoLastAutoEdit = Notification.Name("echo.undoLastAutoEdit")
     static let echoRecordingSaved = Notification.Name("echo.recordingSaved")
     static let echoHomeSelectSection = Notification.Name("echo.homeSelectSection")
 }

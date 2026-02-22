@@ -20,6 +20,27 @@ public actor RecordingStore {
         }
     }
 
+    public struct ProviderHealthScore: Identifiable, Sendable, Hashable {
+        public var id: String { providerId }
+
+        public let providerId: String
+        public let providerName: String
+        public let sampleCount: Int
+        public let successRate: Double
+        public let averageAsrLatencyMs: Double
+        public let truncationRate: Double
+        public let fallbackRate: Double
+
+        public var healthScore: Double {
+            let successComponent = successRate * 65.0
+            let latencyFactor = max(0.0, min(1.0, 1.0 - (averageAsrLatencyMs / 3500.0)))
+            let latencyComponent = latencyFactor * 20.0
+            let truncationPenalty = truncationRate * 10.0
+            let fallbackPenalty = fallbackRate * 5.0
+            return max(0.0, min(100.0, successComponent + latencyComponent - truncationPenalty - fallbackPenalty))
+        }
+    }
+
     public struct RecordingEntry: Identifiable, Sendable, Hashable {
         public let id: Int64
         public let createdAt: Date
@@ -58,6 +79,18 @@ public actor RecordingStore {
         public let recordingsDirectory: URL
         public let databaseURL: URL
         public let entryCount: Int
+    }
+
+    public struct AuditEvent: Identifiable, Sendable, Hashable {
+        public let id: Int64
+        public let createdAt: Date
+        public let traceId: String
+        public let stage: String
+        public let event: String
+        public let providerId: String?
+        public let latencyMs: Int?
+        public let changed: Bool?
+        public let message: String?
     }
 
     private let fileManager = FileManager.default
@@ -319,6 +352,116 @@ public actor RecordingStore {
         }
     }
 
+    public func appendAuditEvent(
+        traceId: String,
+        stage: String,
+        event: String,
+        providerId: String? = nil,
+        latencyMs: Int? = nil,
+        changed: Bool? = nil,
+        message: String? = nil
+    ) {
+        guard let db else { return }
+        let normalizedTraceId = traceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTraceId.isEmpty else { return }
+
+        let sql = """
+        INSERT INTO recording_audit_events (
+            created_at,
+            trace_id,
+            stage,
+            event,
+            provider_id,
+            latency_ms,
+            changed,
+            message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            print("❌ RecordingStore: Failed to prepare audit insert statement")
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
+        bindText(stmt, index: 2, value: normalizedTraceId)
+        bindText(stmt, index: 3, value: stage)
+        bindText(stmt, index: 4, value: event)
+        bindText(stmt, index: 5, value: providerId)
+        if let latencyMs {
+            sqlite3_bind_int(stmt, 6, Int32(latencyMs))
+        } else {
+            sqlite3_bind_null(stmt, 6)
+        }
+        if let changed {
+            sqlite3_bind_int(stmt, 7, changed ? 1 : 0)
+        } else {
+            sqlite3_bind_null(stmt, 7)
+        }
+        bindText(stmt, index: 8, value: message)
+
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            print("❌ RecordingStore: Failed to insert audit event stage=\(stage) event=\(event)")
+        }
+    }
+
+    public func applyDeferredPolishResult(
+        traceId: String,
+        transcriptFinal: String,
+        correctionLatencyMs: Int?,
+        correctionProviderId: String?
+    ) {
+        guard let db else { return }
+        let normalizedTraceId = traceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedTraceId.isEmpty else { return }
+
+        let final = transcriptFinal.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wordCount = final.split { $0.isWhitespace }.count
+
+        let sql = """
+        UPDATE recordings
+        SET transcript_final = ?,
+            word_count = ?,
+            correction_latency_ms = ?,
+            correction_provider_id = COALESCE(?, correction_provider_id)
+        WHERE id = (
+            SELECT id
+            FROM recordings
+            WHERE trace_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+        );
+        """
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let stmt = statement else {
+            print("❌ RecordingStore: Failed to prepare deferred polish update statement")
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        bindText(stmt, index: 1, value: final)
+        sqlite3_bind_int(stmt, 2, Int32(wordCount))
+        if let correctionLatencyMs {
+            sqlite3_bind_int(stmt, 3, Int32(correctionLatencyMs))
+        } else {
+            sqlite3_bind_null(stmt, 3)
+        }
+        bindText(stmt, index: 4, value: correctionProviderId)
+        bindText(stmt, index: 5, value: normalizedTraceId)
+
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            print("❌ RecordingStore: Failed to apply deferred polish result for trace=\(normalizedTraceId)")
+            return
+        }
+
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .echoRecordingSaved, object: nil)
+        }
+    }
+
     public func schemaHealth() -> SchemaHealth {
         Self.reportSchemaHealth(
             databaseURL: databaseURL,
@@ -440,6 +583,58 @@ public actor RecordingStore {
         return entries
     }
 
+
+    public func providerHealthScores(limit: Int = 120) -> [ProviderHealthScore] {
+        let records = fetchRecent(limit: max(10, limit))
+        guard !records.isEmpty else { return [] }
+
+        struct ProviderKey: Hashable {
+            let id: String
+            let name: String
+        }
+
+        let grouped = Dictionary(grouping: records) { record in
+            ProviderKey(id: record.asrProviderId, name: record.asrProviderName)
+        }
+
+        let scores: [ProviderHealthScore] = grouped.map { key, items in
+            let sampleCount = items.count
+            let successCount = items.filter { item in
+                let hasErrorText = !(item.error?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ?? true)
+                let code = item.errorCode?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).lowercased() ?? "none"
+                return item.status == "success" && !hasErrorText && (code.isEmpty || code == "none")
+            }.count
+
+            let latencyValues = items.compactMap { item in
+                item.asrLatencyMs ?? item.totalLatencyMs
+            }
+            let averageLatency = latencyValues.isEmpty
+                ? 0
+                : Double(latencyValues.reduce(0, +)) / Double(latencyValues.count)
+
+            let truncationCount = items.filter { Self.isLikelyTruncatedRecording($0) }.count
+            let fallbackCount = items.filter(\.fallbackUsed).count
+
+            return ProviderHealthScore(
+                providerId: key.id,
+                providerName: key.name,
+                sampleCount: sampleCount,
+                successRate: sampleCount == 0 ? 0 : Double(successCount) / Double(sampleCount),
+                averageAsrLatencyMs: averageLatency,
+                truncationRate: sampleCount == 0 ? 0 : Double(truncationCount) / Double(sampleCount),
+                fallbackRate: sampleCount == 0 ? 0 : Double(fallbackCount) / Double(sampleCount)
+            )
+        }
+
+        return scores.sorted {
+            if $0.healthScore == $1.healthScore {
+                return $0.sampleCount > $1.sampleCount
+            }
+            return $0.healthScore > $1.healthScore
+        }
+    }
+
+
     public func storageInfo() -> StorageInfo {
         let count = countEntries()
         return StorageInfo(
@@ -473,6 +668,21 @@ public actor RecordingStore {
     }
 
     // MARK: - Setup
+
+
+    private static func isLikelyTruncatedRecording(_ entry: RecordingEntry) -> Bool {
+        let raw = entry.transcriptRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let final = entry.transcriptFinal?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty, !final.isEmpty else { return false }
+        guard raw.count >= 18, final.count < raw.count else { return false }
+
+        let ratio = Double(final.count) / Double(raw.count)
+        if raw.hasPrefix(final) && ratio < 0.75 {
+            return true
+        }
+        return ratio < 0.55
+    }
+
 
     private static func createDirectories(
         fileManager: FileManager,
@@ -558,6 +768,21 @@ public actor RecordingStore {
 
         CREATE INDEX IF NOT EXISTS idx_recordings_created_at
         ON recordings (created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS recording_audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at REAL NOT NULL,
+            trace_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            event TEXT NOT NULL,
+            provider_id TEXT,
+            latency_ms INTEGER,
+            changed INTEGER,
+            message TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_recording_audit_trace_created
+        ON recording_audit_events (trace_id, created_at DESC);
         """
 
         if sqlite3_exec(db, createSQL, nil, nil, nil) != SQLITE_OK {
@@ -792,6 +1017,14 @@ public actor RecordingStore {
         let deleteSQL = "DELETE FROM recordings WHERE created_at < ?;"
         var deleteStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, deleteSQL, -1, &deleteStmt, nil) == SQLITE_OK, let stmt = deleteStmt {
+            sqlite3_bind_double(stmt, 1, cutoff)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+        }
+
+        let deleteAuditSQL = "DELETE FROM recording_audit_events WHERE created_at < ?;"
+        var deleteAuditStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, deleteAuditSQL, -1, &deleteAuditStmt, nil) == SQLITE_OK, let stmt = deleteAuditStmt {
             sqlite3_bind_double(stmt, 1, cutoff)
             sqlite3_step(stmt)
             sqlite3_finalize(stmt)

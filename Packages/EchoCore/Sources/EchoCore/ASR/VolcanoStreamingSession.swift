@@ -118,16 +118,35 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         sendAudioFrame(data: Data(), isLast: true, allowWhenStopping: true)
 
         // Give server a short window to emit final packet.
-        let totalWaitNanos: UInt64 = 2_800_000_000
+        // Prefer low-latency stop when partial text has already stabilized.
+        let totalWaitNanos: UInt64 = 1_400_000_000
         let pollStepNanos: UInt64 = 80_000_000
         let attempts = Int(totalWaitNanos / pollStepNanos)
+        var lastPartialSnapshot = ""
+        var stablePartialTicks = 0
         for _ in 0..<attempts {
-            let snapshot = withState { (latestFinalResult, latestPartialResult, isConnected) }
+            let snapshot = withState { (latestFinalResult, latestPartialResult, isConnected, lastReceivedTime) }
             if snapshot.0 != nil {
                 break
             }
             if !snapshot.2 {
                 break
+            }
+
+            let partialText = snapshot.1?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !partialText.isEmpty {
+                if partialText == lastPartialSnapshot {
+                    stablePartialTicks += 1
+                } else {
+                    lastPartialSnapshot = partialText
+                    stablePartialTicks = 0
+                }
+
+                let idleMs = snapshot.3.map { Date().timeIntervalSince($0) * 1000 } ?? 0
+                if stablePartialTicks >= 2 && idleMs >= 240 {
+                    diagnosticsLog("stop early finalize from stable partial idleMs=\(Int(idleMs)) len=\(partialText.count)")
+                    break
+                }
             }
             try? await Task.sleep(nanoseconds: pollStepNanos)
         }
@@ -224,6 +243,135 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
             language: incoming.language,
             isFinal: true
         )
+    }
+
+    static func sanitizeStreamingText(_ text: String, previous: String?) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        // Keep stream-time sanitation lightweight for long utterances.
+        if trimmed.count > 1200 {
+            return collapseRepeatedPrefix(from: trimmed, around: previous)
+        }
+
+        let deduped = collapseDuplicateFullString(from: trimmed)
+        let anchored = collapseRepeatedPrefix(from: deduped, around: previous)
+        return anchored
+    }
+
+    private static func normalizedComparisonText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalized = String(trimmed.unicodeScalars.filter { scalar in
+            CharacterSet.alphanumerics.contains(scalar) ||
+            CharacterSet.whitespacesAndNewlines.contains(scalar)
+        })
+        let collapsed = normalized
+            .split(whereSeparator: { $0.isWhitespace || $0.isNewline })
+            .joined(separator: " ")
+        return collapsed
+    }
+
+    private static func appearsRegression(_ candidateText: String, against latestText: String?) -> Bool {
+        guard let latestText else { return false }
+
+        let latest = normalizedComparisonText(latestText)
+        guard !candidateText.isEmpty, !latest.isEmpty else { return false }
+
+        if candidateText == latest {
+            return true
+        }
+
+        return candidateText.count <= latest.count &&
+        (candidateText.count < latest.count && latest.hasPrefix(candidateText))
+    }
+
+    private static func collapseDuplicateFullString(from text: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return incoming }
+        if incoming.count > 1200 { return incoming }
+
+        let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
+        if fullTokens.count >= 2 {
+            for unitLength in stride(from: fullTokens.count / 2, through: 1, by: -1) {
+                let unitCount = max(1, unitLength)
+                guard fullTokens.count >= unitCount * 2 else { continue }
+
+                let unit = Array(fullTokens.prefix(unitCount))
+                var cursor = unitCount
+                var duplicateRuns = 1
+
+                while cursor + unitCount <= fullTokens.count,
+                      Array(fullTokens[cursor..<(cursor + unitCount)]) == unit {
+                    duplicateRuns += 1
+                    cursor += unitCount
+                }
+
+                if duplicateRuns >= 2 {
+                    let tail = fullTokens.dropFirst(unitCount * duplicateRuns)
+                    let unitText = unit.joined(separator: " ")
+                    guard !tail.isEmpty else {
+                        return unitText
+                    }
+                    return "\(unitText) \(tail.joined(separator: " "))"
+                }
+            }
+        }
+
+        let incomingChars = Array(incoming)
+        let maxUnitLength = incomingChars.count / 2
+        guard maxUnitLength > 0 else { return incoming }
+
+        for unitLength in stride(from: maxUnitLength, through: 1, by: -1) {
+            let unit = Array(incomingChars[0..<unitLength])
+            var cursor = unitLength
+            var duplicateRuns = 1
+
+            while cursor + unitLength <= incomingChars.count,
+                  Array(incomingChars[cursor..<(cursor + unitLength)]) == unit {
+                duplicateRuns += 1
+                cursor += unitLength
+            }
+
+            if duplicateRuns >= 2 {
+                let tail = String(incomingChars.dropFirst(unitLength * duplicateRuns)).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !tail.isEmpty else { return String(unit) }
+                return "\(String(unit)) \(tail)"
+            }
+        }
+
+        return incoming
+    }
+
+    private static func collapseRepeatedPrefix(from text: String, around previousText: String?) -> String {
+        guard let previousText else { return text }
+
+        let previousTrimmed = previousText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidateTrimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if previousTrimmed.isEmpty || candidateTrimmed.isEmpty {
+            return candidateTrimmed
+        }
+
+        let base = Array(previousTrimmed)
+        let candidate = Array(candidateTrimmed)
+
+        guard candidate.starts(with: base), base.count > 0 else {
+            return candidateTrimmed
+        }
+
+        var cursor = base.count
+        var repeatRuns = 1
+        while cursor + base.count <= candidate.count,
+              Array(candidate[cursor..<(cursor + base.count)]) == base {
+            repeatRuns += 1
+            cursor += base.count
+        }
+
+        guard repeatRuns >= 2 else { return candidateTrimmed }
+
+        let tail = String(candidate.dropFirst(base.count * repeatRuns)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if tail.isEmpty { return previousTrimmed }
+        return "\(previousTrimmed) \(tail)"
     }
 
     // MARK: - WebSocket Connection
@@ -661,18 +809,64 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
 
     private func yieldServerResult(_ result: TranscriptionResult) {
         let priorPartial = withState { latestPartialResult }
-        let normalized = Self.normalizedStreamingResult(result, latestPartial: priorPartial)
+        let priorText = priorPartial?.text
+        let normalizedRaw = Self.normalizedStreamingResult(result, latestPartial: priorPartial)
+        let sanitizedText = Self.sanitizeStreamingText(normalizedRaw.text, previous: priorText)
+        let normalized = TranscriptionResult(
+            text: sanitizedText,
+            language: normalizedRaw.language,
+            isFinal: normalizedRaw.isFinal
+        )
+        let trimmedNormalized = normalized.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if result.isFinal && result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            diagnosticsLog("received empty final packet -> normalized to textLen=\(normalized.text.count)")
+        if normalizedRaw.text != sanitizedText {
+            diagnosticsLog("parser dedupe reduced textLen=\(normalizedRaw.text.count)->\(sanitizedText.count)")
         }
 
+        if normalized.isFinal && trimmedNormalized.isEmpty {
+            if !(priorText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                diagnosticsLog("received empty final packet, keep running partial for final fallback")
+                return
+            }
+            diagnosticsLog("received empty final packet with no prior partial")
+        }
+
+        var shouldEmit = true
+        let normalizedToken = Self.normalizedComparisonText(trimmedNormalized)
         withState {
             if normalized.isFinal {
+                let latestFinalText = latestFinalResult?.text
+                let latestPartialText = latestPartialResult?.text
+
+                if let latestFinalText,
+                   Self.normalizedComparisonText(latestFinalText) == normalizedToken {
+                    shouldEmit = false
+                } else if let latestPartialText,
+                          Self.appearsRegression(normalizedToken, against: latestPartialText),
+                          !trimmedNormalized.isEmpty {
+                    // Same content as current partial but now flagged final; avoid duplicate emit.
+                    shouldEmit = false
+                } else if let latestFinalText,
+                          Self.appearsRegression(normalizedToken, against: latestFinalText) {
+                    shouldEmit = false
+                }
                 latestFinalResult = normalized
-            } else if !normalized.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
+            }
+
+            if let latestPartialText = latestPartialResult?.text,
+               Self.appearsRegression(normalizedToken, against: latestPartialText) {
+                shouldEmit = false
+                return
+            }
+
+            if !trimmedNormalized.isEmpty {
                 latestPartialResult = normalized
             }
+        }
+
+        guard shouldEmit else {
+            return
         }
         continuation?.yield(normalized)
     }

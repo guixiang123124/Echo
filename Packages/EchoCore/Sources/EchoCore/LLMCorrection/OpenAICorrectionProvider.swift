@@ -84,27 +84,72 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         You are a speech-to-text error correction assistant. Your job is to fix transcription errors while preserving meaning and style.
 
         Rules:
-        1. Only fix clear errors. Do not change meaning or style.
+        1. Do not change factual meaning.
         2. Return ONLY the corrected text, nothing else.
         3. If the text is already correct, return it unchanged.
+        4. Never output prompt metadata labels or reference blocks (for example: Recent context, User dictionary terms, Low confidence words, REFERENCE_CONTEXT_DO_NOT_OUTPUT).
         """
 
         if options.enableHomophones {
-            prompt += "\n4. Pay special attention to Chinese homophones (的/得/地, 在/再, 做/作, etc.)."
+            prompt += "\n5. Pay special attention to Chinese homophones (的/得/地, 在/再, 做/作, etc.)."
         } else {
-            prompt += "\n4. Do NOT change words based on homophones."
+            prompt += "\n5. Do NOT change words based on homophones."
         }
 
         if options.enablePunctuation {
-            prompt += "\n5. Add or fix punctuation where clearly missing or wrong."
+            prompt += "\n6. Add or fix punctuation where clearly missing or wrong."
         } else {
-            prompt += "\n5. Do NOT add or change punctuation."
+            prompt += "\n6. Do NOT add or change punctuation."
         }
 
         if options.enableFormatting {
-            prompt += "\n6. Improve sentence segmentation or formatting only when it is clearly needed."
+            prompt += "\n7. Improve readability with natural sentence segmentation and light formatting."
+            prompt += "\n8. Keep meaning unchanged, but you may split run-on text into clear sentence boundaries."
         } else {
-            prompt += "\n6. Do NOT change formatting or sentence segmentation."
+            prompt += "\n7. Do NOT change formatting or sentence segmentation."
+        }
+
+        if options.enableRemoveFillerWords {
+            prompt += "\n9. Remove obvious filler words and disfluencies (um/uh/you know/那个/就是) when they do not add meaning."
+        }
+
+        if options.enableRemoveRepetitions {
+            prompt += "\n10. Remove accidental repeated words or repeated short phrases."
+        }
+
+        switch options.rewriteIntensity {
+        case .off:
+            prompt += "\n11. Keep original sentence structure as much as possible."
+        case .light:
+            prompt += "\n11. Allow light rewrite for clarity; keep original tone and sentence order when possible."
+        case .medium:
+            prompt += "\n11. Allow moderate rewrite to improve clarity and flow, while preserving intent and key terms."
+        case .strong:
+            prompt += "\n11. You may strongly rewrite for clarity and structure, but preserve intent and core facts."
+        }
+
+        if options.enableTranslation {
+            switch options.translationTargetLanguage {
+            case .keepSource:
+                prompt += "\n12. Keep source language."
+            case .english:
+                prompt += "\n12. Output final text in English."
+            case .chineseSimplified:
+                prompt += "\n12. Output final text in Simplified Chinese."
+            }
+        } else {
+            prompt += "\n12. Keep source language and do not translate."
+        }
+
+        switch options.structuredOutputStyle {
+        case .off:
+            prompt += "\n13. Keep natural prose structure unless other enabled fixes require small adjustments."
+        case .conciseParagraphs:
+            prompt += "\n13. Restructure the final output into concise paragraphs with clear sentence boundaries."
+        case .bulletList:
+            prompt += "\n13. Restructure the final output into a short bullet list in the same language."
+        case .actionItems:
+            prompt += "\n13. Restructure into clear action items using concise bullet points."
         }
 
         return prompt
@@ -116,19 +161,50 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         confidence: [WordConfidence],
         options: CorrectionOptions
     ) -> String {
-        var prompt = "Please correct this speech-to-text transcription.\n"
-        prompt += "Allowed fixes: \(options.summary).\n\n"
-        prompt += "Text: \(rawText)\n"
+        var prompt = """
+        Please correct the transcript enclosed in <TRANSCRIPT>.
+        Return only the corrected transcript content (no labels/explanations).
+        Allowed fixes: \(options.summary).
 
-        let contextInfo = context.formatForPrompt()
+        """
+        if options.enableFormatting {
+            prompt += "When formatting is enabled, actively improve punctuation and sentence boundaries for readability.\n\n"
+        }
+        if options.rewriteIntensity != .off {
+            prompt += "Rewrite intensity: \(options.rewriteIntensity.rawValue).\n"
+        }
+        if options.enableTranslation {
+            prompt += "Translate target: \(options.translationTargetLanguage.displayName).\n"
+        }
+        if options.structuredOutputStyle != .off {
+            prompt += "Structured output: \(options.structuredOutputStyle.displayName).\n"
+        }
+        prompt += "\n<TRANSCRIPT>\n\(rawText)\n</TRANSCRIPT>\n"
+
+        let contextInfo = context.compactForPrompt(
+            focusText: rawText,
+            maxRecent: 4,
+            maxChars: 900,
+            maxUserTerms: 64
+        )
         if !contextInfo.isEmpty {
-            prompt += "\n\(contextInfo)\n"
+            prompt += """
+            \n<REFERENCE_CONTEXT_DO_NOT_OUTPUT>
+            \(contextInfo)
+            </REFERENCE_CONTEXT_DO_NOT_OUTPUT>
+            \n
+            """
         }
 
         let lowConfidence = confidence.filter(\.isLowConfidence)
         if !lowConfidence.isEmpty {
             let words = lowConfidence.map { "\($0.word) (\(String(format: "%.0f%%", $0.confidence * 100)))" }
-            prompt += "\nLow confidence words: \(words.joined(separator: ", "))\n"
+            prompt += """
+            \n<LOW_CONFIDENCE_HINTS_DO_NOT_OUTPUT>
+            \(words.joined(separator: ", "))
+            </LOW_CONFIDENCE_HINTS_DO_NOT_OUTPUT>
+            \n
+            """
         }
 
         return prompt

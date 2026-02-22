@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>GOOGLE_CLIENT_ID_MAC</key>
 	<string>852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
 	<key>CFBundleURLTypes</key>
@@ -36,6 +36,8 @@
 	</array>
 	<key>LSUIElement</key>
 	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
 	<key>NSInputMonitoringUsageDescription</key>
 	<string>Echo needs input monitoring to detect global hotkeys.</string>
 	<key>NSMicrophoneUsageDescription</key>

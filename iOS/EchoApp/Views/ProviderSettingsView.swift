@@ -13,9 +13,7 @@ struct ProviderSettingsView: View {
     private var extraKeyIds: [String] {
         [
             "volcano_app_id",
-            "volcano_access_key",
-            "aliyun_app_key",
-            "aliyun_token"
+            "volcano_access_key"
         ]
     }
 
@@ -39,14 +37,6 @@ struct ProviderSettingsView: View {
                             firstKeyId: "volcano_app_id",
                             secondLabel: "Access Key",
                             secondKeyId: "volcano_access_key"
-                        )
-                    } else if provider.id == "aliyun" {
-                        keyPairRow(
-                            title: provider.displayName,
-                            firstLabel: "App Key",
-                            firstKeyId: "aliyun_app_key",
-                            secondLabel: "Token",
-                            secondKeyId: "aliyun_token"
                         )
                     } else {
                         apiKeyRow(for: provider)

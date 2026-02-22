@@ -44,31 +44,10 @@ public enum ProviderType: String, Sendable, Equatable, Codable, CaseIterable {
 public enum AvailableProviders {
     public static let asrProviders: [ProviderConfig] = [
         ProviderConfig(
-            id: "apple_speech",
-            displayName: "Apple Speech (On-Device)",
+            id: "openai_whisper",
+            displayName: "OpenAI Transcribe",
             type: .asr,
             isEnabled: true,
-            requiresApiKey: false
-        ),
-        ProviderConfig(
-            id: "whisperkit",
-            displayName: "WhisperKit (Offline)",
-            type: .asr,
-            isEnabled: false,
-            requiresApiKey: false
-        ),
-        ProviderConfig(
-            id: "openai_whisper",
-            displayName: "OpenAI Whisper",
-            type: .asr,
-            isEnabled: false,
-            requiresApiKey: true
-        ),
-        ProviderConfig(
-            id: "ark_asr",
-            displayName: "Volcano Ark ASR",
-            type: .asr,
-            isEnabled: false,
             requiresApiKey: true
         ),
         ProviderConfig(
@@ -79,22 +58,8 @@ public enum AvailableProviders {
             requiresApiKey: true
         ),
         ProviderConfig(
-            id: "iflytek",
-            displayName: "iFlytek (讯飞)",
-            type: .asr,
-            isEnabled: false,
-            requiresApiKey: true
-        ),
-        ProviderConfig(
             id: "volcano",
             displayName: "Volcano Engine (火山引擎)",
-            type: .asr,
-            isEnabled: false,
-            requiresApiKey: true
-        ),
-        ProviderConfig(
-            id: "aliyun",
-            displayName: "Alibaba Cloud NLS (阿里云)",
             type: .asr,
             isEnabled: false,
             requiresApiKey: true

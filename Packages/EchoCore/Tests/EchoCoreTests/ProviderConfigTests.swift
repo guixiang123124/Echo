@@ -39,12 +39,12 @@ struct ProviderConfigTests {
     func availableASR() {
         #expect(!AvailableProviders.asrProviders.isEmpty)
 
-        let appleSpeech = AvailableProviders.asrProviders.first {
-            $0.id == "apple_speech"
+        let openAI = AvailableProviders.asrProviders.first {
+            $0.id == "openai_whisper"
         }
-        #expect(appleSpeech != nil)
-        #expect(appleSpeech?.requiresApiKey == false)
-        #expect(appleSpeech?.isEnabled == true) // Default enabled
+        #expect(openAI != nil)
+        #expect(openAI?.requiresApiKey == true)
+        #expect(openAI?.isEnabled == true) // Default enabled
     }
 
     @Test("Available correction providers list is populated")

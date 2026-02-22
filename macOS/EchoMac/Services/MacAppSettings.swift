@@ -5,6 +5,7 @@ import EchoCore
 /// macOS-specific settings for Echo
 public final class MacAppSettings: ObservableObject {
     public static let shared = MacAppSettings()
+    private static let streamCapableProviders: Set<String> = ["volcano", "deepgram"]
     // MARK: - UserDefaults Keys
 
     private enum Keys {
@@ -12,14 +13,25 @@ public final class MacAppSettings: ObservableObject {
         static let recordingMode = "recordingMode"
         static let selectedASRProvider = "selectedASRProvider"
         static let asrMode = "echo.asr.mode"
+        static let streamFastEnabled = "echo.asr.streamFastEnabled"
         static let asrLanguage = "asrLanguage"
         static let openAITranscriptionModel = "echo.asr.openaiModel"
         static let deepgramModel = "echo.asr.deepgramModel"
         static let selectedCorrectionProvider = "selectedCorrectionProvider"
         static let correctionEnabled = "correctionEnabled"
+        static let autoEditPreset = "echo.correction.preset"
+        static let autoEditApplyMode = "echo.correction.applyMode"
         static let correctionHomophones = "correctionHomophones"
         static let correctionPunctuation = "correctionPunctuation"
         static let correctionFormatting = "correctionFormatting"
+        static let correctionRemoveFiller = "echo.correction.removeFiller"
+        static let correctionRemoveRepetition = "echo.correction.removeRepetition"
+        static let correctionRewriteIntensity = "echo.correction.rewriteIntensity"
+        static let correctionTranslationEnabled = "echo.correction.translation.enabled"
+        static let correctionTranslationTarget = "echo.correction.translation.target"
+        static let correctionStructuredOutput = "echo.correction.structuredOutput"
+        static let dictionaryAutoLearnEnabled = "echo.dictionary.autoLearn.enabled"
+        static let dictionaryAutoLearnRequireReview = "echo.dictionary.autoLearn.requireReview"
         static let launchAtLogin = "launchAtLogin"
         static let showRecordingPanel = "showRecordingPanel"
         static let playSound = "playSound"
@@ -168,7 +180,7 @@ public final class MacAppSettings: ObservableObject {
         public var description: String {
             switch self {
             case .domestic:
-                return "Use Volcano/Alibaba for ASR with a domestic LLM for edits."
+                return "Use Volcano Engine for ASR with a domestic LLM for edits."
             case .whisperOnly:
                 return "Use Whisper transcription without Auto Edit."
             case .whisperPlusEdit:
@@ -197,7 +209,7 @@ public final class MacAppSettings: ObservableObject {
         }
         if defaults.object(forKey: Keys.selectedASRProvider) == nil {
             defaults.set("openai_whisper", forKey: Keys.selectedASRProvider)
-        } else if defaults.string(forKey: Keys.selectedASRProvider) == "apple_speech" {
+        } else if !["openai_whisper", "deepgram", "volcano"].contains(defaults.string(forKey: Keys.selectedASRProvider) ?? "") {
             defaults.set("openai_whisper", forKey: Keys.selectedASRProvider)
         }
         if defaults.object(forKey: Keys.asrLanguage) == nil {
@@ -206,14 +218,23 @@ public final class MacAppSettings: ObservableObject {
         if defaults.object(forKey: Keys.asrMode) == nil {
             defaults.set(ASRMode.batch.rawValue, forKey: Keys.asrMode)
         }
+        if defaults.object(forKey: Keys.streamFastEnabled) == nil {
+            defaults.set(true, forKey: Keys.streamFastEnabled)
+        }
         if defaults.object(forKey: Keys.openAITranscriptionModel) == nil {
             defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
         }
         if defaults.object(forKey: Keys.deepgramModel) == nil {
             defaults.set("nova-3", forKey: Keys.deepgramModel)
         }
+        if defaults.object(forKey: Keys.autoEditPreset) == nil {
+            defaults.set(AutoEditPreset.smartPolish.rawValue, forKey: Keys.autoEditPreset)
+        }
+        if defaults.object(forKey: Keys.autoEditApplyMode) == nil {
+            defaults.set(AutoEditApplyMode.autoReplace.rawValue, forKey: Keys.autoEditApplyMode)
+        }
         if defaults.object(forKey: Keys.correctionEnabled) == nil {
-            defaults.set(false, forKey: Keys.correctionEnabled)
+            defaults.set(true, forKey: Keys.correctionEnabled)
         }
         if defaults.object(forKey: Keys.correctionHomophones) == nil {
             defaults.set(true, forKey: Keys.correctionHomophones)
@@ -223,6 +244,30 @@ public final class MacAppSettings: ObservableObject {
         }
         if defaults.object(forKey: Keys.correctionFormatting) == nil {
             defaults.set(true, forKey: Keys.correctionFormatting)
+        }
+        if defaults.object(forKey: Keys.correctionRemoveFiller) == nil {
+            defaults.set(true, forKey: Keys.correctionRemoveFiller)
+        }
+        if defaults.object(forKey: Keys.correctionRemoveRepetition) == nil {
+            defaults.set(true, forKey: Keys.correctionRemoveRepetition)
+        }
+        if defaults.object(forKey: Keys.correctionRewriteIntensity) == nil {
+            defaults.set(RewriteIntensity.light.rawValue, forKey: Keys.correctionRewriteIntensity)
+        }
+        if defaults.object(forKey: Keys.correctionTranslationEnabled) == nil {
+            defaults.set(false, forKey: Keys.correctionTranslationEnabled)
+        }
+        if defaults.object(forKey: Keys.correctionTranslationTarget) == nil {
+            defaults.set(TranslationTargetLanguage.keepSource.rawValue, forKey: Keys.correctionTranslationTarget)
+        }
+        if defaults.object(forKey: Keys.correctionStructuredOutput) == nil {
+            defaults.set(StructuredOutputStyle.off.rawValue, forKey: Keys.correctionStructuredOutput)
+        }
+        if defaults.object(forKey: Keys.dictionaryAutoLearnEnabled) == nil {
+            defaults.set(true, forKey: Keys.dictionaryAutoLearnEnabled)
+        }
+        if defaults.object(forKey: Keys.dictionaryAutoLearnRequireReview) == nil {
+            defaults.set(true, forKey: Keys.dictionaryAutoLearnRequireReview)
         }
         if defaults.object(forKey: Keys.showRecordingPanel) == nil {
             defaults.set(true, forKey: Keys.showRecordingPanel)
@@ -359,14 +404,18 @@ public final class MacAppSettings: ObservableObject {
     public var selectedASRProvider: String {
         get {
             let value = defaults.string(forKey: Keys.selectedASRProvider) ?? "openai_whisper"
-            if value == "apple_speech" || value == "apple_legacy" {
+            if value != "openai_whisper", value != "deepgram", value != "volcano" {
                 return "openai_whisper"
             }
             return value
         }
         set {
             objectWillChange.send()
-            defaults.set(newValue, forKey: Keys.selectedASRProvider)
+            let normalized = (newValue == "deepgram" || newValue == "volcano") ? newValue : "openai_whisper"
+            defaults.set(normalized, forKey: Keys.selectedASRProvider)
+            if normalized == "openai_whisper", asrMode == .stream {
+                defaults.set(ASRMode.batch.rawValue, forKey: Keys.asrMode)
+            }
         }
     }
 
@@ -381,6 +430,25 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue.rawValue, forKey: Keys.asrMode)
+            switch newValue {
+            case .batch:
+                // Product requirement: switching to Batch defaults to OpenAI.
+                defaults.set("openai_whisper", forKey: Keys.selectedASRProvider)
+            case .stream:
+                let provider = defaults.string(forKey: Keys.selectedASRProvider) ?? "openai_whisper"
+                if !Self.streamCapableProviders.contains(provider) {
+                    // Product requirement: switching to Stream defaults to Volcano.
+                    defaults.set("volcano", forKey: Keys.selectedASRProvider)
+                }
+            }
+        }
+    }
+
+    public var streamFastEnabled: Bool {
+        get { defaults.object(forKey: Keys.streamFastEnabled) == nil ? true : defaults.bool(forKey: Keys.streamFastEnabled) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.streamFastEnabled)
         }
     }
 
@@ -426,6 +494,35 @@ public final class MacAppSettings: ObservableObject {
         }
     }
 
+    public var autoEditPreset: AutoEditPreset {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.autoEditPreset),
+                  let preset = AutoEditPreset(rawValue: rawValue) else {
+                return .smartPolish
+            }
+            return preset
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.autoEditPreset)
+            applyAutoEditPreset(newValue)
+        }
+    }
+
+    public var autoEditApplyMode: AutoEditApplyMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.autoEditApplyMode),
+                  let mode = AutoEditApplyMode(rawValue: rawValue) else {
+                return .autoReplace
+            }
+            return mode
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.autoEditApplyMode)
+        }
+    }
+
     public var correctionEnabled: Bool {
         get { defaults.bool(forKey: Keys.correctionEnabled) }
         set {
@@ -458,12 +555,100 @@ public final class MacAppSettings: ObservableObject {
         }
     }
 
+    public var correctionRemoveFillerEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionRemoveFiller) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.correctionRemoveFiller)
+        }
+    }
+
+    public var correctionRemoveRepetitionEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionRemoveRepetition) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.correctionRemoveRepetition)
+        }
+    }
+
+    public var correctionRewriteIntensity: RewriteIntensity {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.correctionRewriteIntensity),
+                  let value = RewriteIntensity(rawValue: rawValue) else {
+                return .light
+            }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.correctionRewriteIntensity)
+        }
+    }
+
+    public var correctionTranslationEnabled: Bool {
+        get { defaults.bool(forKey: Keys.correctionTranslationEnabled) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.correctionTranslationEnabled)
+        }
+    }
+
+    public var correctionTranslationTarget: TranslationTargetLanguage {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.correctionTranslationTarget),
+                  let value = TranslationTargetLanguage(rawValue: rawValue) else {
+                return .keepSource
+            }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.correctionTranslationTarget)
+        }
+    }
+
+    public var correctionStructuredOutputStyle: StructuredOutputStyle {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.correctionStructuredOutput),
+                  let value = StructuredOutputStyle(rawValue: rawValue) else {
+                return .off
+            }
+            return value
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.correctionStructuredOutput)
+        }
+    }
+
     public var autoEditOptions: CorrectionOptions {
         CorrectionOptions(
             enableHomophones: correctionHomophonesEnabled,
             enablePunctuation: correctionPunctuationEnabled,
-            enableFormatting: correctionFormattingEnabled
+            enableFormatting: correctionFormattingEnabled,
+            enableRemoveFillerWords: correctionRemoveFillerEnabled,
+            enableRemoveRepetitions: correctionRemoveRepetitionEnabled,
+            rewriteIntensity: correctionRewriteIntensity,
+            enableTranslation: correctionTranslationEnabled,
+            translationTargetLanguage: correctionTranslationTarget,
+            structuredOutputStyle: correctionStructuredOutputStyle
         )
+    }
+
+    public var dictionaryAutoLearnEnabled: Bool {
+        get { defaults.bool(forKey: Keys.dictionaryAutoLearnEnabled) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.dictionaryAutoLearnEnabled)
+        }
+    }
+
+    public var dictionaryAutoLearnRequireReview: Bool {
+        get { defaults.bool(forKey: Keys.dictionaryAutoLearnRequireReview) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.dictionaryAutoLearnRequireReview)
+        }
     }
 
     // MARK: - General Settings
@@ -632,6 +817,7 @@ public final class MacAppSettings: ObservableObject {
             if !isDomesticASRProvider(selectedASRProvider) {
                 selectedASRProvider = "volcano"
             }
+            asrMode = .stream
             correctionEnabled = true
             if selectedCorrectionProvider == "openai_gpt" || selectedCorrectionProvider.isEmpty {
                 selectedCorrectionProvider = "doubao"
@@ -650,7 +836,25 @@ public final class MacAppSettings: ObservableObject {
         }
     }
 
+    private func applyAutoEditPreset(_ preset: AutoEditPreset) {
+        guard preset != .custom else { return }
+        let options = CorrectionOptions.preset(preset)
+        correctionEnabled = preset != .pureTranscript
+        correctionHomophonesEnabled = options.enableHomophones
+        correctionPunctuationEnabled = options.enablePunctuation
+        correctionFormattingEnabled = options.enableFormatting
+        correctionRemoveFillerEnabled = options.enableRemoveFillerWords
+        correctionRemoveRepetitionEnabled = options.enableRemoveRepetitions
+        correctionRewriteIntensity = options.rewriteIntensity
+        correctionTranslationEnabled = options.enableTranslation
+        correctionTranslationTarget = options.translationTargetLanguage
+        correctionStructuredOutputStyle = options.structuredOutputStyle
+        if preset == .streamFast {
+            streamFastEnabled = true
+        }
+    }
+
     private func isDomesticASRProvider(_ providerId: String) -> Bool {
-        providerId == "volcano" || providerId == "aliyun"
+        providerId == "volcano"
     }
 }

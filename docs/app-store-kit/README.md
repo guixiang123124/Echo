@@ -8,6 +8,7 @@
 2. `03-signing-and-build.md`
 3. `04-app-store-connect-submission.md`
 4. `06-release-day-checklist.md`
+5. `07-pre-submit-final-checklist.md`（明天上线前最终核对 + 命令清单）
 
 ## 最终可提交元数据（中英双语）
 - iOS 中文：`IOS_METADATA.zh-Hans.md`

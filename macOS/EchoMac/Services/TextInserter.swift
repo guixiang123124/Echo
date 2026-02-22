@@ -40,10 +40,12 @@ public final class TextInserter {
         let targetElement: AXUIElement
         var insertionRange: NSRange
         var expectedInsertedText: String
+        var useKeyboardFallback: Bool
     }
 
     private var savedPasteboardContents: [NSPasteboard.PasteboardType: Data]?
     private var streamingState: StreamingInsertionState?
+    private var streamingFallbackText: String = ""
 
     // MARK: - Public Methods
 
@@ -92,16 +94,42 @@ public final class TextInserter {
             return .failed(.init(category: .focus, details: "focus missing: no focused UI element"))
         }
 
-        guard let selectedRange = selectedTextRange(for: focusedElement) else {
-            return .failed(.init(category: .selection, details: "selection unavailable (focused element may not support selected-text insertion)"))
+        if let selectedRange = selectedTextRange(for: focusedElement) {
+            let normalizedRange = normalizedRange(for: focusedElement, selectedRange)
+            streamingState = StreamingInsertionState(
+                targetElement: focusedElement,
+                insertionRange: normalizedRange,
+                expectedInsertedText: "",
+                useKeyboardFallback: false
+            )
+            return .attached
         }
 
-        let normalizedRange = normalizedRange(for: focusedElement, selectedRange)
+        guard let nsText = elementValue(for: focusedElement).flatMap({ $0 as NSString? }) else {
+            print("⚠️ Streaming start no selection/value fallback; using keyboard-only insertion")
+            streamingState = StreamingInsertionState(
+                targetElement: focusedElement,
+                insertionRange: NSRange(location: 0, length: 0),
+                expectedInsertedText: "",
+                useKeyboardFallback: true
+            )
+            streamingFallbackText = ""
+            return .attached
+        }
+
+        let fallbackRange = NSRange(location: nsText.length, length: 0)
+        let canMoveCaret = setSelectedRange(focusedElement, location: fallbackRange.location, length: 0)
+        if !canMoveCaret {
+            print("⚠️ Streaming start could not set insertion range on focused element; continuing with AX value replacement")
+        }
+
         streamingState = StreamingInsertionState(
             targetElement: focusedElement,
-            insertionRange: normalizedRange,
-            expectedInsertedText: ""
+            insertionRange: fallbackRange,
+            expectedInsertedText: "",
+            useKeyboardFallback: false
         )
+        streamingFallbackText = ""
         return .attached
     }
 
@@ -111,25 +139,70 @@ public final class TextInserter {
             return .failed(.init(category: .state, details: "session inactive"))
         }
 
-        guard let focused = focusedElement(), axElementsEqual(focused, state.targetElement) else {
-            streamingState = nil
-            return .failed(.init(category: .focus, details: "focus moved away from insertion target"))
+        let normalizedInput = text.replacingOccurrences(of: "\u{00A0}", with: " ")
+        if normalizedInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard !state.expectedInsertedText.isEmpty else {
+                return .updated(method: state.useKeyboardFallback ? "keyboard-fallback-noop" : "selected-text-noop", characterCount: 0)
+            }
+
+            // Ignore empty partial/final payloads to avoid wiping in-flight insertion.
+            streamingState = state
+            return .updated(
+                method: state.useKeyboardFallback ? "keyboard-fallback-noop" : "selected-text-noop",
+                characterCount: state.expectedInsertedText.utf16.count
+            )
+        }
+
+        let insertionText = normalizedInput
+
+        if let focused = focusedElement(),
+           !axElementsEqual(focused, state.targetElement) {
+            print("⚠️ Streaming update target changed from session element")
+            state.useKeyboardFallback = true
         }
 
         let replacementRange = normalizedRange(for: state.targetElement, state.insertionRange)
         state.insertionRange = replacementRange
 
-        if replaceSelectedRange(on: state.targetElement, range: replacementRange, with: text) {
-            let updatedRange = NSRange(location: replacementRange.location, length: (text as NSString).length)
+        if state.useKeyboardFallback {
+            if insertionText == state.expectedInsertedText {
+                streamingState = state
+                return .updated(method: "keyboard-fallback", characterCount: insertionText.utf16.count)
+            }
+
+            if performKeyboardStreamingUpdate(insertionText, state: &state) {
+                streamingState = state
+                return .updated(method: "keyboard-fallback", characterCount: insertionText.utf16.count)
+            }
+
+            return .failed(.init(category: .accessibility, details: "keyboard streaming update failed"))
+        }
+
+        if replaceSelectedRange(on: state.targetElement, range: replacementRange, with: insertionText) {
+            let updatedRange = NSRange(location: replacementRange.location, length: (insertionText as NSString).length)
             state.insertionRange = updatedRange
-            state.expectedInsertedText = text
+            state.expectedInsertedText = insertionText
             streamingState = state
             _ = setSelectedRange(state.targetElement, location: updatedRange.location + updatedRange.length, length: 0)
-            return .updated(method: "selected-text", characterCount: text.count)
+            return .updated(method: "selected-text", characterCount: insertionText.utf16.count)
+        }
+
+        if replaceInElementValue(on: state.targetElement, range: replacementRange, with: insertionText) {
+            let updatedRange = NSRange(location: replacementRange.location, length: (insertionText as NSString).length)
+            state.insertionRange = updatedRange
+            state.expectedInsertedText = insertionText
+            streamingState = state
+            _ = setSelectedRange(state.targetElement, location: updatedRange.location + updatedRange.length, length: 0)
+            return .updated(method: "ax-value", characterCount: insertionText.utf16.count)
         }
 
         guard let currentValue = elementValue(for: state.targetElement) else {
-            streamingState = nil
+            state.useKeyboardFallback = true
+            if performKeyboardStreamingUpdate(insertionText, state: &state) {
+                streamingState = state
+                return .updated(method: "keyboard-fallback", characterCount: insertionText.utf16.count)
+            }
+
             return .failed(.init(category: .accessibility, details: "AX read failed while applying fallback replacement"))
         }
 
@@ -142,29 +215,39 @@ public final class TextInserter {
 
         let currentSegment = nsText.substring(with: safeRange)
         if !state.expectedInsertedText.isEmpty && currentSegment != state.expectedInsertedText {
-            streamingState = nil
-            return .failed(.init(category: .selection, details: "selection drifted (current segment diverged from expected inserted text)"))
+            print("⚠️ Streaming selection drift; replacing observed segment with latest partial")
         }
 
-        let replaced = nsText.replacingCharacters(in: safeRange, with: text)
+        let replaced = nsText.replacingCharacters(in: safeRange, with: insertionText)
         guard setElementValue(state.targetElement, replaced) else {
-            streamingState = nil
+            state.useKeyboardFallback = true
+            if performKeyboardStreamingUpdate(insertionText, state: &state) {
+                streamingState = state
+                return .updated(method: "keyboard-fallback", characterCount: insertionText.count)
+            }
+
             return .failed(.init(category: .accessibility, details: "set value replacement failed"))
         }
 
-        let updatedRange = NSRange(location: safeRange.location, length: (text as NSString).length)
+        let updatedRange = NSRange(location: safeRange.location, length: (insertionText as NSString).length)
         state.insertionRange = updatedRange
-        state.expectedInsertedText = text
+        state.expectedInsertedText = insertionText
         streamingState = state
         _ = setSelectedRange(state.targetElement, location: updatedRange.location + updatedRange.length, length: 0)
-        return .updated(method: "ax-value", characterCount: text.count)
+        return .updated(method: "ax-value", characterCount: insertionText.utf16.count)
     }
 
     /// Finish streaming insertion and replace the active segment with final text.
     public func finishStreamingInsertion(with finalText: String) -> StreamingUpdateResult {
-        let outcome = updateStreamingInsertion(finalText)
+        let sanitizedFinalText = finalText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sanitizedFinalText.isEmpty else {
+            return .updated(method: "final-noop", characterCount: 0)
+        }
+
+        let outcome = updateStreamingInsertion(sanitizedFinalText)
         if case .updated = outcome {
             streamingState = nil
+            streamingFallbackText = ""
         }
         return outcome
     }
@@ -172,6 +255,87 @@ public final class TextInserter {
     /// Cancel any active streaming insertion session.
     public func cancelStreamingInsertion() {
         streamingState = nil
+        streamingFallbackText = ""
+    }
+
+    /// Apply a keyboard-based streaming update by diffing against last applied text.
+    /// This is intentionally conservative and used as a fallback when the normal
+    /// accessibility streaming session cannot be kept active.
+    public func applyStreamingKeyboardFallback(_ text: String) -> StreamingUpdateResult {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalized.isEmpty {
+            if streamingFallbackText.isEmpty {
+                return .updated(method: "keyboard-fallback-noop", characterCount: 0)
+            }
+            return .updated(method: "keyboard-fallback-hold", characterCount: streamingFallbackText.utf16.count)
+        }
+
+        let previousUnits = Array(streamingFallbackText)
+        let incomingUnits = Array(normalized)
+
+        var commonPrefix = 0
+        while commonPrefix < previousUnits.count &&
+              commonPrefix < incomingUnits.count &&
+              previousUnits[commonPrefix] == incomingUnits[commonPrefix] {
+            commonPrefix += 1
+        }
+
+        if previousUnits.count > commonPrefix {
+            if !sendBackspace(count: previousUnits.count - commonPrefix) {
+                return .failed(.init(category: .accessibility, details: "keyboard fallback failed to delete drifted stream segment"))
+            }
+        }
+
+        if incomingUnits.count > commonPrefix {
+            let tailUnits = incomingUnits.dropFirst(commonPrefix)
+            let tailText = String(tailUnits)
+            if !sendTextViaKeyboard(tailText) {
+                return .failed(.init(category: .accessibility, details: "keyboard fallback failed to type stream segment"))
+            }
+        }
+
+        streamingFallbackText = normalized
+        return .updated(method: "keyboard-fallback-delta", characterCount: normalized.utf16.count)
+    }
+
+    /// Undo a recent text replacement by keyboard simulation.
+    /// Assumes caret is still at the end of `currentText`.
+    public func undoKeyboardReplacement(from currentText: String, to restoredText: String) -> StreamingUpdateResult {
+        let current = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let restored = restoredText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !current.isEmpty else {
+            return .failed(.init(category: .state, details: "undo source text is empty"))
+        }
+        if current == restored {
+            return .updated(method: "keyboard-undo-noop", characterCount: restored.utf16.count)
+        }
+
+        let currentUnits = Array(current)
+        let restoredUnits = Array(restored)
+        let commonPrefix = longestCommonPrefix(currentUnits, restoredUnits)
+
+        if currentUnits.count > commonPrefix {
+            let backspaceCount = currentUnits.count - commonPrefix
+            if !sendBackspace(count: backspaceCount) {
+                return .failed(.init(category: .accessibility, details: "keyboard undo failed while deleting current auto-edit text"))
+            }
+        }
+
+        if restoredUnits.count > commonPrefix {
+            let restoreTail = String(restoredUnits.dropFirst(commonPrefix))
+            if !sendTextViaKeyboard(restoreTail) {
+                return .failed(.init(category: .accessibility, details: "keyboard undo failed while restoring finalized text"))
+            }
+        }
+
+        streamingFallbackText = restored
+        return .updated(method: "keyboard-undo-delta", characterCount: restored.utf16.count)
+    }
+
+    /// Reset fallback-only stream cache state.
+    public func resetStreamingFallbackState() {
+        streamingFallbackText = ""
     }
 
     private func normalizedRange(for element: AXUIElement, _ range: CFRange) -> NSRange {
@@ -203,12 +367,7 @@ public final class TextInserter {
             return false
         }
 
-        let status = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            text as CFTypeRef
-        )
-        return status == .success
+        return replaceInElementValue(on: element, range: range, with: text)
     }
 
     // MARK: - Pasteboard Management
@@ -307,6 +466,20 @@ public final class TextInserter {
         return true
     }
 
+    private func replaceInElementValue(on element: AXUIElement, range: NSRange, with text: String) -> Bool {
+        guard let currentValue = elementValue(for: element) else { return false }
+
+        let nsText = currentValue as NSString
+        guard range.location != NSNotFound,
+              range.location <= nsText.length,
+              range.location + range.length <= nsText.length else {
+            return false
+        }
+
+        let replaced = nsText.replacingCharacters(in: range, with: text)
+        return setElementValue(element, replaced)
+    }
+
     private func focusedElement() -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
@@ -338,7 +511,15 @@ public final class TextInserter {
             return nil
         }
 
-        return valueRef as? String
+        if let value = valueRef as? String {
+            return value
+        }
+
+        if let attributed = valueRef as? NSAttributedString {
+            return attributed.string
+        }
+
+        return nil
     }
 
     private func setElementValue(_ element: AXUIElement, _ value: String) -> Bool {
@@ -385,6 +566,100 @@ public final class TextInserter {
             kAXSelectedTextRangeAttribute as CFString,
             selectedRange
         ) == .success
+    }
+
+    private func performKeyboardStreamingUpdate(_ text: String, state: inout StreamingInsertionState) -> Bool {
+        let previousText = state.expectedInsertedText
+        if previousText == text {
+            return true
+        }
+
+        let previousUnits = Array(previousText)
+        let incomingUnits = Array(text)
+        let commonPrefix = longestCommonPrefix(previousUnits, incomingUnits)
+
+        if commonPrefix > 0 {
+            if previousUnits.count > commonPrefix {
+                let trimCount = previousUnits.count - commonPrefix
+                if trimCount > 0, !sendBackspace(count: trimCount) {
+                    print("⚠️ Streaming keyboard fallback backspace failed")
+                    return false
+                }
+            }
+
+            if incomingUnits.count > commonPrefix {
+                let tailUnits = incomingUnits[commonPrefix...]
+                let tail = String(tailUnits)
+                if !sendTextViaKeyboard(tail) {
+                    print("⚠️ Streaming keyboard fallback send-text failed")
+                    return false
+                }
+            }
+        } else {
+            if !previousText.isEmpty, !sendBackspace(count: previousUnits.count) {
+                print("⚠️ Streaming keyboard fallback full replace backspace failed")
+                return false
+            }
+            if !text.isEmpty, !sendTextViaKeyboard(text) {
+                print("⚠️ Streaming keyboard fallback send-text failed")
+                return false
+            }
+        }
+
+        state.expectedInsertedText = text
+        state.useKeyboardFallback = true
+        return true
+    }
+
+    private func sendTextViaKeyboard(_ text: String) -> Bool {
+        guard !text.isEmpty else { return true }
+
+        for character in text {
+            guard let source = CGEventSource(stateID: .hidSystemState),
+                  let downEvent = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(0), keyDown: true),
+                  let upEvent = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(0), keyDown: false) else {
+                return false
+            }
+
+            var unicode = Array(String(character).utf16)
+            downEvent.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode)
+            upEvent.keyboardSetUnicodeString(stringLength: unicode.count, unicodeString: &unicode)
+
+            downEvent.post(tap: .cghidEventTap)
+            upEvent.post(tap: .cghidEventTap)
+
+            if text.utf16.count > 1 {
+                usleep(800)
+            }
+        }
+
+        return true
+    }
+
+    private func sendBackspace(count: Int) -> Bool {
+        guard count > 0,
+              let source = CGEventSource(stateID: .hidSystemState),
+              let downEvent = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: true),
+              let upEvent = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: false) else {
+            return false
+        }
+
+        for _ in 0..<count {
+            downEvent.post(tap: CGEventTapLocation.cghidEventTap)
+            upEvent.post(tap: CGEventTapLocation.cghidEventTap)
+        }
+        return true
+    }
+
+    private func longestCommonPrefix(_ left: [Character], _ right: [Character]) -> Int {
+        var length = 0
+        let limit = min(left.count, right.count)
+
+        while length < limit && left[length] == right[length] {
+            length += 1
+        }
+
+        return length
     }
 }
 

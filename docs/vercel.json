@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    { "source": "/features", "destination": "/features.html" },
+    { "source": "/about", "destination": "/about.html" },
+    { "source": "/download", "destination": "/download.html" },
+    { "source": "/en/features", "destination": "/en/features.html" },
+    { "source": "/en/about", "destination": "/en/about.html" },
+    { "source": "/en/download", "destination": "/en/download.html" }
+  ],
+  "cleanUrls": true,
+  "trailingSlash": false
+}
