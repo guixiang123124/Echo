@@ -55,6 +55,9 @@ targets:
           - CFBundleURLSchemes:
               - echo
             CFBundleURLName: com.xianggui.echo.app
+          - CFBundleURLSchemes:
+              - com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com
+            CFBundleURLName: com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com
         NSMicrophoneUsageDescription: "Echo needs microphone access to transcribe your speech to text."
         NSSpeechRecognitionUsageDescription: "Echo uses speech recognition to convert your voice to text."
         GOOGLE_CLIENT_ID_IOS: "852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com"

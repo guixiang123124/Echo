@@ -14,6 +14,10 @@ public final class VoiceInputService: ObservableObject {
     @Published public private(set) var partialTranscription = ""
     @Published public private(set) var finalTranscription = ""
     public private(set) var bestStreamingPartialTranscription = ""
+    public var onStreamingTextUpdate: ((String) -> Void)?
+    public var onDeferredPolishReady: ((String, String) -> Void)?
+    public private(set) var hasDeferredPolish = false
+    public private(set) var deferredPolishTraceId: String?
     @Published public private(set) var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     @Published public private(set) var errorMessage: String?
 
@@ -31,6 +35,7 @@ public final class VoiceInputService: ObservableObject {
     private var audioUpdateTask: Task<Void, Never>?
     private var recordingTask: Task<Void, Never>?
     private var streamingResultTask: Task<Void, Never>?
+    private var deferredPolishTask: Task<Void, Never>?
     private var activeProvider: (any ASRProvider)?
     private var isStreamingSession = false
     private var streamingStartDate: Date?
@@ -39,6 +44,7 @@ public final class VoiceInputService: ObservableObject {
     private var streamMode: String = "batch"
     private var currentTraceId: String?
     private var didLogFirstCaptureChunk = false
+    private var deferredPolishToken = UUID()
 
     // MARK: - Initialization
 
@@ -68,6 +74,11 @@ public final class VoiceInputService: ObservableObject {
         streamingFirstFinalMs = nil
         streamingStartDate = nil
         didLogFirstCaptureChunk = false
+        deferredPolishTask?.cancel()
+        deferredPolishTask = nil
+        hasDeferredPolish = false
+        deferredPolishTraceId = nil
+        deferredPolishToken = UUID()
 
         let traceId = UUID().uuidString.lowercased()
         currentTraceId = traceId
@@ -94,6 +105,13 @@ public final class VoiceInputService: ObservableObject {
             streamingFirstPartialMs = nil
             streamingFirstFinalMs = nil
             logStage("capture", traceId: traceId, message: "start mode=\(streamMode) provider=\(provider.id)")
+            await recordingStore.appendAuditEvent(
+                traceId: traceId,
+                stage: "stream",
+                event: "start",
+                providerId: provider.id,
+                message: "mode=\(streamMode)"
+            )
 
             if isStreamingSession {
                 startStreamingResults(provider: provider)
@@ -124,6 +142,15 @@ public final class VoiceInputService: ObservableObject {
 
         let traceId = currentTraceId ?? UUID().uuidString.lowercased()
         currentTraceId = traceId
+        hasDeferredPolish = false
+        deferredPolishTraceId = nil
+        await recordingStore.appendAuditEvent(
+            traceId: traceId,
+            stage: "stream",
+            event: "stop_requested",
+            providerId: activeProvider?.id,
+            message: "chunks=\(audioChunks.count)"
+        )
 
         isRecording = false
         // Stop audio capture first so we can flush any in-flight buffers
@@ -153,6 +180,7 @@ public final class VoiceInputService: ObservableObject {
         let firstFinalMs = streamingFirstFinalMs ?? -1
         var fallbackUsed = false
         var asrLatencyMs: Int?
+        var strongestStreamPartial = ""
 
         do {
             // Resolve ASR provider
@@ -188,6 +216,14 @@ public final class VoiceInputService: ObservableObject {
                 logStage("stream", traceId: traceId, message: "stop partial_len=\(accumulatedText.count)")
                 let bestPartialText = bestStreamingPartialTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
                 let strongestPartial = bestPartialText.count >= accumulatedText.count ? bestPartialText : accumulatedText
+                strongestStreamPartial = strongestPartial
+                await recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "stream",
+                    event: "partial_merged",
+                    providerId: provider.id,
+                    message: "partial_len=\(strongestPartial.count)"
+                )
                 let merged = mergedStreamingText(finalText: finalResult?.text, accumulatedText: strongestPartial)
                 var mergedText = merged.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -209,13 +245,27 @@ public final class VoiceInputService: ObservableObject {
 
                 logStage("merge", traceId: traceId, message: "stream merged_len=\(mergedText.count) partial_len=\(strongestPartial.count)")
 
-                if !mergedText.isEmpty && !shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: strongestPartial, audioDuration: totalDuration) {
+                let forceBatchFinalizeAfterStream = false
+                let shouldFallbackToBatch = forceBatchFinalizeAfterStream
+                    || shouldFallbackToBatchFromStreaming(
+                        finalText: mergedText,
+                        accumulatedText: strongestPartial,
+                        audioDuration: totalDuration
+                    )
+
+                if !mergedText.isEmpty && !shouldFallbackToBatch {
                     transcription = TranscriptionResult(text: mergedText, language: finalResult?.language ?? .unknown, isFinal: true)
                     asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
                 } else {
-                    DiagnosticsState.shared.log(
-                        "Streaming final weak -> fallback batch transcribe (duration=\(String(format: "%.2f", totalDuration))s)"
-                    )
+                    if forceBatchFinalizeAfterStream {
+                        DiagnosticsState.shared.log(
+                            "Streaming final-pass enabled -> run batch finalization (duration=\(String(format: "%.2f", totalDuration))s)"
+                        )
+                    } else {
+                        DiagnosticsState.shared.log(
+                            "Streaming final weak -> fallback batch transcribe (duration=\(String(format: "%.2f", totalDuration))s)"
+                        )
+                    }
                     logStage("merge", traceId: traceId, message: "fallback_to_batch duration_s=\(String(format: "%.2f", totalDuration))")
                     let fallback = try await transcribeAudioWithFallback(
                         primaryProvider: provider,
@@ -253,42 +303,161 @@ public final class VoiceInputService: ObservableObject {
 
             rawTranscript = transcription.text
             var result = transcription.text
-
-            // Apply LLM correction if enabled and provider is available
-            var correctionLatencyMs: Int? = nil
-            if settings.correctionEnabled,
-               let correctionProvider = resolveCorrectionProvider() {
-                correctionProviderId = correctionProvider.id
-                isCorrecting = true
-                defer { isCorrecting = false }
-
-                let correctionStart = Date()
-                do {
-                    // Always include the shared on-device dictionary in the prompt context.
-                    let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
-                    let mergedTerms = Array(Set(dictTerms + settings.customTerms))
-                    await contextStore.updateUserTerms(mergedTerms)
-
-                    let context = await contextStore.currentContext()
-                    let pipeline = CorrectionPipeline(provider: correctionProvider)
-                    let correction = try await pipeline.process(
-                        transcription: transcription,
-                        context: context,
-                        options: settings.autoEditOptions
+            let finalizeStart = Date()
+            let finalizeBefore = result
+            if streamSessionActive {
+                let nativeFinalized = nativeStreamingFinalize(
+                    text: result,
+                    strongestPartial: strongestStreamPartial
+                )
+                if nativeFinalized != result {
+                    logStage(
+                        "merge",
+                        traceId: traceId,
+                        message: "native_finalize text_len=\(result.count)->\(nativeFinalized.count)"
                     )
-                    result = correction.correctedText
-
-                    if correction.wasModified {
-                        let candidates = DictionaryAutoAdder.candidates(
-                            original: correction.originalText,
-                            corrected: correction.correctedText
-                        )
-                        await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
-                    }
-                } catch {
-                    print("⚠️ Correction failed, using raw transcription: \(error)")
                 }
-                correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
+                result = nativeFinalized
+            }
+            let finalizeLatencyMs = Int(Date().timeIntervalSince(finalizeStart) * 1000)
+            let finalizeChanged = finalizeBefore.trimmingCharacters(in: .whitespacesAndNewlines) != result.trimmingCharacters(in: .whitespacesAndNewlines)
+            await recordingStore.appendAuditEvent(
+                traceId: traceId,
+                stage: "finalize",
+                event: "completed",
+                providerId: providerForStorage?.id ?? provider.id,
+                latencyMs: finalizeLatencyMs,
+                changed: finalizeChanged,
+                message: "source=\(streamSessionActive ? "stream-native" : "batch-provider") len=\(finalizeBefore.count)->\(result.count)"
+            )
+
+            // Apply final polish:
+            // - Batch: optional synchronous Auto Edit
+            // - Stream + StreamFast: return Finalize immediately, then polish asynchronously
+            var correctionLatencyMs: Int? = nil
+            let selectedPolishOptions = settings.autoEditOptions
+            let shouldRunFinalPolish = settings.correctionEnabled && selectedPolishOptions.isEnabled
+            let shouldRunDeferredPolish = streamSessionActive && settings.streamFastEnabled && shouldRunFinalPolish
+            let finalizeSource = streamSessionActive ? "stream-native" : "batch-provider"
+            logStage(
+                "correct",
+                traceId: traceId,
+                message: "finalize source=\(finalizeSource) auto_edit=\(shouldRunFinalPolish ? "enabled" : "disabled") deferred=\(shouldRunDeferredPolish)"
+            )
+            let correctionProvider = resolveCorrectionProvider() ?? resolveFirstAvailableCorrectionProvider()
+            if shouldRunFinalPolish,
+               let correctionProvider {
+                await recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "triggered",
+                    providerId: correctionProvider.id,
+                    message: "deferred=\(shouldRunDeferredPolish) options=\(selectedPolishOptions.summary)"
+                )
+                correctionProviderId = correctionProvider.id
+                logStage(
+                    "correct",
+                    traceId: traceId,
+                    message: "auto_edit provider=\(correctionProvider.id) options=\(selectedPolishOptions.summary)"
+                )
+                if shouldRunDeferredPolish {
+                    hasDeferredPolish = true
+                    deferredPolishTraceId = traceId
+                    logStage("correct", traceId: traceId, message: "streamfast deferred polish queued")
+                    await recordingStore.appendAuditEvent(
+                        traceId: traceId,
+                        stage: "autoedit",
+                        event: "queued",
+                        providerId: correctionProvider.id,
+                        message: "base_len=\(result.count)"
+                    )
+                    queueDeferredPolish(
+                        traceId: traceId,
+                        transcription: transcription,
+                        baseText: result,
+                        provider: correctionProvider,
+                        options: selectedPolishOptions
+                    )
+                } else {
+                    isCorrecting = true
+                    defer { isCorrecting = false }
+
+                    let correctionStart = Date()
+                    let beforeCorrection = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    await recordingStore.appendAuditEvent(
+                        traceId: traceId,
+                        stage: "autoedit",
+                        event: "invoked",
+                        providerId: correctionProvider.id,
+                        message: "sync"
+                    )
+                    do {
+                        // Always include the shared on-device dictionary in the prompt context.
+                        let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
+                        let mergedTerms = Array(Set(dictTerms + settings.customTerms))
+                        await contextStore.updateUserTerms(mergedTerms)
+
+                        let context = await contextStore.currentContext()
+                        let pipeline = CorrectionPipeline(provider: correctionProvider)
+                        let correction = try await pipeline.process(
+                            transcription: transcription,
+                            context: context,
+                            options: selectedPolishOptions
+                        )
+                        result = correction.correctedText
+
+                        if correction.wasModified {
+                            let candidates = DictionaryAutoAdder.candidates(
+                                original: correction.originalText,
+                                corrected: correction.correctedText
+                            )
+                            await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
+                        }
+                    } catch {
+                        print("⚠️ Correction failed, using raw transcription: \(error)")
+                        await recordingStore.appendAuditEvent(
+                            traceId: traceId,
+                            stage: "autoedit",
+                            event: "failed",
+                            providerId: correctionProvider.id,
+                            message: error.localizedDescription
+                        )
+                    }
+                    correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
+                    let afterCorrection = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    await recordingStore.appendAuditEvent(
+                        traceId: traceId,
+                        stage: "autoedit",
+                        event: "completed",
+                        providerId: correctionProvider.id,
+                        latencyMs: correctionLatencyMs,
+                        changed: beforeCorrection != afterCorrection,
+                        message: "sync"
+                    )
+                }
+            } else if shouldRunFinalPolish {
+                let beforeLocalPolish = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                result = lightweightFinalPolish(result)
+                correctionProviderId = "local_polish"
+                let afterLocalPolish = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                logStage("correct", traceId: traceId, message: "auto_edit fallback local_polish")
+                await recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "completed",
+                    providerId: "local_polish",
+                    changed: beforeLocalPolish != afterLocalPolish,
+                    message: "local_fallback"
+                )
+            } else {
+                logStage("correct", traceId: traceId, message: "auto_edit skipped")
+                let reason = settings.correctionEnabled ? "options_disabled" : "correction_disabled"
+                await recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "skipped",
+                    message: reason
+                )
             }
 
             await contextStore.addTranscription(result)
@@ -431,6 +600,103 @@ public final class VoiceInputService: ObservableObject {
         }
     }
 
+    private func queueDeferredPolish(
+        traceId: String,
+        transcription: TranscriptionResult,
+        baseText: String,
+        provider: any CorrectionProvider,
+        options: CorrectionOptions
+    ) {
+        deferredPolishTask?.cancel()
+        let token = UUID()
+        deferredPolishToken = token
+
+        deferredPolishTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.deferredPolishToken == token {
+                    self.deferredPolishTask = nil
+                }
+            }
+
+            do {
+                let correctionStart = Date()
+                self.logStage("correct", traceId: traceId, message: "streamfast deferred polish start base_len=\(baseText.count)")
+                await self.recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "invoked",
+                    providerId: provider.id,
+                    message: "deferred"
+                )
+                let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
+                let mergedTerms = Array(Set(dictTerms + self.settings.customTerms))
+                await self.contextStore.updateUserTerms(mergedTerms)
+
+                let context = await self.contextStore.currentContext()
+                let pipeline = CorrectionPipeline(provider: provider)
+                let correction = try await pipeline.process(
+                    transcription: transcription,
+                    context: context,
+                    options: options
+                )
+
+                guard self.deferredPolishToken == token else { return }
+
+                let polished = correction.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let output = polished.isEmpty ? baseText : polished
+
+                if correction.wasModified {
+                    let candidates = DictionaryAutoAdder.candidates(
+                        original: correction.originalText,
+                        corrected: correction.correctedText
+                    )
+                    await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
+                }
+                if !output.isEmpty {
+                    await self.contextStore.addTranscription(output)
+                }
+
+                let latencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
+                let baseNormalized = baseText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let outputNormalized = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                let changed = baseNormalized != outputNormalized
+                self.logStage(
+                    "correct",
+                    traceId: traceId,
+                    message: "streamfast deferred polish done ms=\(latencyMs) changed=\(changed) output_len=\(output.count)"
+                )
+                await self.recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "completed",
+                    providerId: provider.id,
+                    latencyMs: latencyMs,
+                    changed: changed,
+                    message: "deferred"
+                )
+                await self.recordingStore.applyDeferredPolishResult(
+                    traceId: traceId,
+                    transcriptFinal: output,
+                    correctionLatencyMs: latencyMs,
+                    correctionProviderId: provider.id
+                )
+                self.onDeferredPolishReady?(output, traceId)
+            } catch {
+                guard self.deferredPolishToken == token else { return }
+                self.logStage("correct", traceId: traceId, message: "streamfast deferred polish failed=\(error.localizedDescription)")
+                await self.recordingStore.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit",
+                    event: "failed",
+                    providerId: provider.id,
+                    message: error.localizedDescription
+                )
+                self.onDeferredPolishReady?(baseText, traceId)
+            }
+        }
+    }
+
     /// Cancel recording without transcription
     public func cancelRecording() {
         guard isRecording else { return }
@@ -447,10 +713,20 @@ public final class VoiceInputService: ObservableObject {
         audioChunks = []
         partialTranscription = ""
         bestStreamingPartialTranscription = ""
+        deferredPolishTask?.cancel()
+        deferredPolishTask = nil
+        hasDeferredPolish = false
+        deferredPolishTraceId = nil
+        deferredPolishToken = UUID()
 
         logStage("capture", traceId: currentTraceId, message: "cancel")
         currentTraceId = nil
         print("🎤 Recording cancelled")
+    }
+
+    public func markDeferredPolishConsumed() {
+        hasDeferredPolish = false
+        deferredPolishTraceId = nil
     }
 
     // MARK: - Audio Collection
@@ -572,15 +848,40 @@ public final class VoiceInputService: ObservableObject {
                             self.logStage("stream", traceId: self.currentTraceId, message: "first_final_ms=\(self.streamingFirstFinalMs ?? -1)")
                         }
                     }
-                    let mergedPartial = self.mergeStreamingText(result.text, into: self.partialTranscription)
-                    self.partialTranscription = mergedPartial
-
-                    if mergedPartial.count >= self.bestStreamingPartialTranscription.count {
-                        self.bestStreamingPartialTranscription = mergedPartial
+                    let sanitizedText = self.sanitizeStreamingText(result.text, previousText: self.partialTranscription)
+                    if sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if result.isFinal && !self.partialTranscription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.finalTranscription = self.partialTranscription
+                            self.logStage("stream", traceId: self.currentTraceId, message: "ignore empty final packet, keep partial")
+                        }
+                        return
+                    }
+                    let mergedPartial = self.mergeStreamingText(
+                        sanitizedText,
+                        into: self.partialTranscription,
+                        resultIsFinal: result.isFinal
+                    )
+                    let canonicalPartial = self.sanitizeStreamingText(
+                        mergedPartial,
+                        previousText: self.partialTranscription
+                    )
+                    if canonicalPartial == self.partialTranscription {
+                        if result.isFinal {
+                            self.finalTranscription = canonicalPartial
+                        }
+                        return
                     }
 
+                    self.partialTranscription = canonicalPartial
+
+                    if canonicalPartial.count >= self.bestStreamingPartialTranscription.count {
+                        self.bestStreamingPartialTranscription = canonicalPartial
+                    }
+
+                    self.onStreamingTextUpdate?(canonicalPartial)
+
                     if result.isFinal {
-                        self.finalTranscription = result.text
+                        self.finalTranscription = canonicalPartial
                     }
                 }
             }
@@ -649,15 +950,25 @@ public final class VoiceInputService: ObservableObject {
         return mergeStreamingText(final, into: accumulated)
     }
 
-    private func mergeStreamingText(_ incomingText: String, into accumulatedText: String) -> String {
+    private func mergeStreamingText(
+        _ incomingText: String,
+        into accumulatedText: String,
+        resultIsFinal: Bool = false
+    ) -> String {
         let incoming = incomingText.trimmingCharacters(in: .whitespacesAndNewlines)
         let accumulated = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if incoming.isEmpty { return accumulated }
         if accumulated.isEmpty { return incoming }
         if incoming == accumulated { return accumulated }
+        if resultIsFinal && shouldPreferStreamingPartial(finalText: incoming, accumulatedText: accumulated) {
+            return accumulated
+        }
         if incoming.hasPrefix(accumulated) { return incoming }
         if accumulated.hasSuffix(incoming) { return accumulated }
+        if let prefixDecision = prefixDominantReplacementDecision(incoming: incoming, accumulated: accumulated) {
+            return prefixDecision ? incoming : accumulated
+        }
 
         let overlap = longestSuffixPrefixOverlap(accumulated, incoming)
         if overlap > 0 {
@@ -675,6 +986,197 @@ public final class VoiceInputService: ObservableObject {
         }
 
         return accumulated + incoming
+    }
+
+    private func nativeStreamingFinalize(text: String, strongestPartial: String) -> String {
+        let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let partial = strongestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate: String
+        if base.isEmpty {
+            candidate = partial
+        } else if partial.isEmpty {
+            candidate = base
+        } else {
+            candidate = mergeStreamingText(base, into: partial, resultIsFinal: true)
+        }
+        let normalized = sanitizeStreamingText(candidate, previousText: partial)
+        if normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return candidate
+        }
+        return normalized
+    }
+
+    private func prefixDominantReplacementDecision(incoming: String, accumulated: String) -> Bool? {
+        let normalizedIncoming = normalizedStreamingComparisonText(incoming)
+        let normalizedAccumulated = normalizedStreamingComparisonText(accumulated)
+        guard !normalizedIncoming.isEmpty, !normalizedAccumulated.isEmpty else { return nil }
+
+        if normalizedIncoming == normalizedAccumulated {
+            return incoming.count >= accumulated.count
+        }
+        if normalizedIncoming.hasPrefix(normalizedAccumulated) {
+            return true
+        }
+        if normalizedAccumulated.hasPrefix(normalizedIncoming) {
+            return false
+        }
+
+        let shorterCount = min(normalizedIncoming.count, normalizedAccumulated.count)
+        guard shorterCount >= 8 else { return nil }
+        let sharedPrefix = sharedPrefixLength(normalizedIncoming, normalizedAccumulated)
+        let prefixRatio = Double(sharedPrefix) / Double(shorterCount)
+        guard prefixRatio >= 0.82 else { return nil }
+
+        return incoming.count >= accumulated.count
+    }
+
+    private func normalizedStreamingComparisonText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered = trimmed.unicodeScalars.filter { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+            !CharacterSet.punctuationCharacters.contains(scalar) &&
+            !CharacterSet.symbols.contains(scalar)
+        }
+        return String(String.UnicodeScalarView(filtered))
+    }
+
+    private func sharedPrefixLength(_ lhs: String, _ rhs: String) -> Int {
+        var count = 0
+        for pair in zip(lhs, rhs) {
+            if pair.0 != pair.1 { break }
+            count += 1
+        }
+        return count
+    }
+
+    private func sanitizeStreamingText(_ text: String, previousText: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = removeObviousConsecutiveRepetition(in: incoming, baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines))
+        if cleaned.count > 260 {
+            return cleaned
+        }
+        return collapseDuplicateFullString(from: cleaned)
+    }
+
+    private func removeObviousConsecutiveRepetition(in text: String, baseText: String) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty, !baseText.isEmpty else {
+            return trimmedText
+        }
+
+        // Avoid cases like: previous="hello world", incoming="hello world hello world"
+        // collapse to just one copy when repeats are clearly adjacent and complete.
+        let repeatedTrimmed = collapseImmediateRepetition(around: baseText, candidate: trimmedText)
+        return repeatedTrimmed
+    }
+
+    private func collapseImmediateRepetition(around baseText: String, candidate text: String) -> String {
+        guard !baseText.isEmpty else { return text }
+        if text == baseText { return text }
+
+        let repeated = collapseLeadingRuns(of: baseText, in: text)
+        return repeated
+    }
+
+    private func collapseLeadingRuns(of unit: String, in text: String) -> String {
+        guard !unit.isEmpty else { return text }
+        guard text.hasPrefix(unit) else { return text }
+
+        var remaining = text
+        var runCount = 0
+
+        while canDropPrefixRun(remaining, unit: unit) {
+            remaining = String(remaining.dropFirst(unit.count))
+            remaining = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+            runCount += 1
+        }
+
+        if runCount <= 1 {
+            return text
+        }
+        if remaining.isEmpty {
+            return unit
+        }
+        return unit + remaining
+    }
+
+    private func canDropPrefixRun(_ text: String, unit: String) -> Bool {
+        guard text.hasPrefix(unit) else { return false }
+        if text == unit { return true }
+
+        let remainder = String(text.dropFirst(unit.count))
+        let unitContainsWhitespace = unit.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+        guard unitContainsWhitespace else {
+            let unitASCII = unit.unicodeScalars.allSatisfy(\.isASCII)
+            if !unitASCII { return true }
+            guard let next = remainder.unicodeScalars.first else { return false }
+            return !CharacterSet.alphanumerics.contains(next)
+        }
+
+        return true
+    }
+
+    private func collapseDuplicateFullString(from text: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return incoming }
+        if incoming.count > 260 { return incoming }
+
+        let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
+        if fullTokens.count >= 2 {
+            for unitLength in stride(from: fullTokens.count / 2, through: 1, by: -1) {
+                let unitCount = max(1, unitLength)
+                guard fullTokens.count >= unitCount * 2 else { continue }
+
+                let unit = Array(fullTokens.prefix(unitCount))
+                var cursor = unitCount
+                var duplicateRuns = 1
+
+                while cursor + unitCount <= fullTokens.count,
+                      Array(fullTokens[cursor..<(cursor + unitCount)]) == unit {
+                    duplicateRuns += 1
+                    cursor += unitCount
+                }
+
+                if duplicateRuns >= 2 {
+                    let tail = fullTokens.dropFirst(unitCount * duplicateRuns)
+                    let unitText = unit.joined(separator: " ")
+                    guard !tail.isEmpty else {
+                        return unitText
+                    }
+                    return "\(unitText) \(tail.joined(separator: " "))"
+                }
+            }
+        }
+
+        // Character-level fallback for languages without whitespace tokenization (e.g. Chinese).
+        let incomingChars = Array(incoming)
+        let maxUnitLength = incomingChars.count / 2
+        guard maxUnitLength > 0 else { return incoming }
+
+        for unitLength in stride(from: maxUnitLength, through: 1, by: -1) {
+            let unit = Array(incomingChars[0..<unitLength])
+            var cursor = unitLength
+            var duplicateRuns = 1
+
+            while cursor + unitLength <= incomingChars.count,
+                  Array(incomingChars[cursor..<(cursor + unitLength)]) == unit {
+                duplicateRuns += 1
+                cursor += unitLength
+            }
+
+            if duplicateRuns >= 2 {
+                let unitText = String(unit)
+                let tail = String(incomingChars.dropFirst(unitLength * duplicateRuns))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !tail.isEmpty else { return unitText }
+                if shouldInsertSpace(between: unitText, and: tail) {
+                    return "\(unitText) \(tail)"
+                }
+                return unitText + tail
+            }
+        }
+
+        return incoming
     }
 
     private func shouldInsertSpace(between accumulated: String, and incoming: String) -> Bool {
@@ -724,11 +1226,25 @@ public final class VoiceInputService: ObservableObject {
             return true
         }
 
+        if !accumulated.isEmpty {
+            let ratio = Double(final.count) / Double(max(accumulated.count, 1))
+            // If final is close to accumulated stream transcript, trust stream finalize.
+            if ratio >= 0.72 {
+                return false
+            }
+        }
+
         // Heuristic: for longer utterances, a very short final is usually a weak stream tail.
         if audioDuration >= 2.2 {
-            let wordCount = final.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
-            if final.count < 8 || wordCount <= 1 {
-                return true
+            if isLikelyContinuousCJK(final) {
+                if final.count < 4 {
+                    return true
+                }
+            } else {
+                let wordCount = final.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).count
+                if final.count < 8 || wordCount <= 1 {
+                    return true
+                }
             }
         }
 
@@ -747,11 +1263,63 @@ public final class VoiceInputService: ObservableObject {
         return false
     }
 
+    private func isLikelyContinuousCJK(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !trimmed.contains(where: { $0.isWhitespace || $0.isNewline }) else { return false }
+
+        let scalars = trimmed.unicodeScalars
+        guard !scalars.isEmpty else { return false }
+
+        let cjkCount = scalars.filter { scalar in
+            switch scalar.value {
+            case 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF,
+                 0x20000...0x2A6DF, 0x2A700...0x2B73F, 0x2B740...0x2B81F,
+                 0x2B820...0x2CEAF, 0x2F800...0x2FA1F:
+                return true
+            default:
+                return false
+            }
+        }.count
+
+        return cjkCount >= max(4, Int(Double(scalars.count) * 0.55))
+    }
+
     private func errorCodeValue(for error: Error) -> String {
         if let nsError = error as NSError? {
             return "\(nsError.domain):\(nsError.code)"
         }
         return String(describing: type(of: error))
+    }
+
+    private func resolveFirstAvailableCorrectionProvider() -> (any CorrectionProvider)? {
+        let candidates: [any CorrectionProvider] = [
+            OpenAICorrectionProvider(keyStore: keyStore),
+            DoubaoCorrectionProvider(keyStore: keyStore),
+            QwenCorrectionProvider(keyStore: keyStore),
+            ClaudeCorrectionProvider(keyStore: keyStore)
+        ]
+        return candidates.first(where: \.isAvailable)
+    }
+
+    private func lightweightFinalPolish(_ text: String) -> String {
+        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else { return output }
+
+        output = output.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        output = output.replacingOccurrences(of: " ,", with: ",")
+        output = output.replacingOccurrences(of: " .", with: ".")
+        output = output.replacingOccurrences(of: " !", with: "!")
+        output = output.replacingOccurrences(of: " ?", with: "?")
+        output = output.replacingOccurrences(of: " ，", with: "，")
+        output = output.replacingOccurrences(of: " 。", with: "。")
+        output = output.replacingOccurrences(of: " ！", with: "！")
+        output = output.replacingOccurrences(of: " ？", with: "？")
+
+        if let first = output.first, first.isLetter {
+            output.replaceSubrange(output.startIndex...output.startIndex, with: String(first).uppercased())
+        }
+        return output
     }
 
     private func logStage(_ stage: String, traceId: String?, message: String) {

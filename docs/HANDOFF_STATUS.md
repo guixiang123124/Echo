@@ -1,11 +1,11 @@
-# Echo — Project Status & Handoff (2026-02-15)
+# Echo — Project Status & Handoff (2026-02-20)
 
 This document is a “where we are / what’s next” handoff for continuing development and shipping Echo on macOS + iOS.
 
 ## TL;DR
 
 - Repo: `https://github.com/guixiang123124/Echo`
-- Xcode project to use: `/Users/xianggui/Downloads/Echo/Echo.xcodeproj`
+- Xcode project to use: `/Users/xianggui/.openclaw/workspace/Echo/Echo.xcodeproj`
 - Bundle IDs:
   - iOS app: `com.xianggui.echo.app`
   - iOS keyboard extension: `com.xianggui.echo.app.keyboard`
@@ -27,10 +27,10 @@ This document is a “where we are / what’s next” handoff for continuing dev
 
 - iOS App Store validation fix:
   - Added `UILaunchScreen` and `UISupportedInterfaceOrientations` (including iPad key) to:
-    - `/Users/xianggui/Downloads/Echo/iOS/EchoApp/Info.plist`
+    - `/Users/xianggui/.openclaw/workspace/Echo/iOS/EchoApp/Info.plist`
 - Signing hygiene:
   - Set `DEVELOPMENT_TEAM = J5Y8R5W53N` across targets in:
-    - `/Users/xianggui/Downloads/Echo/Echo.xcodeproj/project.pbxproj`
+    - `/Users/xianggui/.openclaw/workspace/Echo/Echo.xcodeproj/project.pbxproj`
 
 ### Known Submission Friction
 
@@ -40,46 +40,46 @@ This document is a “where we are / what’s next” handoff for continuing dev
 - **Screenshot dimensions**:
   - Captured iOS screenshots were `1170×2532` (iPhone 16e class) and App Store Connect requires specific sizes like `1284×2778` or `1242×2688`.
   - A resized set was generated locally at:
-    - `/Users/xianggui/Downloads/Echo/output/appstore_screenshots/ios_1284x2778`
+    - `/Users/xianggui/.openclaw/workspace/Echo/output/appstore_screenshots/ios_1284x2778`
   - For future: either capture from a simulator that matches required sizes, or keep the deterministic resize step.
 
 ## Repo Layout
 
 - iOS app:
-  - `/Users/xianggui/Downloads/Echo/iOS/EchoApp`
+  - `/Users/xianggui/.openclaw/workspace/Echo/iOS/EchoApp`
 - iOS keyboard extension:
-  - `/Users/xianggui/Downloads/Echo/iOS/EchoKeyboard`
+  - `/Users/xianggui/.openclaw/workspace/Echo/iOS/EchoKeyboard`
 - macOS app:
-  - `/Users/xianggui/Downloads/Echo/macOS/EchoMac`
+  - `/Users/xianggui/.openclaw/workspace/Echo/macOS/EchoMac`
 - Shared packages:
-  - `/Users/xianggui/Downloads/Echo/Packages/EchoCore`
-  - `/Users/xianggui/Downloads/Echo/Packages/EchoUI`
+  - `/Users/xianggui/.openclaw/workspace/Echo/Packages/EchoCore`
+  - `/Users/xianggui/.openclaw/workspace/Echo/Packages/EchoUI`
 
 ## Assets & Automation
 
 ### App Icon
 
 - Source artwork (user-provided):
-  - `/Users/xianggui/Downloads/Echo/Resources/echo.jpeg`
+  - `/Users/xianggui/.openclaw/workspace/Echo/Resources/echo.jpeg`
 - Icon generation script:
-  - `/Users/xianggui/Downloads/Echo/scripts/generate_app_icons.py`
+  - `/Users/xianggui/.openclaw/workspace/Echo/scripts/generate_app_icons.py`
 - Output asset catalogs:
-  - iOS: `/Users/xianggui/Downloads/Echo/iOS/EchoApp/Assets.xcassets/AppIcon.appiconset`
-  - macOS: `/Users/xianggui/Downloads/Echo/macOS/EchoMac/Assets.xcassets/AppIcon.appiconset`
+  - iOS: `/Users/xianggui/.openclaw/workspace/Echo/iOS/EchoApp/Assets.xcassets/AppIcon.appiconset`
+  - macOS: `/Users/xianggui/.openclaw/workspace/Echo/macOS/EchoMac/Assets.xcassets/AppIcon.appiconset`
 
 ### App Store Screenshots
 
 - iOS deep links used to jump to screens for capture:
-  - Implemented in `/Users/xianggui/Downloads/Echo/iOS/EchoApp/Views/MainView.swift`
+  - Implemented in `/Users/xianggui/.openclaw/workspace/Echo/iOS/EchoApp/Views/MainView.swift`
   - Supported routes (examples): `echo://home`, `echo://history`, `echo://dictionary`, `echo://account`, `echo://settings`, `echo://voice`
 - Capture scripts:
-  - iOS: `/Users/xianggui/Downloads/Echo/scripts/capture_ios_screenshots.sh`
-  - macOS: `/Users/xianggui/Downloads/Echo/scripts/capture_macos_screenshots.sh`
+  - iOS: `/Users/xianggui/.openclaw/workspace/Echo/scripts/capture_ios_screenshots.sh`
+  - macOS: `/Users/xianggui/.openclaw/workspace/Echo/scripts/capture_macos_screenshots.sh`
 - Output directories:
-  - iOS: `/Users/xianggui/Downloads/Echo/output/appstore_screenshots/ios`
-  - macOS: `/Users/xianggui/Downloads/Echo/output/appstore_screenshots/macos`
+  - iOS: `/Users/xianggui/.openclaw/workspace/Echo/output/appstore_screenshots/ios`
+  - macOS: `/Users/xianggui/.openclaw/workspace/Echo/output/appstore_screenshots/macos`
 - macOS screenshot capture relies on app automation flags:
-  - Implemented in `/Users/xianggui/Downloads/Echo/macOS/EchoMac/App/AppDelegate.swift`
+  - Implemented in `/Users/xianggui/.openclaw/workspace/Echo/macOS/EchoMac/App/AppDelegate.swift`
   - Args:
     - `--automation-screenshot`
     - `--automation-out-dir <dir>`
@@ -100,9 +100,9 @@ This is the intended flow for iOS and macOS (do each platform separately):
 
 Detailed checklists and templates live here:
 
-- `/Users/xianggui/Downloads/Echo/docs/app-store-kit/04-app-store-connect-submission.md`
-- `/Users/xianggui/Downloads/Echo/docs/app-store-kit/APP_PRIVACY_ANSWERS.md`
-- `/Users/xianggui/Downloads/Echo/docs/app-store-kit/REVIEW_NOTES_TEMPLATE.md`
+- `/Users/xianggui/.openclaw/workspace/Echo/docs/app-store-kit/04-app-store-connect-submission.md`
+- `/Users/xianggui/.openclaw/workspace/Echo/docs/app-store-kit/APP_PRIVACY_ANSWERS.md`
+- `/Users/xianggui/.openclaw/workspace/Echo/docs/app-store-kit/REVIEW_NOTES_TEMPLATE.md`
 
 ## Engineering Notes (Why Certain Changes Exist)
 
@@ -112,7 +112,7 @@ Detailed checklists and templates live here:
 
 We switched the device identifier used for sync metadata to a safe nonisolated value (`ProcessInfo.processInfo.hostName`) inside:
 
-- `/Users/xianggui/Downloads/Echo/Packages/EchoCore/Sources/EchoCore/Persistence/RecordingStore.swift`
+- `/Users/xianggui/.openclaw/workspace/Echo/Packages/EchoCore/Sources/EchoCore/Persistence/RecordingStore.swift`
 
 If we later need a user-friendly device name, fetch it on `@MainActor` and pass it into the store rather than calling main-actor-only APIs from within an actor.
 
@@ -135,4 +135,3 @@ If we later need a user-friendly device name, fetch it on `@MainActor` and pass 
 - More ASR model options:
   - OpenAI: `gpt-4o-mini-transcribe`, `gpt-4o-transcribe` (optional “faster/accurate” presets)
   - On-device (privacy/latency): WhisperKit / whisper.cpp / faster-whisper / MLX variants
-

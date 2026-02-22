@@ -51,6 +51,9 @@ build/
 # Local artifacts
 output/
 .deriveddata_screenshots/
+reports/asr/
+reports/streaming/
+Packages/EchoCore/reports/asr/
 
 # Archives
 *.xcarchive

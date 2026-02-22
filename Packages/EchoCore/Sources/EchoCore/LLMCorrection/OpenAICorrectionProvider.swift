@@ -102,7 +102,8 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
         }
 
         if options.enableFormatting {
-            prompt += "\n6. Improve sentence segmentation or formatting only when it is clearly needed."
+            prompt += "\n6. Improve readability with natural sentence segmentation and light formatting."
+            prompt += "\n7. Keep meaning unchanged, but you may split run-on text into clear sentence boundaries."
         } else {
             prompt += "\n6. Do NOT change formatting or sentence segmentation."
         }
@@ -118,6 +119,9 @@ public final class OpenAICorrectionProvider: CorrectionProvider, @unchecked Send
     ) -> String {
         var prompt = "Please correct this speech-to-text transcription.\n"
         prompt += "Allowed fixes: \(options.summary).\n\n"
+        if options.enableFormatting {
+            prompt += "When formatting is enabled, actively improve punctuation and sentence boundaries for readability.\n\n"
+        }
         prompt += "Text: \(rawText)\n"
 
         let contextInfo = context.formatForPrompt()

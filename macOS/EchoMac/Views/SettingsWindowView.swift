@@ -291,6 +291,14 @@ struct ASRSettingsTab: View {
                 }
                 .pickerStyle(.segmented)
 
+                Toggle("Enable StreamFast (fast finalize + async polish)", isOn: $settings.streamFastEnabled)
+
+                if settings.asrMode == .stream && settings.streamFastEnabled {
+                    Text("StreamFast prioritizes immediate Finalize in the input field, then runs Auto Edit polish asynchronously.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 if !Self.streamingCapableProviders.contains(settings.selectedASRProvider) && settings.asrMode == .stream {
                     Text("This provider currently uses batch mode. Switch to Deepgram or Volcano Engine for realtime stream captions.")
                         .font(.caption)
@@ -701,12 +709,13 @@ struct CorrectionSettingsTab: View {
             }
 
             Section("Editing Features") {
-                Toggle("Remove Filler Words (um, uh, like)", isOn: .constant(true))
-                Toggle("Remove Repetitions", isOn: .constant(true))
-                Toggle("Auto Punctuation", isOn: .constant(true))
-                Toggle("Smart Formatting", isOn: .constant(true))
+                Text("Active features are controlled above: Fix Homophones, Fix Punctuation, and Fix Formatting.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text("ASR models already handle part of filler-word cleanup and repetition suppression in real time.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
-            .disabled(!settings.correctionEnabled)
         }
         .formStyle(.grouped)
         .padding()
@@ -1166,6 +1175,17 @@ struct AuthSheetView: View {
         // Avoid presenting OAuth from a sheet window; use its parent when available.
         let presentingWindow = candidateWindow.sheetParent ?? candidateWindow
 
+        if let configuredClientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_MAC") as? String),
+           !configuredClientID.isEmpty {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: configuredClientID)
+        } else if let legacyClientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String),
+                  !legacyClientID.isEmpty {
+            GIDSignIn.sharedInstance.configuration = GIDConfiguration(clientID: legacyClientID)
+        } else {
+            authSession.errorMessage = "Google Client ID is not configured in Info.plist."
+            return
+        }
+
         GIDSignIn.sharedInstance.signIn(withPresenting: presentingWindow) { result, error in
             if let error {
                 Task { @MainActor in
@@ -1174,7 +1194,8 @@ struct AuthSheetView: View {
                 return
             }
 
-            guard let idToken = result?.user.idToken?.tokenString else {
+            guard let tokenString = result?.user.idToken?.tokenString,
+                  !tokenString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 Task { @MainActor in
                     self.authSession.errorMessage = "Google sign-in did not return an ID token."
                 }
@@ -1182,7 +1203,7 @@ struct AuthSheetView: View {
             }
 
             Task { @MainActor in
-                await self.authSession.signInWithGoogle(idToken: idToken)
+                await self.authSession.signInWithGoogle(idToken: tokenString)
             }
         }
     }
@@ -1220,7 +1241,10 @@ final class AppleSignInCoordinator: NSObject, ObservableObject, ASAuthorizationC
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         defer { cleanup() }
         guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
-              let nonce else { return }
+              let nonce else {
+            onError?(AppleSignInError.missingNonce)
+            return
+        }
         onSuccess?(credential, nonce)
     }
 
@@ -1236,5 +1260,16 @@ final class AppleSignInCoordinator: NSObject, ObservableObject, ASAuthorizationC
     private func cleanup() {
         controller = nil
         nonce = nil
+    }
+
+    private enum AppleSignInError: LocalizedError {
+        case missingNonce
+
+        var errorDescription: String? {
+            switch self {
+            case .missingNonce:
+                return "Apple sign-in missing nonce."
+            }
+        }
     }
 }

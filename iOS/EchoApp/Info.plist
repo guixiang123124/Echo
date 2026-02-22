@@ -28,6 +28,14 @@
 				<string>echo</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>

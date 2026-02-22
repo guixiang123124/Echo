@@ -58,14 +58,25 @@ public actor CorrectionPipeline {
             return true
         }
 
+        // If user explicitly enabled formatting, always run correction for
+        // non-trivial utterances so stream-final polish has a visible effect.
+        if options.enableFormatting,
+           transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= 16 {
+            return true
+        }
+
         // Always correct Chinese text (homophones are common)
         if options.enableHomophones,
            transcription.language == .chinese || transcription.language == .mixed {
             return true
         }
 
-        // Skip correction for high-confidence English-only text
-        if transcription.averageConfidence > 0.95 && transcription.language == .english {
+        // Skip correction only when we truly have high-confidence word-level ASR.
+        // Stream providers often omit word confidences, which previously forced
+        // averageConfidence=1.0 and caused false "no-op polish" behavior.
+        if !transcription.wordConfidences.isEmpty,
+           transcription.averageConfidence > 0.95,
+           transcription.language == .english {
             return false
         }
 
@@ -78,6 +89,12 @@ public actor CorrectionPipeline {
     /// Verify corrections and only keep high-confidence ones
     private func verify(result: CorrectionResult) -> CorrectionResult {
         guard result.wasModified else {
+            return result
+        }
+
+        // Providers currently return corrected full text without granular diff spans.
+        // In that case, trust the model output instead of reverting to original text.
+        if result.corrections.isEmpty {
             return result
         }
 
