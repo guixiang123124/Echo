@@ -137,3 +137,23 @@ This keeps quality stable while still collecting candidates automatically.
   - `iOS/EchoKeyboard/Info.plist` `CFBundleVersion` updated to `2`
 - Generated release prep report:
   - `reports/release-prep-2026-02-22.md`
+
+## Edith Release Prep (2026-02-22 continuation)
+
+1. Parallel prep while Codex completes UI
+- Created comprehensive release checklist:
+  - `RELEASE_CHECKLIST_v1.0.0.md`
+- Created release branch automation script:
+  - `scripts/release-prep-branch.sh`
+
+2. Current blockers identified
+- Missing: Apple Distribution certificate
+- Missing: Mac Installer Distribution certificate
+- Missing: Provisioning Profiles (App Store distribution)
+- Pending: Codex UI changes completion (~30 min)
+
+3. Next immediate actions
+- Acquire Distribution certificates via Xcode
+- Execute release branch script after Codex commit
+- Archive and upload builds
+- Complete App Store Connect submission

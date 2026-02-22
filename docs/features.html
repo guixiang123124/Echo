@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>功能 - Echo</title>
+  <style>
+    :root {
+      --primary: #6366f1;
+      --accent: #ec4899;
+      --bg: #0a0a0f;
+      --bg-secondary: #12121a;
+      --text: #f8fafc;
+      --text-secondary: #94a3b8;
+      --border: rgba(255,255,255,0.08);
+      --gradient-1: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    .bg-mesh {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99,102,241,0.2), transparent);
+      pointer-events: none; z-index: -1;
+    }
+    header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 1000;
+      padding: 16px 0; background: rgba(10,10,15,0.9); backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    nav {
+      max-width: 1200px; margin: 0 auto; padding: 0 24px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo { font-size: 24px; font-weight: 800; background: var(--gradient-1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-decoration: none; }
+    .nav-links { display: flex; gap: 32px; align-items: center; }
+    .nav-links a { color: var(--text-secondary); text-decoration: none; font-size: 14px; }
+    .nav-links a:hover, .nav-links a.active { color: var(--text); }
+    .nav-links a.active { position: relative; }
+    .nav-links a.active::after { content: ''; position: absolute; bottom: -4px; left: 0; width: 100%; height: 2px; background: var(--gradient-1); }
+    .nav-cta { padding: 10px 20px; background: var(--gradient-1); color: white; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 600; }
+    .lang-switch { color: var(--text-secondary); text-decoration: none; font-size: 14px; margin-left: 20px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; }
+    .mobile-menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 24px; cursor: pointer; }
+    .mobile-menu { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(10,10,15,0.98); z-index: 999; padding: 80px 24px 24px; flex-direction: column; gap: 24px; }
+    .mobile-menu.active { display: flex; }
+    .mobile-menu a { color: var(--text); text-decoration: none; font-size: 20px; font-weight: 600; padding: 16px 0; border-bottom: 1px solid var(--border); }
+    .mobile-menu a.active { color: var(--accent); }
+    @media (max-width: 768px) { .nav-links { display: none; } .mobile-menu-btn { display: block; } }
+    
+    .page-header { padding: 140px 24px 60px; text-align: center; max-width: 800px; margin: 0 auto; }
+    .page-header h1 { font-size: clamp(32px, 6vw, 48px); font-weight: 800; margin-bottom: 16px; }
+    .page-header p { color: var(--text-secondary); font-size: 18px; }
+    
+    .features-detail { padding: 40px 24px 80px; max-width: 1200px; margin: 0 auto; }
+    .feature-block { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; margin-bottom: 80px; }
+    .feature-block.reverse { direction: rtl; }
+    .feature-block.reverse > * { direction: ltr; }
+    .feature-content h2 { font-size: 32px; font-weight: 700; margin-bottom: 20px; }
+    .feature-content p { color: var(--text-secondary); font-size: 16px; line-height: 1.8; margin-bottom: 24px; }
+    .feature-list { list-style: none; }
+    .feature-list li { color: var(--text-secondary); padding: 8px 0; padding-left: 28px; position: relative; }
+    .feature-list li::before { content: '✓'; position: absolute; left: 0; color: var(--accent); font-weight: bold; }
+    .feature-visual { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 20px; padding: 40px; min-height: 300px; display: flex; align-items: center; justify-content: center; }
+    .feature-icon-large { font-size: 80px; }
+    
+    .metrics { padding: 60px 24px; background: var(--bg-secondary); }
+    .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; max-width: 1000px; margin: 0 auto; text-align: center; }
+    .metric-value { font-size: 48px; font-weight: 800; background: var(--gradient-1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .metric-label { color: var(--text-secondary); font-size: 14px; margin-top: 8px; }
+    
+    footer { padding: 40px 24px; border-top: 1px solid var(--border); text-align: center; }
+    .footer-links { display: flex; gap: 24px; justify-content: center; margin-bottom: 24px; flex-wrap: wrap; }
+    .footer-links a { color: var(--text-secondary); text-decoration: none; font-size: 14px; }
+    footer p { color: var(--text-muted); font-size: 13px; }
+    
+    @media (max-width: 768px) {
+      .feature-block { grid-template-columns: 1fr; }
+      .feature-block.reverse { direction: ltr; }
+      .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-mesh"></div>
+  
+  <header>
+    <nav>
+      <a href="/" class="logo">Echo</a>
+      <div class="nav-links">
+        <a href="/">首页</a>
+        <a href="/features.html" class="active">功能</a>
+        <a href="/about.html">关于</a>
+        <a href="/download.html">下载</a>
+        <a href="/" class="nav-cta">立即下载</a>
+        <a href="/en/features.html" class="lang-switch">English →</a>
+      </div>
+      <button class="mobile-menu-btn" onclick="toggleMenu()">☰</button>
+    </nav>
+  </header>
+
+  <div class="mobile-menu" id="mobileMenu">
+    <a href="/">🏠 首页</a>
+    <a href="/features.html" class="active">⚡ 功能</a>
+    <a href="/about.html">👥 关于</a>
+    <a href="/download.html">⬇️ 下载</a>
+    <a href="/en/features.html">🌐 English</a>
+  </div>
+
+  <section class="page-header">
+    <h1>强大而简洁的功能</h1>
+    <p>每一个细节都为高效工作而设计</p>
+  </section>
+
+  <section class="features-detail">
+    <div class="feature-block">
+      <div class="feature-content">
+        <h2>⚡ 实时流式转译</h2>
+        <p>边说边出字，毫秒级延迟。采用先进的流式语音识别技术，无需等待录音结束即可看到文字实时出现。</p>
+        <ul class="feature-list">
+          <li>首字延迟低至 180ms</li>
+          <li>支持 Deepgram、Volcano 多引擎</li>
+          <li>智能路由选择最优路径</li>
+          <li>中英文混合识别</li>
+        </ul>
+      </div>
+      <div class="feature-visual">
+        <span class="feature-icon-large">⚡</span>
+      </div>
+    </div>
+
+    <div class="feature-block reverse">
+      <div class="feature-content">
+        <h2>🎯 V2 智能预设</h2>
+        <p>从纯转录到深度润色，五种预设模式一键切换。根据不同场景选择最适合的处理方式。</p>
+        <ul class="feature-list">
+          <li>Pure Transcript - 纯转录</li>
+          <li>StreamFast - 极速优先</li>
+          <li>Smart Polish - 智能平衡（默认）</li>
+          <li>Deep Edit - 深度编辑</li>
+          <li>Custom - 自定义模式</li>
+        </ul>
+      </div>
+      <div class="feature-visual">
+        <span class="feature-icon-large">🎯</span>
+      </div>
+    </div>
+
+    <div class="feature-block">
+      <div class="feature-content">
+        <h2>✨ AI 结束精修</h2>
+        <p>录音结束后，可选 AI 自动润色。支持业界领先的四大 AI 引擎，让表达更专业。</p>
+        <ul class="feature-list">
+          <li>OpenAI GPT-4 系列</li>
+          <li>Anthropic Claude</li>
+          <li>字节豆包</li>
+          <li>阿里通义千问</li>
+        </ul>
+      </div>
+      <div class="feature-visual">
+        <span class="feature-icon-large">✨</span>
+      </div>
+    </div>
+
+    <div class="feature-block reverse">
+      <div class="feature-content">
+        <h2>📝 天生可编辑</h2>
+        <p>转写结果直接插入当前输入框，随时修改。不是纯语音，是语音与文字的融合体验。</p>
+        <ul class="feature-list">
+          <li>自动插入当前聚焦输入框</li>
+          <li>支持 macOS 全局快捷键</li>
+          <li>iOS 键盘扩展支持</li>
+          <li>实时编辑与修正</li>
+        </ul>
+      </div>
+      <div class="feature-visual">
+        <span class="feature-icon-large">📝</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="metrics">
+    <div class="metrics-grid">
+      <div>
+        <div class="metric-value">180ms</div>
+        <div class="metric-label">首字延迟</div>
+      </div>
+      <div>
+        <div class="metric-value">98.7%</div>
+        <div class="metric-label">识别准确率</div>
+      </div>
+      <div>
+        <div class="metric-value">4+</div>
+        <div class="metric-label">AI 引擎</div>
+      </div>
+      <div>
+        <div class="metric-value">2×</div>
+        <div class="metric-label">效率提升</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-links">
+      <a href="/">首页</a>
+      <a href="/features.html">功能</a>
+      <a href="/about.html">关于</a>
+      <a href="/download.html">下载</a>
+    </div>
+    <p>© 2026 Echo. Made with ❤️ by Xiang & Edith</p>
+  </footer>
+
+  <script>
+    function toggleMenu() {
+      const menu = document.getElementById('mobileMenu');
+      menu.classList.toggle('active');
+      document.body.style.overflow = menu.classList.contains('active') ? 'hidden' : '';
+    }
+  </script>
+</body>
+</html>
