@@ -34,7 +34,7 @@ struct MockCorrectionProvider: CorrectionProvider, @unchecked Sendable {
 @Suite("CorrectionPipeline Tests")
 struct CorrectionPipelineTests {
 
-    @Test("High confidence English text skips correction")
+    @Test("High confidence English text skips correction in conservative mode")
     func skipHighConfidenceEnglish() async throws {
         let provider = MockCorrectionProvider(correctedText: "changed")
         let pipeline = CorrectionPipeline(provider: provider)
@@ -51,7 +51,17 @@ struct CorrectionPipelineTests {
 
         let result = try await pipeline.process(
             transcription: transcription,
-            context: .empty
+            context: .empty,
+            options: CorrectionOptions(
+                enableHomophones: true,
+                enablePunctuation: false,
+                enableFormatting: false,
+                enableRemoveFillerWords: false,
+                enableRemoveRepetitions: false,
+                rewriteIntensity: .off,
+                enableTranslation: false,
+                translationTargetLanguage: .keepSource
+            )
         )
 
         #expect(result.correctedText == "Hello world")

@@ -11,10 +11,19 @@ struct SettingsView: View {
     @State private var showAuthSheet = false
     @State private var selectedASR: String = ""
     @State private var correctionEnabled = true
+    @State private var autoEditPreset: AutoEditPreset = .smartPolish
+    @State private var autoEditApplyMode: AutoEditApplyMode = .autoReplace
     @State private var correctionHomophonesEnabled = true
     @State private var correctionPunctuationEnabled = true
     @State private var correctionFormattingEnabled = true
-    @State private var autoEditQuickMode: AutoEditQuickMode = .balanced
+    @State private var correctionRemoveFillerEnabled = true
+    @State private var correctionRemoveRepetitionEnabled = true
+    @State private var correctionRewriteIntensity: RewriteIntensity = .light
+    @State private var correctionTranslationEnabled = false
+    @State private var correctionTranslationTarget: TranslationTargetLanguage = .keepSource
+    @State private var correctionStructuredOutputStyle: StructuredOutputStyle = .off
+    @State private var dictionaryAutoLearnEnabled = true
+    @State private var dictionaryAutoLearnRequireReview = true
     @State private var selectedCorrection: String = ""
     @State private var hapticEnabled = true
     @State private var cloudSyncBaseURL = ""
@@ -95,29 +104,49 @@ struct SettingsView: View {
                         get: { settings.preferStreaming },
                         set: { settings.preferStreaming = $0 }
                     ))
+                    .disabled(selectedASR == "openai_whisper")
 
                     Toggle("Enable StreamFast", isOn: .init(
                         get: { settings.streamFastEnabled },
                         set: { settings.streamFastEnabled = $0 }
                     ))
+
+                    if selectedASR == "openai_whisper" {
+                        Text("OpenAI Transcribe currently runs in Batch mode.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Deepgram / Volcano support Batch and Stream. Stream is recommended for realtime typing.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 // Auto Edit Section
                 Section("Auto Edit") {
+                    Picker("Preset", selection: $autoEditPreset) {
+                        ForEach(AutoEditPreset.allCases) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    .onChange(of: autoEditPreset) { _, newValue in
+                        settings.autoEditPreset = newValue
+                        syncAutoEditSettingsFromStore()
+                    }
+
                     Toggle("Enable Auto Edit", isOn: $correctionEnabled)
                         .onChange(of: correctionEnabled) { _, newValue in
                             settings.correctionEnabled = newValue
                         }
 
                     if correctionEnabled {
-                        Picker("Quick Mode", selection: $autoEditQuickMode) {
-                            ForEach(AutoEditQuickMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
+                        Picker("Apply Behavior", selection: $autoEditApplyMode) {
+                            ForEach(AutoEditApplyMode.allCases) { mode in
+                                Text(mode.displayName).tag(mode)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .onChange(of: autoEditQuickMode) { _, newValue in
-                            applyQuickMode(newValue)
+                        .onChange(of: autoEditApplyMode) { _, newValue in
+                            settings.autoEditApplyMode = newValue
                         }
 
                         Toggle("Fix Homophones", isOn: $correctionHomophonesEnabled)
@@ -133,6 +162,60 @@ struct SettingsView: View {
                         Toggle("Fix Formatting", isOn: $correctionFormattingEnabled)
                             .onChange(of: correctionFormattingEnabled) { _, newValue in
                                 settings.correctionFormattingEnabled = newValue
+                            }
+
+                        Toggle("Remove Filler Words", isOn: $correctionRemoveFillerEnabled)
+                            .onChange(of: correctionRemoveFillerEnabled) { _, newValue in
+                                settings.correctionRemoveFillerEnabled = newValue
+                            }
+
+                        Toggle("Remove Repetitions", isOn: $correctionRemoveRepetitionEnabled)
+                            .onChange(of: correctionRemoveRepetitionEnabled) { _, newValue in
+                                settings.correctionRemoveRepetitionEnabled = newValue
+                            }
+
+                        Picker("Rewrite Intensity", selection: $correctionRewriteIntensity) {
+                            ForEach(RewriteIntensity.allCases) { level in
+                                Text(level.displayName).tag(level)
+                            }
+                        }
+                        .onChange(of: correctionRewriteIntensity) { _, newValue in
+                            settings.correctionRewriteIntensity = newValue
+                        }
+
+                        Picker("Structured Output", selection: $correctionStructuredOutputStyle) {
+                            ForEach(StructuredOutputStyle.allCases) { style in
+                                Text(style.displayName).tag(style)
+                            }
+                        }
+                        .onChange(of: correctionStructuredOutputStyle) { _, newValue in
+                            settings.correctionStructuredOutputStyle = newValue
+                        }
+
+                        Toggle("Translate in Auto Edit", isOn: $correctionTranslationEnabled)
+                            .onChange(of: correctionTranslationEnabled) { _, newValue in
+                                settings.correctionTranslationEnabled = newValue
+                            }
+
+                        if correctionTranslationEnabled {
+                            Picker("Target Language", selection: $correctionTranslationTarget) {
+                                ForEach(TranslationTargetLanguage.allCases) { language in
+                                    Text(language.displayName).tag(language)
+                                }
+                            }
+                            .onChange(of: correctionTranslationTarget) { _, newValue in
+                                settings.correctionTranslationTarget = newValue
+                            }
+                        }
+
+                        Toggle("Dictionary Auto Learn", isOn: $dictionaryAutoLearnEnabled)
+                            .onChange(of: dictionaryAutoLearnEnabled) { _, newValue in
+                                settings.dictionaryAutoLearnEnabled = newValue
+                            }
+
+                        Toggle("Auto Learn Requires Review", isOn: $dictionaryAutoLearnRequireReview)
+                            .onChange(of: dictionaryAutoLearnRequireReview) { _, newValue in
+                                settings.dictionaryAutoLearnRequireReview = newValue
                             }
 
                         Picker("Provider", selection: $selectedCorrection) {
@@ -191,11 +274,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onAppear {
                 selectedASR = settings.selectedASRProvider
-                correctionEnabled = settings.correctionEnabled
-                correctionHomophonesEnabled = settings.correctionHomophonesEnabled
-                correctionPunctuationEnabled = settings.correctionPunctuationEnabled
-                correctionFormattingEnabled = settings.correctionFormattingEnabled
-                autoEditQuickMode = resolveQuickMode()
+                syncAutoEditSettingsFromStore()
                 selectedCorrection = settings.selectedCorrectionProvider
                 hapticEnabled = settings.hapticFeedbackEnabled
                 cloudSyncBaseURL = settings.cloudSyncBaseURL
@@ -214,6 +293,11 @@ struct SettingsView: View {
             }
             .onChange(of: selectedASR) { _, newValue in
                 settings.selectedASRProvider = newValue
+                if newValue == "openai_whisper" {
+                    settings.preferStreaming = false
+                } else if !settings.preferStreaming {
+                    settings.preferStreaming = true
+                }
             }
             .onChange(of: selectedCorrection) { _, newValue in
                 settings.selectedCorrectionProvider = newValue
@@ -225,64 +309,21 @@ struct SettingsView: View {
         }
     }
 
-    private func applyQuickMode(_ mode: AutoEditQuickMode) {
-        switch mode {
-        case .balanced:
-            correctionHomophonesEnabled = true
-            correctionPunctuationEnabled = true
-            correctionFormattingEnabled = true
-        case .homophonesOnly:
-            correctionHomophonesEnabled = true
-            correctionPunctuationEnabled = false
-            correctionFormattingEnabled = false
-        case .punctuationOnly:
-            correctionHomophonesEnabled = false
-            correctionPunctuationEnabled = true
-            correctionFormattingEnabled = false
-        case .formattingOnly:
-            correctionHomophonesEnabled = false
-            correctionPunctuationEnabled = false
-            correctionFormattingEnabled = true
-        }
-
-        settings.correctionHomophonesEnabled = correctionHomophonesEnabled
-        settings.correctionPunctuationEnabled = correctionPunctuationEnabled
-        settings.correctionFormattingEnabled = correctionFormattingEnabled
-    }
-
-    private func resolveQuickMode() -> AutoEditQuickMode {
-        let homophones = correctionHomophonesEnabled
-        let punctuation = correctionPunctuationEnabled
-        let formatting = correctionFormattingEnabled
-
-        if homophones && punctuation && formatting { return .balanced }
-        if homophones && !punctuation && !formatting { return .homophonesOnly }
-        if punctuation && !homophones && !formatting { return .punctuationOnly }
-        if formatting && !homophones && !punctuation { return .formattingOnly }
-
-        return .balanced
-    }
-}
-
-private enum AutoEditQuickMode: String, CaseIterable, Identifiable {
-    case balanced
-    case homophonesOnly
-    case punctuationOnly
-    case formattingOnly
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .balanced:
-            return "Balanced"
-        case .homophonesOnly:
-            return "Homophones"
-        case .punctuationOnly:
-            return "Punctuation"
-        case .formattingOnly:
-            return "Formatting"
-        }
+    private func syncAutoEditSettingsFromStore() {
+        autoEditPreset = settings.autoEditPreset
+        autoEditApplyMode = settings.autoEditApplyMode
+        correctionEnabled = settings.correctionEnabled
+        correctionHomophonesEnabled = settings.correctionHomophonesEnabled
+        correctionPunctuationEnabled = settings.correctionPunctuationEnabled
+        correctionFormattingEnabled = settings.correctionFormattingEnabled
+        correctionRemoveFillerEnabled = settings.correctionRemoveFillerEnabled
+        correctionRemoveRepetitionEnabled = settings.correctionRemoveRepetitionEnabled
+        correctionRewriteIntensity = settings.correctionRewriteIntensity
+        correctionTranslationEnabled = settings.correctionTranslationEnabled
+        correctionTranslationTarget = settings.correctionTranslationTarget
+        correctionStructuredOutputStyle = settings.correctionStructuredOutputStyle
+        dictionaryAutoLearnEnabled = settings.dictionaryAutoLearnEnabled
+        dictionaryAutoLearnRequireReview = settings.dictionaryAutoLearnRequireReview
     }
 }
 

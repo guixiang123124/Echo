@@ -249,213 +249,311 @@ struct GeneralSettingsView: View {
 
 struct ASRSettingsTab: View {
     @EnvironmentObject var settings: MacAppSettings
+    @EnvironmentObject var authSession: EchoAuthSession
     @State private var benchmarkRunning = false
     @State private var benchmarkStatus = ""
+    @State private var providerHealthScores: [RecordingStore.ProviderHealthScore] = []
 
-    private static let streamingCapableProviders: Set<String> = ["deepgram", "volcano"]
+    private static let streamCapableProviders: Set<String> = ["deepgram", "volcano"]
+
+    private var isAdminUser: Bool {
+        let email = authSession.user?.email?.lowercased() ?? ""
+        let uid = authSession.user?.uid.lowercased() ?? ""
+        let name = authSession.displayName.lowercased()
+        if UserDefaults.standard.bool(forKey: "echo.admin.debug.enabled") {
+            return true
+        }
+        if email == "guixiang123123@gmail.com" {
+            return true
+        }
+        if name.contains("brian gui") || uid.contains("admin") {
+            return true
+        }
+        return false
+    }
+
+    private var providerOptionsForCurrentMode: [(id: String, label: String)] {
+        switch settings.asrMode {
+        case .batch:
+            return [
+                ("openai_whisper", "OpenAI Transcribe"),
+                ("volcano", "Volcano Engine (ByteDance / 豆包ASR)"),
+                ("deepgram", "Deepgram Nova-3")
+            ]
+        case .stream:
+            return [
+                ("volcano", "Volcano Engine (ByteDance / 豆包ASR)"),
+                ("deepgram", "Deepgram Nova-3")
+            ]
+        }
+    }
+
+    private var modeDescription: String {
+        switch settings.asrMode {
+        case .batch:
+            return "Batch mode defaults to OpenAI GPT-4o Transcribe. You can still switch to Volcano or Deepgram."
+        case .stream:
+            return "Stream mode defaults to Volcano realtime ASR. You can switch to Deepgram."
+        }
+    }
+
+    private var currentEngineLabel: String {
+        switch settings.selectedASRProvider {
+        case "volcano":
+            return "Volcano Engine (ByteDance / 豆包ASR)"
+        case "deepgram":
+            return "Deepgram Nova-3"
+        default:
+            return "OpenAI Transcribe"
+        }
+    }
 
     var body: some View {
         Form {
-            Section("Pipeline Presets") {
-                Picker(
-                    "Preset",
-                    selection: Binding(
-                        get: { settings.pipelinePreset },
-                        set: { settings.pipelinePreset = $0 }
-                    )
-                ) {
-                    ForEach(MacAppSettings.PipelinePreset.allCases) { preset in
-                        Text(preset.displayName).tag(preset)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                Text(settings.pipelinePreset.description)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("Speech Recognition (ASR)") {
-                Picker("Speech Recognition Provider", selection: $settings.selectedASRProvider) {
-                    Text("OpenAI Transcribe").tag("openai_whisper")
-                    Text("Deepgram Nova-3").tag("deepgram")
-                    Text("Volcano Ark ASR").tag("ark_asr")
-                    Text("Volcano Engine (ByteDance)").tag("volcano")
-                    Text("Alibaba Cloud NLS").tag("aliyun")
-                }
-                .pickerStyle(.menu)
-
+            Section("Speech Mode") {
                 Picker("Request Mode", selection: $settings.asrMode) {
                     Text("Batch").tag(MacAppSettings.ASRMode.batch)
                     Text("Stream (Realtime)").tag(MacAppSettings.ASRMode.stream)
                 }
                 .pickerStyle(.segmented)
 
-                Toggle("Enable StreamFast (fast finalize + async polish)", isOn: $settings.streamFastEnabled)
+                Text(modeDescription)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
 
-                if settings.asrMode == .stream && settings.streamFastEnabled {
-                    Text("StreamFast prioritizes immediate Finalize in the input field, then runs Auto Edit polish asynchronously.")
-                        .font(.caption)
+                HStack {
+                    Text("Current ASR Engine")
+                    Spacer()
+                    Text(currentEngineLabel)
                         .foregroundColor(.secondary)
                 }
+            }
 
-                if !Self.streamingCapableProviders.contains(settings.selectedASRProvider) && settings.asrMode == .stream {
-                    Text("This provider currently uses batch mode. Switch to Deepgram or Volcano Engine for realtime stream captions.")
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                }
 
-                if settings.selectedASRProvider == "ark_asr" {
-                    ProviderKeyRow(
-                        label: "Ark API Key",
-                        providerId: "ark_asr"
-                    )
-
-                    ProviderValueRow(
-                        label: "Ark Model ID (optional)",
-                        providerId: "ark_asr_model",
-                        placeholder: "doubao-seed-asr-2-0"
-                    )
-
-                    ProviderValueRow(
-                        label: "Ark Endpoint (optional)",
-                        providerId: "ark_asr_endpoint",
-                        placeholder: "https://ark.cn-beijing.volces.com/api/v3/audio/transcriptions"
-                    )
-
-                    Text("Ark ASR uses your Volcano Ark API Key. You can override model/endpoint if your project uses a different deployment.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else if settings.selectedASRProvider == "volcano" {
-                    ProviderKeyRow(
-                        label: "Volcano App ID",
-                        providerId: "volcano_app_id"
-                    )
-
-                    ProviderKeyRow(
-                        label: "Volcano Access Key",
-                        providerId: "volcano_access_key"
-                    )
-
-                    ProviderValueRow(
-                        label: "Volcano Resource ID (optional)",
-                        providerId: "volcano_resource_id",
-                        placeholder: "volc.bigasr.auc_turbo"
-                    )
-
-                    ProviderValueRow(
-                        label: "Volcano Endpoint (optional)",
-                        providerId: "volcano_endpoint",
-                        placeholder: "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
-                    )
-
-                    Text("Volcano requires both App ID and Access Key. Resource ID may vary by account entitlement.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else if settings.selectedASRProvider == "deepgram" {
-                    ProviderKeyRow(
-                        label: "Deepgram API Key",
-                        providerId: "deepgram"
-                    )
-
-                    Picker("Deepgram Model", selection: $settings.deepgramModel) {
-                        Text("nova-3 (recommended)").tag("nova-3")
-                        Text("nova-2").tag("nova-2")
-                    }
-                    .pickerStyle(.menu)
-
-                    Text("Deepgram supports both Batch and Stream. In Stream mode, captions update in realtime.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                } else if settings.selectedASRProvider == "aliyun" {
-                    ProviderKeyRow(
-                        label: "Alibaba App Key",
-                        providerId: "aliyun_app_key"
-                    )
-
-                    ProviderKeyRow(
-                        label: "Alibaba Token",
-                        providerId: "aliyun_token"
-                    )
-
-                    Text("Alibaba NLS tokens expire; refresh the token when it changes.")
+            Section("Provider Health (Recent)") {
+                if providerHealthScores.isEmpty {
+                    Text("No recent samples yet. Start dictating to collect quality telemetry.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 } else {
-                    ProviderKeyRow(
-                        label: "OpenAI API Key",
-                        providerId: "openai_whisper"
-                    )
+                    ForEach(providerHealthScores.prefix(isAdminUser ? 4 : 2)) { score in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(score.providerName)
+                                Spacer()
+                                Text(String(format: "%.0f", score.healthScore) + " / 100")
+                                    .foregroundColor(.secondary)
+                            }
+                            Text(
+                                "Success \(percent(score.successRate)) · Avg \(Int(score.averageAsrLatencyMs))ms · Trunc \(percent(score.truncationRate)) · Fallback \(percent(score.fallbackRate))"
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
 
-                    Picker("Transcription Model", selection: $settings.openAITranscriptionModel) {
-                        Text("GPT-4o Transcribe (default)").tag("gpt-4o-transcribe")
-                        Text("GPT-4o Mini Transcribe").tag("gpt-4o-mini-transcribe")
-                        Text("Whisper-1").tag("whisper-1")
+
+            if isAdminUser {
+                Section("Pipeline Presets (Admin)") {
+                    Picker(
+                        "Preset",
+                        selection: Binding(
+                            get: { settings.pipelinePreset },
+                            set: { settings.pipelinePreset = $0 }
+                        )
+                    ) {
+                        ForEach(MacAppSettings.PipelinePreset.allCases) { preset in
+                            Text(preset.displayName).tag(preset)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(settings.pipelinePreset.description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                Section("Speech Recognition (ASR) - Admin") {
+                    Picker("Speech Recognition Provider", selection: $settings.selectedASRProvider) {
+                        ForEach(providerOptionsForCurrentMode, id: \.id) { option in
+                            Text(option.label).tag(option.id)
+                        }
                     }
                     .pickerStyle(.menu)
 
-                    Text("All OpenAI transcription models use the same API key.")
+                    Toggle("Enable StreamFast (fast finalize + async polish)", isOn: $settings.streamFastEnabled)
+
+                    if settings.asrMode == .stream && settings.streamFastEnabled {
+                        Text("StreamFast prioritizes immediate Finalize in the input field, then runs Auto Edit polish asynchronously.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    if settings.selectedASRProvider == "volcano" {
+                        ProviderKeyRow(
+                            label: "Volcano App ID",
+                            providerId: "volcano_app_id"
+                        )
+
+                        ProviderKeyRow(
+                            label: "Volcano Access Key",
+                            providerId: "volcano_access_key"
+                        )
+
+                        ProviderValueRow(
+                            label: "Volcano Resource ID (optional)",
+                            providerId: "volcano_resource_id",
+                            placeholder: "volc.bigasr.auc_turbo"
+                        )
+
+                        ProviderValueRow(
+                            label: "Volcano Endpoint (optional)",
+                            providerId: "volcano_endpoint",
+                            placeholder: "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+                        )
+
+                        Text("Volcano requires both App ID and Access Key. Resource ID may vary by account entitlement.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if settings.selectedASRProvider == "deepgram" {
+                        ProviderKeyRow(
+                            label: "Deepgram API Key",
+                            providerId: "deepgram"
+                        )
+
+                        Picker("Deepgram Model", selection: $settings.deepgramModel) {
+                            Text("nova-3 (recommended)").tag("nova-3")
+                            Text("nova-2").tag("nova-2")
+                        }
+                        .pickerStyle(.menu)
+
+                        Text("Deepgram supports Batch and Stream. Best accuracy is typically in English; Chinese depends on model/language hint.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        ProviderKeyRow(
+                            label: "OpenAI API Key",
+                            providerId: "openai_whisper"
+                        )
+
+                        Picker("Transcription Model", selection: $settings.openAITranscriptionModel) {
+                            Text("GPT-4o Transcribe (default)").tag("gpt-4o-transcribe")
+                            Text("GPT-4o Mini Transcribe").tag("gpt-4o-mini-transcribe")
+                            Text("Whisper-1").tag("whisper-1")
+                        }
+                        .pickerStyle(.menu)
+
+                        Text("All OpenAI transcription models use the same API key.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Text("Auto Edit uses a separate model configured below.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Auto Edit (Optional)") {
+                    Toggle("Enable Auto Edit", isOn: $settings.correctionEnabled)
+
+                    Picker("Provider", selection: $settings.selectedCorrectionProvider) {
+                        Text("OpenAI GPT-4o").tag("openai_gpt")
+                        Text("Claude").tag("claude")
+                        Text("Doubao").tag("doubao")
+                        Text("Alibaba Qwen").tag("qwen")
+                    }
+                    .pickerStyle(.menu)
+
+                    Text("Fine-grained options are available in the Auto Edit tab.")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
 
-                    Text("Auto Edit uses a separate model configured below.")
+                Section("ASR Benchmark") {
+                    Button(benchmarkRunning ? "Running…" : "Run 1-Click Benchmark (last 2 recordings)") {
+                        Task { await runBenchmark() }
+                    }
+                    .disabled(benchmarkRunning)
+
+                    if !benchmarkStatus.isEmpty {
+                        Text(benchmarkStatus)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                    }
+
+                    Text("Runs whisper-1 / gpt-4o-transcribe / gpt-4o-mini-transcribe plus Volcano (if configured), each with Auto Edit ON/OFF, then writes a markdown report.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-            }
 
-            Section("Auto Edit (Optional)") {
-                Toggle("Enable Auto Edit", isOn: $settings.correctionEnabled)
-
-                Picker("Provider", selection: $settings.selectedCorrectionProvider) {
-                    Text("OpenAI GPT-4o").tag("openai_gpt")
-                    Text("Claude").tag("claude")
-                    Text("Doubao").tag("doubao")
-                    Text("Alibaba Qwen").tag("qwen")
+                Section("Language") {
+                    Picker("Recognition Language", selection: $settings.asrLanguage) {
+                        Text("Auto Detect").tag("auto")
+                        Divider()
+                        Text("English").tag("en-US")
+                        Text("中文 (简体)").tag("zh-CN")
+                        Text("中文 (繁體)").tag("zh-TW")
+                        Text("日本語").tag("ja-JP")
+                        Text("한국어").tag("ko-KR")
+                    }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
-
-                Text("Fine-grained options are available in the Auto Edit tab.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("ASR Benchmark") {
-                Button(benchmarkRunning ? "Running…" : "Run 1-Click Benchmark (last 2 recordings)") {
-                    Task { await runBenchmark() }
-                }
-                .disabled(benchmarkRunning)
-
-                if !benchmarkStatus.isEmpty {
-                    Text(benchmarkStatus)
+            } else {
+                Section("Auto Edit") {
+                    Text("Auto Edit presets and detailed rewrite options are in the Auto Edit tab.")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                        .textSelection(.enabled)
                 }
-
-                Text("Runs whisper-1 / gpt-4o-transcribe / gpt-4o-mini-transcribe plus Volcano (if configured), each with Auto Edit ON/OFF, then writes a markdown report.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-
-            Section("Language") {
-                Picker("Recognition Language", selection: $settings.asrLanguage) {
-                    Text("Auto Detect").tag("auto")
-                    Divider()
-                    Text("English").tag("en-US")
-                    Text("中文 (简体)").tag("zh-CN")
-                    Text("中文 (繁體)").tag("zh-TW")
-                    Text("日本語").tag("ja-JP")
-                    Text("한국어").tag("ko-KR")
-                }
-                .pickerStyle(.menu)
             }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            normalizeProviderForMode(settings.asrMode)
+            reloadProviderHealth()
+        }
+        .onChange(of: settings.asrMode) { _, newValue in
+            normalizeProviderForMode(newValue)
+        }
         .onChange(of: settings.selectedASRProvider) { _, newValue in
-            if !Self.streamingCapableProviders.contains(newValue) && settings.asrMode == .stream {
-                settings.asrMode = .batch
+            if settings.asrMode == .stream, !Self.streamCapableProviders.contains(newValue) {
+                settings.selectedASRProvider = "volcano"
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
+            reloadProviderHealth()
+        }
+    }
+
+
+    private func reloadProviderHealth() {
+        Task {
+            let scores = await RecordingStore.shared.providerHealthScores(limit: 120)
+            await MainActor.run {
+                providerHealthScores = scores
+            }
+        }
+    }
+
+    private func percent(_ value: Double) -> String {
+        String(format: "%.0f%%", max(0.0, min(1.0, value)) * 100)
+    }
+
+
+    private func normalizeProviderForMode(_ mode: MacAppSettings.ASRMode) {
+        switch mode {
+        case .batch:
+            // Product rule: switching to Batch defaults to OpenAI.
+            if settings.selectedASRProvider != "openai_whisper" {
+                settings.selectedASRProvider = "openai_whisper"
+            }
+        case .stream:
+            // Product rule: switching to Stream defaults to Volcano.
+            if !Self.streamCapableProviders.contains(settings.selectedASRProvider) {
+                settings.selectedASRProvider = "volcano"
             }
         }
     }
@@ -672,26 +770,67 @@ struct CorrectionSettingsTab: View {
 
     var body: some View {
         Form {
-            Section("Auto Edit Pipeline") {
+            Section("Auto Edit V2") {
+                Picker("Preset", selection: $settings.autoEditPreset) {
+                    ForEach(AutoEditPreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(settings.autoEditPreset.description)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
                 Toggle("Enable Auto Edit", isOn: $settings.correctionEnabled)
-                Text("Fixes homophones, punctuation, and formatting based on context.")
+                Text("Three stages: Stream realtime revision + ASR Finalize + LLM Auto Edit.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
                 if settings.correctionEnabled {
-                    HStack(spacing: 8) {
-                        ForEach(AutoEditQuickMode.allCases) { mode in
-                            Button(mode.title) {
-                                applyQuickMode(mode)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
+                    Picker("Apply Behavior", selection: $settings.autoEditApplyMode) {
+                        ForEach(AutoEditApplyMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
                         }
                     }
+                    .pickerStyle(.segmented)
 
                     Toggle("Fix Homophones", isOn: $settings.correctionHomophonesEnabled)
                     Toggle("Fix Punctuation", isOn: $settings.correctionPunctuationEnabled)
                     Toggle("Fix Formatting", isOn: $settings.correctionFormattingEnabled)
+                    Toggle("Remove Filler Words", isOn: $settings.correctionRemoveFillerEnabled)
+                    Toggle("Remove Repetitions", isOn: $settings.correctionRemoveRepetitionEnabled)
+
+                    Picker("Rewrite Intensity", selection: $settings.correctionRewriteIntensity) {
+                        ForEach(RewriteIntensity.allCases) { level in
+                            Text(level.displayName).tag(level)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Picker("Structured Output", selection: $settings.correctionStructuredOutputStyle) {
+                        ForEach(StructuredOutputStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Toggle("Translate in Auto Edit", isOn: $settings.correctionTranslationEnabled)
+                    if settings.correctionTranslationEnabled {
+                        Picker("Target Language", selection: $settings.correctionTranslationTarget) {
+                            ForEach(TranslationTargetLanguage.allCases) { language in
+                                Text(language.displayName).tag(language)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+
+                    Divider()
+                    Toggle("Dictionary Auto Learn", isOn: $settings.dictionaryAutoLearnEnabled)
+                    Toggle("Auto Learn Requires Review", isOn: $settings.dictionaryAutoLearnRequireReview)
+                    Text("Recommended: keep review enabled so auto-learned terms are stored as candidates first.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
 
                     Picker("AI Provider", selection: $settings.selectedCorrectionProvider) {
                         Text("OpenAI GPT-4o").tag("openai_gpt")
@@ -709,10 +848,10 @@ struct CorrectionSettingsTab: View {
             }
 
             Section("Editing Features") {
-                Text("Active features are controlled above: Fix Homophones, Fix Punctuation, and Fix Formatting.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                Text("ASR models already handle part of filler-word cleanup and repetition suppression in real time.")
+                Text("Stream layer keeps both model partial revision and client-side merge/dedupe replacement.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                Text("Finalize is ASR-native; Auto Edit handles configurable rewrite/translation after finalize.")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -734,48 +873,6 @@ struct CorrectionSettingsTab: View {
         }
     }
 
-    private func applyQuickMode(_ mode: AutoEditQuickMode) {
-        switch mode {
-        case .balanced:
-            settings.correctionHomophonesEnabled = true
-            settings.correctionPunctuationEnabled = true
-            settings.correctionFormattingEnabled = true
-        case .homophonesOnly:
-            settings.correctionHomophonesEnabled = true
-            settings.correctionPunctuationEnabled = false
-            settings.correctionFormattingEnabled = false
-        case .punctuationOnly:
-            settings.correctionHomophonesEnabled = false
-            settings.correctionPunctuationEnabled = true
-            settings.correctionFormattingEnabled = false
-        case .formattingOnly:
-            settings.correctionHomophonesEnabled = false
-            settings.correctionPunctuationEnabled = false
-            settings.correctionFormattingEnabled = true
-        }
-    }
-}
-
-private enum AutoEditQuickMode: String, CaseIterable, Identifiable {
-    case balanced
-    case homophonesOnly
-    case punctuationOnly
-    case formattingOnly
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .balanced:
-            return "Balanced"
-        case .homophonesOnly:
-            return "Homophones"
-        case .punctuationOnly:
-            return "Punctuation"
-        case .formattingOnly:
-            return "Formatting"
-        }
-    }
 }
 
 // MARK: - Permissions Settings Tab

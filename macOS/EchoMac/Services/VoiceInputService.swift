@@ -393,7 +393,7 @@ public final class VoiceInputService: ObservableObject {
                     )
                     do {
                         // Always include the shared on-device dictionary in the prompt context.
-                        let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
+                        let dictTerms = await activeDictionaryTermsForCorrection()
                         let mergedTerms = Array(Set(dictTerms + settings.customTerms))
                         await contextStore.updateUserTerms(mergedTerms)
 
@@ -406,13 +406,7 @@ public final class VoiceInputService: ObservableObject {
                         )
                         result = correction.correctedText
 
-                        if correction.wasModified {
-                            let candidates = DictionaryAutoAdder.candidates(
-                                original: correction.originalText,
-                                corrected: correction.correctedText
-                            )
-                            await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
-                        }
+                        await maybeAutoLearnDictionaryTerms(from: correction)
                     } catch {
                         print("⚠️ Correction failed, using raw transcription: \(error)")
                         await recordingStore.appendAuditEvent(
@@ -432,7 +426,7 @@ public final class VoiceInputService: ObservableObject {
                         providerId: correctionProvider.id,
                         latencyMs: correctionLatencyMs,
                         changed: beforeCorrection != afterCorrection,
-                        message: "sync"
+                        message: autoEditChangeSummary(before: beforeCorrection, after: afterCorrection, options: selectedPolishOptions, mode: "sync")
                     )
                 }
             } else if shouldRunFinalPolish {
@@ -447,7 +441,7 @@ public final class VoiceInputService: ObservableObject {
                     event: "completed",
                     providerId: "local_polish",
                     changed: beforeLocalPolish != afterLocalPolish,
-                    message: "local_fallback"
+                    message: autoEditChangeSummary(before: beforeLocalPolish, after: afterLocalPolish, options: selectedPolishOptions, mode: "local_fallback")
                 )
             } else {
                 logStage("correct", traceId: traceId, message: "auto_edit skipped")
@@ -629,7 +623,7 @@ public final class VoiceInputService: ObservableObject {
                     providerId: provider.id,
                     message: "deferred"
                 )
-                let dictTerms = await EchoDictionaryStore.shared.all().map(\.term)
+                let dictTerms = await self.activeDictionaryTermsForCorrection()
                 let mergedTerms = Array(Set(dictTerms + self.settings.customTerms))
                 await self.contextStore.updateUserTerms(mergedTerms)
 
@@ -646,13 +640,7 @@ public final class VoiceInputService: ObservableObject {
                 let polished = correction.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let output = polished.isEmpty ? baseText : polished
 
-                if correction.wasModified {
-                    let candidates = DictionaryAutoAdder.candidates(
-                        original: correction.originalText,
-                        corrected: correction.correctedText
-                    )
-                    await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
-                }
+                await self.maybeAutoLearnDictionaryTerms(from: correction)
                 if !output.isEmpty {
                     await self.contextStore.addTranscription(output)
                 }
@@ -673,7 +661,7 @@ public final class VoiceInputService: ObservableObject {
                     providerId: provider.id,
                     latencyMs: latencyMs,
                     changed: changed,
-                    message: "deferred"
+                    message: self.autoEditChangeSummary(before: baseNormalized, after: outputNormalized, options: options, mode: "deferred")
                 )
                 await self.recordingStore.applyDeferredPolishResult(
                     traceId: traceId,
@@ -1052,7 +1040,7 @@ public final class VoiceInputService: ObservableObject {
     private func sanitizeStreamingText(_ text: String, previousText: String) -> String {
         let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = removeObviousConsecutiveRepetition(in: incoming, baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines))
-        if cleaned.count > 260 {
+        if cleaned.count > 1200 {
             return cleaned
         }
         return collapseDuplicateFullString(from: cleaned)
@@ -1119,7 +1107,7 @@ public final class VoiceInputService: ObservableObject {
     private func collapseDuplicateFullString(from text: String) -> String {
         let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !incoming.isEmpty else { return incoming }
-        if incoming.count > 260 { return incoming }
+        if incoming.count > 1200 { return incoming }
 
         let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
         if fullTokens.count >= 2 {
@@ -1292,6 +1280,27 @@ public final class VoiceInputService: ObservableObject {
         return String(describing: type(of: error))
     }
 
+    private func activeDictionaryTermsForCorrection() async -> [String] {
+        if settings.dictionaryAutoLearnEnabled {
+            if settings.dictionaryAutoLearnRequireReview {
+                return await EchoDictionaryStore.shared.all(filter: .manual).map(\.term)
+            }
+            return await EchoDictionaryStore.shared.all().map(\.term)
+        }
+        return await EchoDictionaryStore.shared.all(filter: .manual).map(\.term)
+    }
+
+    private func maybeAutoLearnDictionaryTerms(from correction: CorrectionResult) async {
+        guard settings.dictionaryAutoLearnEnabled else { return }
+        guard correction.wasModified else { return }
+        let candidates = DictionaryAutoAdder.candidates(
+            original: correction.originalText,
+            corrected: correction.correctedText
+        )
+        guard !candidates.isEmpty else { return }
+        await EchoDictionaryStore.shared.add(terms: candidates, source: .autoAdded)
+    }
+
     private func resolveFirstAvailableCorrectionProvider() -> (any CorrectionProvider)? {
         let candidates: [any CorrectionProvider] = [
             OpenAICorrectionProvider(keyStore: keyStore),
@@ -1301,6 +1310,27 @@ public final class VoiceInputService: ObservableObject {
         ]
         return candidates.first(where: \.isAvailable)
     }
+
+
+    private func autoEditChangeSummary(before: String, after: String, options: CorrectionOptions, mode: String) -> String {
+        let beforeText = before.trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterText = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        let delta = afterText.count - beforeText.count
+
+        var features: [String] = []
+        if options.enableHomophones { features.append("homophones") }
+        if options.enablePunctuation { features.append("punctuation") }
+        if options.enableFormatting { features.append("formatting") }
+        if options.enableRemoveFillerWords { features.append("remove_filler") }
+        if options.enableRemoveRepetitions { features.append("remove_repeat") }
+        if options.rewriteIntensity != .off { features.append("rewrite_\(options.rewriteIntensity.rawValue)") }
+        if options.enableTranslation { features.append("translate_\(options.translationTargetLanguage.rawValue)") }
+        if options.structuredOutputStyle != .off { features.append("structured_\(options.structuredOutputStyle.rawValue)") }
+
+        let featureSummary = features.isEmpty ? "none" : features.joined(separator: ",")
+        return "\(mode) features=\(featureSummary) len=\(beforeText.count)->\(afterText.count) delta=\(delta)"
+    }
+
 
     private func lightweightFinalPolish(_ text: String) -> String {
         var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1360,12 +1390,6 @@ public final class VoiceInputService: ObservableObject {
                 accessKey: volcanoOverrides.accessKey
             )
             return provider.isAvailable ? provider : nil
-        case "ark_asr":
-            let provider = ArkASRProvider(
-                keyStore: keyStore,
-                language: whisperLanguageCode(from: settings.asrLanguage)
-            )
-            return provider.isAvailable ? provider : nil
         case "deepgram":
             let selectedModel = settings.deepgramModel
             // Prefer explicit language hint for Chinese to avoid English-like gibberish in zh speech.
@@ -1388,14 +1412,6 @@ public final class VoiceInputService: ObservableObject {
                 language: resolvedLanguage
             )
             return provider.isAvailable ? provider : nil
-        case "aliyun":
-            guard let appKey = try? keyStore.retrieve(for: "aliyun_app_key"),
-                  let token = try? keyStore.retrieve(for: "aliyun_token"),
-                  !appKey.isEmpty,
-                  !token.isEmpty else {
-                return nil
-            }
-            return AliyunASRProvider(appKey: appKey, token: token)
         default:
             return resolveOpenAIProvider()
         }

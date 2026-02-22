@@ -25,6 +25,28 @@ struct VoiceRecordingView: View {
                     StreamStatusBadge(statusText: viewModel.streamStatusText)
                 }
 
+                if viewModel.showAutoEditReview {
+                    AutoEditReviewCard(
+                        originalText: viewModel.pendingAutoEditOriginal,
+                        suggestedText: viewModel.pendingAutoEditSuggested,
+                        onApply: { viewModel.applyPendingAutoEdit() },
+                        onKeep: { viewModel.keepPendingAutoEdit() }
+                    )
+                }
+
+                if viewModel.canUndoAutoEdit {
+                    HStack {
+                        Spacer()
+                        Button {
+                            viewModel.undoAutoEdit()
+                        } label: {
+                            Label("Undo AutoEdit", systemImage: "arrow.uturn.backward")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
                 TextEditor(text: $textInput)
                     .font(.system(size: 18))
                     .padding(12)
@@ -144,6 +166,52 @@ private struct StreamStatusBadge: View {
     }
 }
 
+private struct AutoEditReviewCard: View {
+    let originalText: String
+    let suggestedText: String
+    let onApply: () -> Void
+    let onKeep: () -> Void
+
+    private func preview(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.count <= 110 { return trimmed }
+        return String(trimmed.prefix(110)) + "…"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Auto Edit Suggestion")
+                .font(.system(size: 13, weight: .semibold))
+
+            Text("Before: \(preview(originalText))")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+
+            Text("After: \(preview(suggestedText))")
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(3)
+
+            HStack {
+                Button("Keep Finalize", action: onKeep)
+                    .buttonStyle(.bordered)
+                Spacer()
+                Button("Apply", action: onApply)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(EchoTheme.keyboardSurface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(EchoTheme.pillStroke, lineWidth: 1)
+        )
+    }
+}
+
 // MARK: - View Model
 
 @MainActor
@@ -158,6 +226,10 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var tipText = EchoTaglines.random()
     @Published var showError = false
     @Published var errorMessage = ""
+    @Published var showAutoEditReview = false
+    @Published var pendingAutoEditOriginal = ""
+    @Published var pendingAutoEditSuggested = ""
+    @Published var canUndoAutoEdit = false
     private struct StreamingMetrics {
         let providerId: String
         let providerName: String
@@ -184,6 +256,7 @@ final class VoiceRecordingViewModel: ObservableObject {
     private var recordingTask: Task<Void, Never>?
     private var streamMetrics: StreamingMetrics?
     private var smoothedLevel: CGFloat = 0
+    private var lastAutoEditSnapshot: (before: String, after: String)?
 
     func toggleRecording() async {
         if isRecording {
@@ -200,6 +273,11 @@ final class VoiceRecordingViewModel: ObservableObject {
         deferredPolishTask?.cancel()
         deferredPolishTask = nil
         deferredPolishSessionID = UUID()
+        showAutoEditReview = false
+        pendingAutoEditOriginal = ""
+        pendingAutoEditSuggested = ""
+        canUndoAutoEdit = false
+        lastAutoEditSnapshot = nil
 
         // Request microphone permission
         let micGranted = await audioService.requestPermission()
@@ -468,6 +546,7 @@ final class VoiceRecordingViewModel: ObservableObject {
                     strongestPartial: strongestStreamPartial
                 )
             }
+            let finalizeTextBeforePolish = finalText
 
             // Final polish:
             // - Always try once for streaming sessions (if a correction provider is configured)
@@ -475,8 +554,13 @@ final class VoiceRecordingViewModel: ObservableObject {
             var correctionProviderId: String? = nil
             let streamFastPolishOptions = CorrectionOptions(
                 enableHomophones: true,
-                enablePunctuation: false,
-                enableFormatting: false
+                enablePunctuation: true,
+                enableFormatting: false,
+                enableRemoveFillerWords: false,
+                enableRemoveRepetitions: true,
+                rewriteIntensity: .off,
+                enableTranslation: false,
+                translationTargetLanguage: .keepSource
             )
             let streamFastActive = streamingActive && settings.streamFastEnabled
             let selectedPolishOptions = streamFastActive ? streamFastPolishOptions : settings.correctionOptions
@@ -494,7 +578,7 @@ final class VoiceRecordingViewModel: ObservableObject {
                         transcription: transcription,
                         provider: correctionProvider,
                         options: selectedPolishOptions,
-                        baseText: rawText
+                        baseText: finalizeTextBeforePolish
                     )
                 } else {
                     if streamingActive {
@@ -511,7 +595,16 @@ final class VoiceRecordingViewModel: ObservableObject {
                             context: context,
                             options: selectedPolishOptions
                         )
-                        finalText = corrected.correctedText
+                        let correctedText = corrected.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let baseText = finalizeTextBeforePolish.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if settings.autoEditApplyMode == .confirmDiff,
+                           !correctedText.isEmpty,
+                           correctedText != baseText {
+                            finalText = finalizeTextBeforePolish
+                            stageAutoEditReview(original: baseText, suggested: correctedText)
+                        } else if !correctedText.isEmpty {
+                            finalText = correctedText
+                        }
                     } catch {
                         finalText = rawText
                     }
@@ -522,7 +615,18 @@ final class VoiceRecordingViewModel: ObservableObject {
                     streamStatusText = "Polishing"
                     showStreamStatus = true
                 }
-                finalText = lightweightFinalPolish(rawText)
+                let polished = lightweightFinalPolish(rawText).trimmingCharacters(in: .whitespacesAndNewlines)
+                let baseText = finalizeTextBeforePolish.trimmingCharacters(in: .whitespacesAndNewlines)
+                if settings.autoEditApplyMode == .confirmDiff,
+                   !polished.isEmpty,
+                   polished != baseText {
+                    finalText = finalizeTextBeforePolish
+                    stageAutoEditReview(original: baseText, suggested: polished)
+                } else if !polished.isEmpty {
+                    finalText = polished
+                } else {
+                    finalText = finalizeTextBeforePolish
+                }
                 correctionProviderId = "local_polish"
             }
 
@@ -564,6 +668,12 @@ final class VoiceRecordingViewModel: ObservableObject {
                 error: nil
             )
             logStreamingMetrics(finalMetrics, totalMs: totalLatencyMs, asrMs: asrLatencyMs, correctionMs: correctionLatencyMs)
+            if !showAutoEditReview {
+                updateAutoEditUndoSnapshotIfNeeded(
+                    before: finalizeTextBeforePolish,
+                    after: finalText
+                )
+            }
             deliverResult()
         } catch {
             if streamingActive {
@@ -690,17 +800,97 @@ final class VoiceRecordingViewModel: ObservableObject {
 
                 guard self.deferredPolishSessionID == sessionID, !self.isRecording else { return }
                 let polished = corrected.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !polished.isEmpty, polished != baseText else { return }
+                let base = baseText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !polished.isEmpty, polished != base else { return }
 
-                self.transcribedText = polished
-                await self.contextStore.addTranscription(polished)
-                if !self.isRecording {
-                    self.statusText = "Ready"
+                if self.settings.autoEditApplyMode == .confirmDiff {
+                    self.stageAutoEditReview(original: base, suggested: polished)
+                    if !self.isRecording {
+                        self.statusText = "Review Auto Edit"
+                    }
+                } else {
+                    self.applyAutoEditReplacement(before: base, after: polished)
                 }
             } catch {
                 // Keep finalized ASR text if deferred polish fails.
             }
         }
+    }
+
+    func applyPendingAutoEdit() {
+        let before = pendingAutoEditOriginal
+        let after = pendingAutoEditSuggested
+        guard !after.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            keepPendingAutoEdit()
+            return
+        }
+        showAutoEditReview = false
+        pendingAutoEditOriginal = ""
+        pendingAutoEditSuggested = ""
+        applyAutoEditReplacement(before: before, after: after)
+    }
+
+    func keepPendingAutoEdit() {
+        showAutoEditReview = false
+        pendingAutoEditOriginal = ""
+        pendingAutoEditSuggested = ""
+        if !isRecording {
+            statusText = "Ready"
+        }
+    }
+
+    func undoAutoEdit() {
+        guard let snapshot = lastAutoEditSnapshot else {
+            canUndoAutoEdit = false
+            return
+        }
+        transcribedText = snapshot.before
+        canUndoAutoEdit = false
+        lastAutoEditSnapshot = nil
+        Task { [before = snapshot.before] in
+            await contextStore.addTranscription(before)
+        }
+        if !isRecording {
+            statusText = "Ready"
+        }
+    }
+
+    private func stageAutoEditReview(original: String, suggested: String) {
+        let before = original.trimmingCharacters(in: .whitespacesAndNewlines)
+        let after = suggested.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !before.isEmpty, !after.isEmpty, before != after else { return }
+        pendingAutoEditOriginal = before
+        pendingAutoEditSuggested = after
+        showAutoEditReview = true
+        if !isRecording {
+            statusText = "Review Auto Edit"
+        }
+    }
+
+    private func applyAutoEditReplacement(before: String, after: String) {
+        let beforeText = before.trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterText = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !afterText.isEmpty else { return }
+        transcribedText = afterText
+        updateAutoEditUndoSnapshotIfNeeded(before: beforeText, after: afterText)
+        Task { [afterText] in
+            await contextStore.addTranscription(afterText)
+        }
+        if !isRecording {
+            statusText = "Ready"
+        }
+    }
+
+    private func updateAutoEditUndoSnapshotIfNeeded(before: String, after: String) {
+        let beforeText = before.trimmingCharacters(in: .whitespacesAndNewlines)
+        let afterText = after.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !beforeText.isEmpty, !afterText.isEmpty, beforeText != afterText else {
+            canUndoAutoEdit = false
+            lastAutoEditSnapshot = nil
+            return
+        }
+        lastAutoEditSnapshot = (before: beforeText, after: afterText)
+        canUndoAutoEdit = true
     }
 
     private struct ASRProviderResolutionResult {
@@ -716,15 +906,21 @@ final class VoiceRecordingViewModel: ObservableObject {
             return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
         }
 
-        if selectedId == "openai_whisper" || selectedId == "apple_speech" {
-            let provider = OpenAIWhisperProvider(keyStore: keyStore)
+        if selectedId == "openai_whisper" {
+            let provider = OpenAIWhisperProvider(
+                keyStore: keyStore,
+                model: "gpt-4o-transcribe"
+            )
             if provider.isAvailable {
                 return ASRProviderResolutionResult(provider: provider, usedFallback: false, fallbackMessage: "")
             }
             return nil
         }
 
-        let fallback = OpenAIWhisperProvider(keyStore: keyStore)
+        let fallback = OpenAIWhisperProvider(
+            keyStore: keyStore,
+            model: "gpt-4o-transcribe"
+        )
         if fallback.isAvailable {
             return ASRProviderResolutionResult(
                 provider: fallback,
@@ -738,22 +934,8 @@ final class VoiceRecordingViewModel: ObservableObject {
 
     private func asrProvider(for providerId: String) -> (any ASRProvider)? {
         switch providerId {
-        case "apple_speech":
-            let provider = AppleLegacySpeechProvider(localeIdentifier: nil)
-            return provider.isAvailable ? provider : nil
-        case "aliyun":
-            guard let appKey = try? keyStore.retrieve(for: "aliyun_app_key"),
-                  let token = try? keyStore.retrieve(for: "aliyun_token"),
-                  !appKey.isEmpty,
-                  !token.isEmpty else {
-                return nil
-            }
-            return AliyunASRProvider(appKey: appKey, token: token)
         case "volcano":
             let provider = VolcanoASRProvider(keyStore: keyStore)
-            return provider.isAvailable ? provider : nil
-        case "ark_asr":
-            let provider = ArkASRProvider(keyStore: keyStore)
             return provider.isAvailable ? provider : nil
         case "deepgram":
             let languageHint = deepgramLanguageHint(from: settings.defaultInputMode)
@@ -766,7 +948,10 @@ final class VoiceRecordingViewModel: ObservableObject {
             return provider.isAvailable ? provider : nil
         default:
             // Default to OpenAI Whisper (batch transcription).
-            let provider = OpenAIWhisperProvider(keyStore: keyStore)
+            let provider = OpenAIWhisperProvider(
+                keyStore: keyStore,
+                model: "gpt-4o-transcribe"
+            )
             return provider.isAvailable ? provider : nil
         }
     }
@@ -944,7 +1129,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             in: incoming,
             baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        if cleaned.count > 260 {
+        if cleaned.count > 1200 {
             return cleaned
         }
         return collapseDuplicateFullString(from: cleaned)
@@ -1121,7 +1306,10 @@ final class VoiceRecordingViewModel: ObservableObject {
         if providerId == "openai_whisper" {
             return nil
         }
-        let fallback = OpenAIWhisperProvider(keyStore: keyStore)
+        let fallback = OpenAIWhisperProvider(
+            keyStore: keyStore,
+            model: "gpt-4o-transcribe"
+        )
         guard fallback.isAvailable else { return nil }
         return fallback
     }

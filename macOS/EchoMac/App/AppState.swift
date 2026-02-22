@@ -52,6 +52,7 @@ public final class AppState: ObservableObject {
     @Published public var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     @Published public var isRecordingPanelVisible: Bool = false
     @Published public var isStreamingModeActive: Bool = false
+    @Published public var canUndoLastAutoEdit: Bool = false
 
     // MARK: - Permission State
 
@@ -86,6 +87,7 @@ public final class AppState: ObservableObject {
         resetAudioLevels()
         isRecordingPanelVisible = false
         isStreamingModeActive = false
+        canUndoLastAutoEdit = false
     }
 }
 

@@ -20,6 +20,27 @@ public actor RecordingStore {
         }
     }
 
+    public struct ProviderHealthScore: Identifiable, Sendable, Hashable {
+        public var id: String { providerId }
+
+        public let providerId: String
+        public let providerName: String
+        public let sampleCount: Int
+        public let successRate: Double
+        public let averageAsrLatencyMs: Double
+        public let truncationRate: Double
+        public let fallbackRate: Double
+
+        public var healthScore: Double {
+            let successComponent = successRate * 65.0
+            let latencyFactor = max(0.0, min(1.0, 1.0 - (averageAsrLatencyMs / 3500.0)))
+            let latencyComponent = latencyFactor * 20.0
+            let truncationPenalty = truncationRate * 10.0
+            let fallbackPenalty = fallbackRate * 5.0
+            return max(0.0, min(100.0, successComponent + latencyComponent - truncationPenalty - fallbackPenalty))
+        }
+    }
+
     public struct RecordingEntry: Identifiable, Sendable, Hashable {
         public let id: Int64
         public let createdAt: Date
@@ -562,6 +583,58 @@ public actor RecordingStore {
         return entries
     }
 
+
+    public func providerHealthScores(limit: Int = 120) -> [ProviderHealthScore] {
+        let records = fetchRecent(limit: max(10, limit))
+        guard !records.isEmpty else { return [] }
+
+        struct ProviderKey: Hashable {
+            let id: String
+            let name: String
+        }
+
+        let grouped = Dictionary(grouping: records) { record in
+            ProviderKey(id: record.asrProviderId, name: record.asrProviderName)
+        }
+
+        let scores: [ProviderHealthScore] = grouped.map { key, items in
+            let sampleCount = items.count
+            let successCount = items.filter { item in
+                let hasErrorText = !(item.error?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ?? true)
+                let code = item.errorCode?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).lowercased() ?? "none"
+                return item.status == "success" && !hasErrorText && (code.isEmpty || code == "none")
+            }.count
+
+            let latencyValues = items.compactMap { item in
+                item.asrLatencyMs ?? item.totalLatencyMs
+            }
+            let averageLatency = latencyValues.isEmpty
+                ? 0
+                : Double(latencyValues.reduce(0, +)) / Double(latencyValues.count)
+
+            let truncationCount = items.filter { Self.isLikelyTruncatedRecording($0) }.count
+            let fallbackCount = items.filter(\.fallbackUsed).count
+
+            return ProviderHealthScore(
+                providerId: key.id,
+                providerName: key.name,
+                sampleCount: sampleCount,
+                successRate: sampleCount == 0 ? 0 : Double(successCount) / Double(sampleCount),
+                averageAsrLatencyMs: averageLatency,
+                truncationRate: sampleCount == 0 ? 0 : Double(truncationCount) / Double(sampleCount),
+                fallbackRate: sampleCount == 0 ? 0 : Double(fallbackCount) / Double(sampleCount)
+            )
+        }
+
+        return scores.sorted {
+            if $0.healthScore == $1.healthScore {
+                return $0.sampleCount > $1.sampleCount
+            }
+            return $0.healthScore > $1.healthScore
+        }
+    }
+
+
     public func storageInfo() -> StorageInfo {
         let count = countEntries()
         return StorageInfo(
@@ -595,6 +668,21 @@ public actor RecordingStore {
     }
 
     // MARK: - Setup
+
+
+    private static func isLikelyTruncatedRecording(_ entry: RecordingEntry) -> Bool {
+        let raw = entry.transcriptRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let final = entry.transcriptFinal?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty, !final.isEmpty else { return false }
+        guard raw.count >= 18, final.count < raw.count else { return false }
+
+        let ratio = Double(final.count) / Double(raw.count)
+        if raw.hasPrefix(final) && ratio < 0.75 {
+            return true
+        }
+        return ratio < 0.55
+    }
+
 
     private static func createDirectories(
         fileManager: FileManager,

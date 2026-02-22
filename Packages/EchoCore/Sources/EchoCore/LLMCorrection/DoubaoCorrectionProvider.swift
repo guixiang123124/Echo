@@ -95,6 +95,49 @@ public final class DoubaoCorrectionProvider: CorrectionProvider, @unchecked Send
             prompt += "\n6. 不要改变格式或句子分割。"
         }
 
+        if options.enableRemoveFillerWords {
+            prompt += "\n7. 删除无意义语气词与口头禅（如 嗯、啊、那个、就是）。"
+        }
+
+        if options.enableRemoveRepetitions {
+            prompt += "\n8. 删除明显的重复词或重复短语。"
+        }
+
+        switch options.rewriteIntensity {
+        case .off:
+            prompt += "\n9. 尽量保持原句结构。"
+        case .light:
+            prompt += "\n9. 允许轻度改写，提升清晰度但保持原语气。"
+        case .medium:
+            prompt += "\n9. 允许中度改写，提升条理和可读性。"
+        case .strong:
+            prompt += "\n9. 允许较强改写，但必须保留原意与关键事实。"
+        }
+
+        if options.enableTranslation {
+            switch options.translationTargetLanguage {
+            case .keepSource:
+                prompt += "\n10. 保持原语言输出。"
+            case .english:
+                prompt += "\n10. 最终文本输出为英文。"
+            case .chineseSimplified:
+                prompt += "\n10. 最终文本输出为简体中文。"
+            }
+        } else {
+            prompt += "\n10. 不要翻译，保持原语言。"
+        }
+
+        switch options.structuredOutputStyle {
+        case .off:
+            prompt += "\n11. 保持自然段落结构，除非其他规则需要调整。"
+        case .conciseParagraphs:
+            prompt += "\n11. 将结果整理为简洁段落。"
+        case .bulletList:
+            prompt += "\n11. 将结果整理为要点列表（项目符号）。"
+        case .actionItems:
+            prompt += "\n11. 将结果整理为行动项列表（项目符号）。"
+        }
+
         return prompt
     }
 
@@ -111,10 +154,22 @@ public final class DoubaoCorrectionProvider: CorrectionProvider, @unchecked Send
         ].compactMap { $0 }
 
         var prompt = "请修正以下语音识别文本。\n"
-        prompt += "允许的修正类型：\(allowedTypes.isEmpty ? "无" : allowedTypes.joined(separator: "、"))。\n\n"
+        prompt += "允许的修正类型：\(allowedTypes.isEmpty ? "无" : allowedTypes.joined(separator: "、"))。\n"
+        prompt += "详细开关：\(options.summary)。\n\n"
+        if options.rewriteIntensity != .off {
+            prompt += "改写强度：\(options.rewriteIntensity.displayName)。\n"
+        }
+        if options.structuredOutputStyle != .off {
+            prompt += "结构化输出：\(options.structuredOutputStyle.displayName)。\n"
+        }
         prompt += "文本：\(rawText)\n"
 
-        let contextInfo = context.formatForPrompt()
+        let contextInfo = context.compactForPrompt(
+            focusText: rawText,
+            maxRecent: 3,
+            maxChars: 800,
+            maxUserTerms: 48
+        )
         if !contextInfo.isEmpty {
             prompt += "\n\(contextInfo)\n"
         }

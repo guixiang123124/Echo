@@ -93,6 +93,49 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
             prompt += "\n6. Do NOT change formatting or sentence segmentation."
         }
 
+        if options.enableRemoveFillerWords {
+            prompt += "\n7. Remove obvious filler words and disfluencies when they do not add meaning."
+        }
+
+        if options.enableRemoveRepetitions {
+            prompt += "\n8. Remove accidental repeated words or repeated short phrases."
+        }
+
+        switch options.rewriteIntensity {
+        case .off:
+            prompt += "\n9. Keep original sentence structure as much as possible."
+        case .light:
+            prompt += "\n9. Allow light rewrite for clarity while keeping tone."
+        case .medium:
+            prompt += "\n9. Allow moderate rewrite for clarity and flow."
+        case .strong:
+            prompt += "\n9. Strong rewrite allowed, but preserve intent and key facts."
+        }
+
+        if options.enableTranslation {
+            switch options.translationTargetLanguage {
+            case .keepSource:
+                prompt += "\n10. Keep source language."
+            case .english:
+                prompt += "\n10. Output final text in English."
+            case .chineseSimplified:
+                prompt += "\n10. Output final text in Simplified Chinese."
+            }
+        } else {
+            prompt += "\n10. Keep source language and do not translate."
+        }
+
+        switch options.structuredOutputStyle {
+        case .off:
+            prompt += "\n11. Keep natural prose structure unless other enabled fixes require adjustments."
+        case .conciseParagraphs:
+            prompt += "\n11. Restructure output into concise paragraphs."
+        case .bulletList:
+            prompt += "\n11. Restructure output into a compact bullet list."
+        case .actionItems:
+            prompt += "\n11. Restructure output into clear action-item bullets."
+        }
+
         return prompt
     }
 
@@ -104,9 +147,20 @@ public final class ClaudeCorrectionProvider: CorrectionProvider, @unchecked Send
     ) -> String {
         var prompt = "Please correct this speech-to-text transcription.\n"
         prompt += "Allowed fixes: \(options.summary).\n\n"
+        if options.rewriteIntensity != .off {
+            prompt += "Rewrite intensity: \(options.rewriteIntensity.displayName).\n"
+        }
+        if options.structuredOutputStyle != .off {
+            prompt += "Structured output: \(options.structuredOutputStyle.displayName).\n"
+        }
         prompt += "Text: \(rawText)\n"
 
-        let contextInfo = context.formatForPrompt()
+        let contextInfo = context.compactForPrompt(
+            focusText: rawText,
+            maxRecent: 3,
+            maxChars: 800,
+            maxUserTerms: 48
+        )
         if !contextInfo.isEmpty {
             prompt += "\n\(contextInfo)\n"
         }

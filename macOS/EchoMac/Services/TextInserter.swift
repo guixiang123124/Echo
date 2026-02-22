@@ -298,6 +298,41 @@ public final class TextInserter {
         return .updated(method: "keyboard-fallback-delta", characterCount: normalized.utf16.count)
     }
 
+    /// Undo a recent text replacement by keyboard simulation.
+    /// Assumes caret is still at the end of `currentText`.
+    public func undoKeyboardReplacement(from currentText: String, to restoredText: String) -> StreamingUpdateResult {
+        let current = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let restored = restoredText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !current.isEmpty else {
+            return .failed(.init(category: .state, details: "undo source text is empty"))
+        }
+        if current == restored {
+            return .updated(method: "keyboard-undo-noop", characterCount: restored.utf16.count)
+        }
+
+        let currentUnits = Array(current)
+        let restoredUnits = Array(restored)
+        let commonPrefix = longestCommonPrefix(currentUnits, restoredUnits)
+
+        if currentUnits.count > commonPrefix {
+            let backspaceCount = currentUnits.count - commonPrefix
+            if !sendBackspace(count: backspaceCount) {
+                return .failed(.init(category: .accessibility, details: "keyboard undo failed while deleting current auto-edit text"))
+            }
+        }
+
+        if restoredUnits.count > commonPrefix {
+            let restoreTail = String(restoredUnits.dropFirst(commonPrefix))
+            if !sendTextViaKeyboard(restoreTail) {
+                return .failed(.init(category: .accessibility, details: "keyboard undo failed while restoring finalized text"))
+            }
+        }
+
+        streamingFallbackText = restored
+        return .updated(method: "keyboard-undo-delta", characterCount: restored.utf16.count)
+    }
+
     /// Reset fallback-only stream cache state.
     public func resetStreamingFallbackState() {
         streamingFallbackText = ""

@@ -723,7 +723,6 @@ public final class DeepgramASRProvider: ASRProvider, @unchecked Sendable {
         }
         let partialText = partial?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let selectedText = selected?.text.trimmingCharacters(in: .whitespacesAndNewlines), !selectedText.isEmpty,
-           let final = final,
            !finalText.isEmpty,
            shouldUsePartialOverFinal(finalText: finalText, partialText: partialText),
            selectedText == partialText {

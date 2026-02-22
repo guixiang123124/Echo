@@ -250,7 +250,7 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
         guard !trimmed.isEmpty else { return "" }
 
         // Keep stream-time sanitation lightweight for long utterances.
-        if trimmed.count > 260 {
+        if trimmed.count > 1200 {
             return collapseRepeatedPrefix(from: trimmed, around: previous)
         }
 
@@ -288,7 +288,7 @@ final class VolcanoStreamingSession: NSObject, URLSessionWebSocketDelegate, @unc
     private static func collapseDuplicateFullString(from text: String) -> String {
         let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !incoming.isEmpty else { return incoming }
-        if incoming.count > 260 { return incoming }
+        if incoming.count > 1200 { return incoming }
 
         let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
         if fullTokens.count >= 2 {

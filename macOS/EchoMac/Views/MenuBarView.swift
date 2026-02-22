@@ -441,6 +441,21 @@ struct MenuBarView: View {
                 .padding(.horizontal, 16)
                 .padding(.bottom, 4)
 
+            Button {
+                NotificationCenter.default.post(name: .echoUndoLastAutoEdit, object: nil)
+            } label: {
+                Label("Undo Last Auto Edit", systemImage: "arrow.uturn.backward")
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(!appState.canUndoLastAutoEdit)
+            .opacity(appState.canUndoLastAutoEdit ? 1.0 : 0.45)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+
             // Recording panel toggle
             Toggle(isOn: Binding(
                 get: { settings.showRecordingPanel },

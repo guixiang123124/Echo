@@ -26,6 +26,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var pendingDeferredPolishTraceId: String?
     private var activeDeferredPolishTraceId: String?
     private var lastFinalizeTextForPolish: String = ""
+    private struct AutoEditUndoSnapshot {
+        let finalizedText: String
+        let polishedText: String
+        let traceId: String?
+        let createdAt: Date
+    }
+    private var lastAutoEditUndoSnapshot: AutoEditUndoSnapshot?
 
     // Services
     private var voiceInputService: VoiceInputService?
@@ -149,6 +156,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.publisher(for: .echoToggleRecording)
             .sink { [weak self] _ in
                 self?.toggleManualRecording()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .echoUndoLastAutoEdit)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                Task { @MainActor in
+                    await self.undoLastAutoEdit()
+                }
             }
             .store(in: &cancellables)
 
@@ -357,6 +373,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 isAwaitingDeferredPolish = false
                 deferredPolishCloseTask?.cancel()
                 deferredPolishCloseTask = nil
+                clearAutoEditUndoSnapshot()
 
                 // Play sound
             if settings.playSoundEffects {
@@ -806,6 +823,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         let finalized = lastFinalizeTextForPolish.trimmingCharacters(in: .whitespacesAndNewlines)
         let changed = !finalized.isEmpty && finalized != polished
+        if changed && settings.autoEditApplyMode == .confirmDiff {
+            let shouldApply = confirmDeferredPolishReplacement(finalized: finalized, polished: polished)
+            if !shouldApply {
+                diagnostics.log("Stage[polish] confirm_diff skipped")
+                if let resolvedTraceId {
+                    await RecordingStore.shared.appendAuditEvent(
+                        traceId: resolvedTraceId,
+                        stage: "autoedit_ui",
+                        event: "confirm_skipped",
+                        changed: false
+                    )
+                }
+                return
+            }
+        }
         diagnostics.log("Stage[polish] apply len=\(polished.count) changed=\(changed ? "yes" : "no")")
         if let resolvedTraceId {
             await RecordingStore.shared.appendAuditEvent(
@@ -845,6 +877,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         message: "\(method) chars=\(characterCount)"
                     )
                 }
+                if changed {
+                    storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
+                }
             case .failed(let failure):
                 logStreamingInsertionFailure("deferred-fallback", reason: failure)
                 if let resolvedTraceId {
@@ -883,6 +918,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                         message: "\(method) chars=\(characterCount)"
                     )
                 }
+                if changed {
+                    storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
+                }
             case .failed(let failure):
                 logStreamingInsertionFailure("deferred-stream", reason: failure)
                 if let resolvedTraceId {
@@ -919,6 +957,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     changed: changed,
                     message: "fallback \(method) chars=\(characterCount)"
                 )
+            }
+            if changed {
+                storeAutoEditUndoSnapshot(finalized: finalized, polished: polished, traceId: resolvedTraceId)
             }
         case .failed(let failure):
             logStreamingInsertionFailure("deferred-no-session", reason: failure)
@@ -984,6 +1025,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         didUseStreamingKeyboardFallback = false
         lastStreamingUpdateMethod = nil
         lastStreamingSanitizedText = ""
+    }
+
+    private func storeAutoEditUndoSnapshot(finalized: String, polished: String, traceId: String?) {
+        let finalizedTrimmed = finalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let polishedTrimmed = polished.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !finalizedTrimmed.isEmpty,
+              !polishedTrimmed.isEmpty,
+              finalizedTrimmed != polishedTrimmed else { return }
+        lastAutoEditUndoSnapshot = AutoEditUndoSnapshot(
+            finalizedText: finalizedTrimmed,
+            polishedText: polishedTrimmed,
+            traceId: traceId,
+            createdAt: Date()
+        )
+        AppState.shared.canUndoLastAutoEdit = true
+    }
+
+    private func clearAutoEditUndoSnapshot() {
+        lastAutoEditUndoSnapshot = nil
+        AppState.shared.canUndoLastAutoEdit = false
+    }
+
+    private func confirmDeferredPolishReplacement(finalized: String, polished: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Apply Auto Edit changes?"
+        let beforePreview = String(finalized.prefix(90))
+        let afterPreview = String(polished.prefix(90))
+        alert.informativeText = "Before: \(beforePreview)\nAfter: \(afterPreview)"
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Keep Finalize")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @MainActor
+    private func undoLastAutoEdit() async {
+        guard let snapshot = lastAutoEditUndoSnapshot else {
+            diagnostics.log("AutoEdit undo skipped: no snapshot")
+            AppState.shared.canUndoLastAutoEdit = false
+            return
+        }
+
+        guard Date().timeIntervalSince(snapshot.createdAt) <= 180 else {
+            diagnostics.log("AutoEdit undo expired")
+            clearAutoEditUndoSnapshot()
+            return
+        }
+
+        guard let textInserter else {
+            diagnostics.log("AutoEdit undo unavailable: no text inserter")
+            return
+        }
+
+        await reactivateInsertionTarget()
+        switch textInserter.undoKeyboardReplacement(from: snapshot.polishedText, to: snapshot.finalizedText) {
+        case .updated(let method, let characterCount):
+            diagnostics.log("AutoEdit undo applied via \(method) (\(characterCount) chars)")
+            if let traceId = snapshot.traceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit_ui",
+                    event: "undo",
+                    changed: true,
+                    message: "\(method) chars=\(characterCount)"
+                )
+            }
+            clearAutoEditUndoSnapshot()
+        case .failed(let failure):
+            diagnostics.log("AutoEdit undo failed [\(failure.category.rawValue)] \(failure.details)")
+            if let traceId = snapshot.traceId {
+                await RecordingStore.shared.appendAuditEvent(
+                    traceId: traceId,
+                    stage: "autoedit_ui",
+                    event: "undo_failed",
+                    message: "\(failure.category.rawValue) \(failure.details)"
+                )
+            }
+        }
     }
 
     @MainActor
@@ -1280,10 +1399,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Position at bottom-center so the indicator stays close to where users type.
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
-            let windowWidth: CGFloat = 240
-            let windowHeight: CGFloat = 44
+            let windowWidth: CGFloat = 224
+            let windowHeight: CGFloat = 48
             let x = screenFrame.midX - windowWidth / 2
-            let y = screenFrame.minY + 56
+            let y = screenFrame.minY + 54
             window.setFrame(NSRect(x: x, y: y, width: windowWidth, height: windowHeight), display: true)
         }
 
@@ -1483,7 +1602,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
 struct RecordingPillView: View {
     @ObservedObject var appState: AppState
-    @State private var shimmer = false
     @State private var highlightPhase = false
 
     private var isProcessing: Bool {
@@ -1500,37 +1618,35 @@ struct RecordingPillView: View {
             Capsule()
                 .fill(backgroundGradient)
                 .overlay(
-                    Capsule()
-                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+                    Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
                 )
                 .overlay {
                     Capsule()
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.05),
-                                    Color.white.opacity(0.20),
-                                    Color.white.opacity(0.05)
+                                    Color.white.opacity(0.02),
+                                    Color.white.opacity(0.18),
+                                    Color.white.opacity(0.02)
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
                             )
                         )
                         .blur(radius: 5)
-                        .offset(x: highlightPhase ? 54 : -54)
-                        .opacity(appState.recordingState == .listening || isProcessing ? 0.72 : 0.28)
+                        .offset(x: highlightPhase ? 62 : -62)
+                        .opacity(appState.recordingState == .listening || isProcessing ? 0.36 : 0.16)
                 }
                 .mask(Capsule())
-                .shadow(color: Color.black.opacity(0.18), radius: 12, y: 5)
+                .shadow(color: Color.black.opacity(0.24), radius: 10, y: 4)
 
             content
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
         }
-        .frame(width: 188, height: 32)
+        .frame(width: 204, height: 34)
         .clipShape(Capsule())
         .onAppear {
-            shimmer = true
             withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
                 highlightPhase.toggle()
             }
@@ -1542,8 +1658,8 @@ struct RecordingPillView: View {
         case .listening:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.12, green: 0.14, blue: 0.18),
-                    Color(red: 0.10, green: 0.16, blue: 0.22)
+                    Color(red: 0.10, green: 0.11, blue: 0.14),
+                    Color(red: 0.08, green: 0.12, blue: 0.18)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -1551,8 +1667,8 @@ struct RecordingPillView: View {
         case .transcribing, .correcting, .inserting:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.12, green: 0.12, blue: 0.14),
-                    Color(red: 0.08, green: 0.08, blue: 0.10)
+                    Color(red: 0.10, green: 0.10, blue: 0.12),
+                    Color(red: 0.07, green: 0.07, blue: 0.09)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -1569,8 +1685,8 @@ struct RecordingPillView: View {
         case .idle:
             return LinearGradient(
                 colors: [
-                    Color(red: 0.14, green: 0.14, blue: 0.16),
-                    Color(red: 0.12, green: 0.12, blue: 0.14)
+                    Color(red: 0.11, green: 0.11, blue: 0.13),
+                    Color(red: 0.09, green: 0.09, blue: 0.11)
                 ],
                 startPoint: .leading,
                 endPoint: .trailing
@@ -1588,83 +1704,121 @@ struct RecordingPillView: View {
                     isStreamingMode: appState.isStreamingModeActive
                 )
             case .transcribing:
-                ThinkingSweepView(
-                    text: appState.isStreamingModeActive ? "Finalize (ASR)" : "Transcribing",
-                    isAnimating: shimmer
+                StageLoadingContent(
+                    title: appState.isStreamingModeActive ? "Finalize" : "Transcribing",
+                    tint: Color(red: 0.39, green: 0.76, blue: 1.0)
                 )
             case .correcting:
-                ThinkingSweepView(text: "Polishing (AutoEdit)", isAnimating: shimmer)
+                StageLoadingContent(
+                    title: "Polish",
+                    tint: Color(red: 0.22, green: 0.88, blue: 0.73)
+                )
             case .inserting:
-                ThinkingSweepView(text: "Applying", isAnimating: shimmer)
-            case .error(let message):
-                Text(message)
-                    .font(.system(size: 12, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.white.opacity(0.9))
+                StageLoadingContent(
+                    title: "Applying",
+                    tint: Color(red: 0.98, green: 0.74, blue: 0.38)
+                )
+            case .error:
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Error")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                }
+                .lineLimit(1)
+                .foregroundStyle(Color.white.opacity(0.9))
             case .idle:
-                Text("Ready")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.9))
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("Ready")
+                        .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(Color.white.opacity(0.9))
+            }
+        }
+    }
+}
+
+private struct StageLoadingContent: View {
+    let title: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 8) {
+            CapsuleLoader(tint: tint)
+                .frame(width: 24, height: 10)
+
+            Text(title)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.94))
+                .lineLimit(1)
+
+            Spacer(minLength: 4)
+
+            Circle()
+                .fill(tint.opacity(0.9))
+                .frame(width: 5.5, height: 5.5)
+                .shadow(color: tint.opacity(0.45), radius: 2, y: 0)
+        }
+    }
+}
+
+private struct CapsuleLoader: View {
+    let tint: Color
+    @State private var active = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(Color.white.opacity(0.12))
+
+            Capsule()
+                .fill(tint.opacity(0.35))
+                .frame(width: 10)
+                .offset(x: active ? 12 : 2)
+
+            Circle()
+                .fill(tint)
+                .frame(width: 5, height: 5)
+                .offset(x: active ? 13 : 3)
+                .shadow(color: tint.opacity(0.52), radius: 3, y: 0)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) {
+                active.toggle()
             }
         }
     }
 }
 
 struct ListeningPillContent: View {
+
     let levels: [CGFloat]
     let partialText: String
     let isStreamingMode: Bool
     @State private var pulse = false
 
     var body: some View {
-        Group {
-            if isStreamingMode {
-                HStack(spacing: 8) {
-                    SymmetricBarsView(levels: levels, reverseWeights: false)
-                        .frame(width: 42, height: 14)
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color(red: 0.96, green: 0.33, blue: 0.28))
+                .frame(width: 6, height: 6)
+                .scaleEffect(pulse ? 1.22 : 0.82)
+                .opacity(pulse ? 1 : 0.5)
 
-                    Image(systemName: "waveform")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .accessibilityHidden(true)
+            SymmetricBarsView(levels: levels, reverseWeights: false)
+                .frame(width: 52, height: 12)
 
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(Color(red: 0.19, green: 0.90, blue: 1.00))
-                            .frame(width: 6, height: 6)
-                            .scaleEffect(pulse ? 1.2 : 0.8)
-                            .opacity(pulse ? 1 : 0.45)
-
-                        Text("Recording")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.92))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    SymmetricBarsView(levels: levels, reverseWeights: true)
-                        .frame(width: 42, height: 14)
-                }
-            } else {
-                HStack(spacing: 6) {
-                    SymmetricBarsView(levels: levels, reverseWeights: false)
-                        .frame(width: 42, height: 14)
-
-                    Text(displayText)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.92))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    SymmetricBarsView(levels: levels, reverseWeights: true)
-                        .frame(width: 42, height: 14)
-                }
-            }
+            Text(isStreamingMode ? "Recording" : displayText)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
                 pulse.toggle()
             }
         }
@@ -1677,6 +1831,7 @@ struct ListeningPillContent: View {
 }
 
 struct SymmetricBarsView: View {
+
     let levels: [CGFloat]
     let reverseWeights: Bool
 
@@ -1684,9 +1839,9 @@ struct SymmetricBarsView: View {
         TimelineView(.animation) { timeline in
             let time = timeline.date.timeIntervalSinceReferenceDate
             Canvas { context, size in
-                let count = 16
-                let barWidth: CGFloat = 2.1
-                let spacing: CGFloat = 1.9
+                let count = 12
+                let barWidth: CGFloat = 1.8
+                let spacing: CGFloat = 1.6
                 let totalWidth = CGFloat(count) * barWidth + CGFloat(count - 1) * spacing
                 let startX = (size.width - totalWidth) / 2
                 let midY = size.height / 2
@@ -2639,6 +2794,7 @@ private enum HistoryRetention: String, CaseIterable, Identifiable {
 
 extension Notification.Name {
     static let echoToggleRecording = Notification.Name("echo.toggleRecording")
+    static let echoUndoLastAutoEdit = Notification.Name("echo.undoLastAutoEdit")
     static let echoRecordingSaved = Notification.Name("echo.recordingSaved")
     static let echoHomeSelectSection = Notification.Name("echo.homeSelectSection")
 }

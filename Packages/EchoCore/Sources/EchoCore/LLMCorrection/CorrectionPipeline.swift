@@ -40,9 +40,10 @@ public actor CorrectionPipeline {
             confidence: transcription.wordConfidences,
             options: options
         )
+        let sanitizedResult = sanitizeProviderOutput(rawResult)
 
         // Stage 3: Verification
-        let verified = verify(result: rawResult)
+        let verified = verify(result: sanitizedResult)
 
         return verified
     }
@@ -53,15 +54,34 @@ public actor CorrectionPipeline {
     private func preDetect(transcription: TranscriptionResult, options: CorrectionOptions) -> Bool {
         guard options.isEnabled else { return false }
 
+        let trimmed = transcription.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+
         // Always correct if there are low-confidence words
         if !transcription.lowConfidenceWords.isEmpty {
+            return true
+        }
+
+        if options.enableTranslation {
+            return true
+        }
+
+        if options.rewriteIntensity != .off, trimmed.count >= 14 {
+            return true
+        }
+
+        if options.structuredOutputStyle != .off, trimmed.count >= 18 {
             return true
         }
 
         // If user explicitly enabled formatting, always run correction for
         // non-trivial utterances so stream-final polish has a visible effect.
         if options.enableFormatting,
-           transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).count >= 16 {
+           trimmed.count >= 16 {
+            return true
+        }
+
+        if (options.enableRemoveFillerWords || options.enableRemoveRepetitions), trimmed.count >= 10 {
             return true
         }
 
@@ -85,6 +105,79 @@ public actor CorrectionPipeline {
     }
 
     // MARK: - Stage 3: Verification
+
+    /// Remove prompt metadata/context leakage that some models occasionally echo.
+    /// Keeps only the corrected transcript content.
+    private func sanitizeProviderOutput(_ result: CorrectionResult) -> CorrectionResult {
+        let cleaned = sanitizeCorrectedText(result.correctedText, fallback: result.originalText)
+        guard cleaned != result.correctedText else {
+            return result
+        }
+
+        // Providers currently return full text (no granular spans), so when we
+        // sanitize leaked metadata, rebuild a plain full-text result.
+        return CorrectionResult(
+            originalText: result.originalText,
+            correctedText: cleaned
+        )
+    }
+
+    private func sanitizeCorrectedText(_ text: String, fallback: String) -> String {
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            return fallback
+        }
+
+        let leakPrefixes = [
+            "recent context:",
+            "user dictionary terms:",
+            "low confidence words:",
+            "reference context",
+            "<reference_context_do_not_output>",
+            "<low_confidence_hints_do_not_output>",
+            "最近上下文",
+            "用户词典",
+            "低置信度词语",
+            "参考上下文"
+        ]
+
+        let lines = cleaned.components(separatedBy: .newlines)
+        var kept: [String] = []
+        kept.reserveCapacity(lines.count)
+        for line in lines {
+            let normalized = line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if leakPrefixes.contains(where: { normalized.hasPrefix($0) }) {
+                break
+            }
+            kept.append(line)
+        }
+        cleaned = kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cleaned.hasPrefix("```") {
+            cleaned = cleaned
+                .replacingOccurrences(of: "^```[a-zA-Z0-9_-]*\\n?", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "\\n?```$", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let leadingLabels: [(label: String, dropCount: Int)] = [
+            ("corrected text:", "corrected text:".count),
+            ("corrected:", "corrected:".count),
+            ("修正后文本：", "修正后文本：".count),
+            ("修正文本：", "修正文本：".count),
+            ("更正后：", "更正后：".count)
+        ]
+        let lowered = cleaned.lowercased()
+        for (label, dropCount) in leadingLabels {
+            if lowered.hasPrefix(label) {
+                let start = cleaned.index(cleaned.startIndex, offsetBy: dropCount)
+                cleaned = cleaned[start...].trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+
+        return cleaned.isEmpty ? fallback : cleaned
+    }
 
     /// Verify corrections and only keep high-confidence ones
     private func verify(result: CorrectionResult) -> CorrectionResult {

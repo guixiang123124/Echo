@@ -7,7 +7,7 @@
 - App Name (EN): Echo Voice Input
 - Category: Productivity
 - iOS Bundle ID: com.xianggui.echo.app
-- macOS Bundle ID: com.echo.mac
+- macOS Bundle ID: com.xianggui.echo.mac
 - iOS Keyboard Extension Bundle ID: com.xianggui.echo.app.keyboard
 - App Group ID: group.com.xianggui.echo.shared
 - Support Email: support@fashionflow.ai
@@ -51,7 +51,7 @@
    - Team 同上
    - App Groups 同上
 4. 选择 macOS Target（如 EchoMac）：
-   - Bundle Identifier = `com.echo.mac`
+   - Bundle Identifier = `com.xianggui.echo.mac`
    - Team 同上
 5. Xcode 顶部选择设备/模拟器并编译运行
 
