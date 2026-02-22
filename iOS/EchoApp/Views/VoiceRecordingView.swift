@@ -21,6 +21,10 @@ struct VoiceRecordingView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
+                if viewModel.showStreamStatus {
+                    StreamStatusBadge(statusText: viewModel.streamStatusText)
+                }
+
                 TextEditor(text: $textInput)
                     .font(.system(size: 18))
                     .padding(12)
@@ -82,31 +86,60 @@ struct VoiceRecordingView: View {
         }
         .onChange(of: viewModel.transcribedText) { _, newValue in
             guard !newValue.isEmpty else { return }
-
-            if viewModel.isRecording {
-                if livePrefixText.isEmpty {
-                    textInput = newValue
-                } else {
-                    textInput = livePrefixText + " " + newValue
-                }
-                lastCommittedText = newValue
-                return
-            }
-
-            guard !viewModel.isProcessing,
-                  newValue != lastCommittedText else { return }
+            guard viewModel.isRecording || viewModel.isProcessing || newValue != lastCommittedText else { return }
+            textInput = composeSessionText(newValue)
             lastCommittedText = newValue
-            if textInput.isEmpty {
-                textInput = newValue
-            } else {
-                textInput += " " + newValue
-            }
         }
         .background(EchoTheme.keyboardBackground)
         .ignoresSafeArea()
         .task {
             guard startForKeyboard else { return }
             await viewModel.startRecordingForKeyboard()
+        }
+    }
+
+    private func composeSessionText(_ transcript: String) -> String {
+        let cleaned = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return textInput }
+        guard !livePrefixText.isEmpty else { return cleaned }
+        return livePrefixText + " " + cleaned
+    }
+}
+
+private struct StreamStatusBadge: View {
+    let statusText: String
+    @State private var pulse = false
+
+    private var dotColor: Color {
+        statusText == "Recording" ? .red : .orange
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(dotColor)
+                .frame(width: 8, height: 8)
+                .scaleEffect(pulse ? 1.15 : 0.85)
+                .opacity(pulse ? 1.0 : 0.45)
+            Text(statusText)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            Capsule(style: .continuous)
+                .fill(EchoTheme.keyboardSurface)
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(EchoTheme.pillStroke, lineWidth: 1)
+        )
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.75).repeatForever(autoreverses: true)) {
+                pulse.toggle()
+            }
         }
     }
 }
@@ -118,6 +151,8 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var isRecording = false
     @Published var isProcessing = false
     @Published var transcribedText = ""
+    @Published var streamStatusText = ""
+    @Published var showStreamStatus = false
     @Published var audioLevels: [CGFloat] = Array(repeating: 0, count: 30)
     @Published var statusText = "Ready"
     @Published var tipText = EchoTaglines.random()
@@ -143,6 +178,8 @@ final class VoiceRecordingViewModel: ObservableObject {
     private var activeASRProvider: (any ASRProvider)?
     private var isStreamingSession = false
     private var streamingTask: Task<Void, Never>?
+    private var deferredPolishTask: Task<Void, Never>?
+    private var deferredPolishSessionID = UUID()
     private var isKeyboardMode = false
     private var recordingTask: Task<Void, Never>?
     private var streamMetrics: StreamingMetrics?
@@ -160,6 +197,9 @@ final class VoiceRecordingViewModel: ObservableObject {
         errorMessage = ""
         showError = false
         capturedChunks = []
+        deferredPolishTask?.cancel()
+        deferredPolishTask = nil
+        deferredPolishSessionID = UUID()
 
         // Request microphone permission
         let micGranted = await audioService.requestPermission()
@@ -223,6 +263,13 @@ final class VoiceRecordingViewModel: ObservableObject {
         statusText = isStreamingSession ? "Streaming..." : "Listening..."
         transcribedText = ""
         tipText = EchoTaglines.random()
+        if isStreamingSession {
+            streamStatusText = "Recording"
+            showStreamStatus = true
+        } else {
+            streamStatusText = ""
+            showStreamStatus = false
+        }
 
         if isStreamingSession {
             startStreamingResults(provider: provider)
@@ -280,18 +327,29 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         guard let provider else {
             statusText = "Ready"
+            showStreamStatus = false
+            streamStatusText = ""
             streamMetrics = nil
             return
         }
 
         guard !capturedChunks.isEmpty else {
             statusText = "No audio data recorded"
+            showStreamStatus = false
+            streamStatusText = ""
             showErrorMessage("No audio data recorded")
             return
         }
 
         statusText = streamingActive ? "Finalizing..." : "Thinking..."
         isProcessing = true
+        if streamingActive {
+            streamStatusText = "Finalizing"
+            showStreamStatus = true
+        } else {
+            streamStatusText = ""
+            showStreamStatus = false
+        }
 
         let combinedData = capturedChunks.reduce(Data()) { $0 + $1.data }
         let totalDuration = capturedChunks.reduce(0) { $0 + $1.duration }
@@ -312,6 +370,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         var totalLatencyMs: Int?
         var correctionLatencyMs: Int?
         var rawText = ""
+        var strongestStreamPartial = ""
 
         do {
             let totalStart = Date()
@@ -323,10 +382,16 @@ final class VoiceRecordingViewModel: ObservableObject {
             if streamingActive {
                 let final = try await provider.stopStreaming()
                 stopStreamingResults()
-                let merged = mergedStreamingText(finalText: final?.text, accumulatedText: transcribedText)
+                let strongestPartial = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                strongestStreamPartial = strongestPartial
+                let merged = mergedStreamingText(finalText: final?.text, accumulatedText: strongestPartial)
                 let mergedText = merged.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                if shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: transcribedText) {
+                let forceBatchFinalizeAfterStream = false
+                let shouldBatchFinalize = forceBatchFinalizeAfterStream
+                    || shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: transcribedText)
+
+                if shouldBatchFinalize {
                     let fallbackProvider = fallbackASRProvider(for: provider.id)
                     let fallbackStart = Date()
 
@@ -397,27 +462,68 @@ final class VoiceRecordingViewModel: ObservableObject {
 
             rawText = transcription.text
             var finalText = rawText
+            if streamingActive {
+                finalText = nativeStreamingFinalize(
+                    text: finalText,
+                    strongestPartial: strongestStreamPartial
+                )
+            }
 
-            // Auto Edit (optional)
+            // Final polish:
+            // - Always try once for streaming sessions (if a correction provider is configured)
+            // - Respect user toggle for non-streaming sessions
             var correctionProviderId: String? = nil
-            if settings.correctionEnabled,
-               let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider) {
+            let streamFastPolishOptions = CorrectionOptions(
+                enableHomophones: true,
+                enablePunctuation: false,
+                enableFormatting: false
+            )
+            let streamFastActive = streamingActive && settings.streamFastEnabled
+            let selectedPolishOptions = streamFastActive ? streamFastPolishOptions : settings.correctionOptions
+            let shouldRunFinalPolish = settings.correctionEnabled && selectedPolishOptions.isEnabled
+            let shouldRunDeferredPolish = streamFastActive && shouldRunFinalPolish
+            let correctionProvider = CorrectionProviderResolver.resolve(for: settings.selectedCorrectionProvider)
+                ?? CorrectionProviderResolver.firstAvailable()
+            if shouldRunFinalPolish,
+               let correctionProvider {
                 correctionProviderId = correctionProvider.id
-                statusText = "Correcting..."
-                let correctionStart = Date()
-                do {
-                    let pipeline = CorrectionPipeline(provider: correctionProvider)
-                    let context = await contextStore.currentContext()
-                    let corrected = try await pipeline.process(
+                if shouldRunDeferredPolish {
+                    deferredPolishSessionID = UUID()
+                    queueDeferredPolish(
+                        sessionID: deferredPolishSessionID,
                         transcription: transcription,
-                        context: context,
-                        options: settings.correctionOptions
+                        provider: correctionProvider,
+                        options: selectedPolishOptions,
+                        baseText: rawText
                     )
-                    finalText = corrected.correctedText
-                } catch {
-                    finalText = rawText
+                } else {
+                    if streamingActive {
+                        streamStatusText = "Polishing"
+                        showStreamStatus = true
+                    }
+                    statusText = "Correcting..."
+                    let correctionStart = Date()
+                    do {
+                        let pipeline = CorrectionPipeline(provider: correctionProvider)
+                        let context = await contextStore.currentContext()
+                        let corrected = try await pipeline.process(
+                            transcription: transcription,
+                            context: context,
+                            options: selectedPolishOptions
+                        )
+                        finalText = corrected.correctedText
+                    } catch {
+                        finalText = rawText
+                    }
+                    correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
                 }
-                correctionLatencyMs = Int(Date().timeIntervalSince(correctionStart) * 1000)
+            } else if shouldRunFinalPolish {
+                if streamingActive {
+                    streamStatusText = "Polishing"
+                    showStreamStatus = true
+                }
+                finalText = lightweightFinalPolish(rawText)
+                correctionProviderId = "local_polish"
             }
 
             await contextStore.addTranscription(finalText)
@@ -445,6 +551,8 @@ final class VoiceRecordingViewModel: ObservableObject {
             transcribedText = finalText
             isProcessing = false
             statusText = "Ready"
+            showStreamStatus = false
+            streamStatusText = ""
             let finalMetrics = StreamingMetrics(
                 providerId: providerForStorage?.id ?? provider.id,
                 providerName: providerForStorage?.displayName ?? provider.displayName,
@@ -505,6 +613,8 @@ final class VoiceRecordingViewModel: ObservableObject {
                     transcribedText = finalText
                     isProcessing = false
                     statusText = "Ready"
+                    showStreamStatus = false
+                    streamStatusText = ""
                     logStreamingMetrics(finalMetrics, totalMs: totalLatencyMs, asrMs: asrLatencyMs, correctionMs: correctionLatencyMs)
                     deliverResult()
                     streamMetrics = nil
@@ -536,6 +646,8 @@ final class VoiceRecordingViewModel: ObservableObject {
             )
             isProcessing = false
             statusText = "Ready"
+            showStreamStatus = false
+            streamStatusText = ""
             showErrorMessage("Could not process audio: \(error.localizedDescription)")
         }
         streamMetrics = nil
@@ -554,6 +666,40 @@ final class VoiceRecordingViewModel: ObservableObject {
             statusText = "Sent to keyboard"
         } else {
             statusText = "Ready"
+        }
+    }
+
+    private func queueDeferredPolish(
+        sessionID: UUID,
+        transcription: TranscriptionResult,
+        provider: any CorrectionProvider,
+        options: CorrectionOptions,
+        baseText: String
+    ) {
+        deferredPolishTask?.cancel()
+        deferredPolishTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let pipeline = CorrectionPipeline(provider: provider)
+                let context = await self.contextStore.currentContext()
+                let corrected = try await pipeline.process(
+                    transcription: transcription,
+                    context: context,
+                    options: options
+                )
+
+                guard self.deferredPolishSessionID == sessionID, !self.isRecording else { return }
+                let polished = corrected.correctedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !polished.isEmpty, polished != baseText else { return }
+
+                self.transcribedText = polished
+                await self.contextStore.addTranscription(polished)
+                if !self.isRecording {
+                    self.statusText = "Ready"
+                }
+            } catch {
+                // Keep finalized ASR text if deferred polish fails.
+            }
         }
     }
 
@@ -671,7 +817,12 @@ final class VoiceRecordingViewModel: ObservableObject {
                         }
                         self.streamMetrics = metrics
                     }
-                    self.transcribedText = self.mergeStreamingText(text, into: self.transcribedText)
+                    let sanitized = self.sanitizeStreamingText(text, previousText: self.transcribedText)
+                    guard !sanitized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                    let merged = self.mergeStreamingText(sanitized, into: self.transcribedText)
+                    let canonical = self.sanitizeStreamingText(merged, previousText: self.transcribedText)
+                    guard canonical != self.transcribedText else { return }
+                    self.transcribedText = canonical
                     self.statusText = result.isFinal ? "Refining..." : "Streaming..."
                 }
             }
@@ -704,6 +855,9 @@ final class VoiceRecordingViewModel: ObservableObject {
         if incoming == accumulated { return accumulated }
         if incoming.hasPrefix(accumulated) { return incoming }
         if accumulated.hasSuffix(incoming) { return accumulated }
+        if let prefixDecision = prefixDominantReplacementDecision(incoming: incoming, accumulated: accumulated) {
+            return prefixDecision ? incoming : accumulated
+        }
 
         let overlap = longestSuffixPrefixOverlap(accumulated, incoming)
         if overlap > 0 {
@@ -721,6 +875,199 @@ final class VoiceRecordingViewModel: ObservableObject {
         }
 
         return accumulated + incoming
+    }
+
+    private func nativeStreamingFinalize(text: String, strongestPartial: String) -> String {
+        let base = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let partial = strongestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate: String
+        if base.isEmpty {
+            candidate = partial
+        } else if partial.isEmpty {
+            candidate = base
+        } else {
+            candidate = mergeStreamingText(base, into: partial)
+        }
+        let normalized = sanitizeStreamingText(candidate, previousText: partial)
+        if normalized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return candidate
+        }
+        return normalized
+    }
+
+    private func prefixDominantReplacementDecision(incoming: String, accumulated: String) -> Bool? {
+        let normalizedIncoming = normalizedStreamingComparisonText(incoming)
+        let normalizedAccumulated = normalizedStreamingComparisonText(accumulated)
+        guard !normalizedIncoming.isEmpty, !normalizedAccumulated.isEmpty else { return nil }
+
+        if normalizedIncoming == normalizedAccumulated {
+            return incoming.count >= accumulated.count
+        }
+        if normalizedIncoming.hasPrefix(normalizedAccumulated) {
+            return true
+        }
+        if normalizedAccumulated.hasPrefix(normalizedIncoming) {
+            return false
+        }
+
+        let shorterCount = min(normalizedIncoming.count, normalizedAccumulated.count)
+        guard shorterCount >= 8 else { return nil }
+        let sharedPrefix = sharedPrefixLength(normalizedIncoming, normalizedAccumulated)
+        let prefixRatio = Double(sharedPrefix) / Double(shorterCount)
+        guard prefixRatio >= 0.82 else { return nil }
+
+        return incoming.count >= accumulated.count
+    }
+
+    private func normalizedStreamingComparisonText(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered = trimmed.unicodeScalars.filter { scalar in
+            !CharacterSet.whitespacesAndNewlines.contains(scalar) &&
+            !CharacterSet.punctuationCharacters.contains(scalar) &&
+            !CharacterSet.symbols.contains(scalar)
+        }
+        return String(String.UnicodeScalarView(filtered))
+    }
+
+    private func sharedPrefixLength(_ lhs: String, _ rhs: String) -> Int {
+        var count = 0
+        for pair in zip(lhs, rhs) {
+            if pair.0 != pair.1 { break }
+            count += 1
+        }
+        return count
+    }
+
+    private func sanitizeStreamingText(_ text: String, previousText: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleaned = removeObviousConsecutiveRepetition(
+            in: incoming,
+            baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        if cleaned.count > 260 {
+            return cleaned
+        }
+        return collapseDuplicateFullString(from: cleaned)
+    }
+
+    private func removeObviousConsecutiveRepetition(in text: String, baseText: String) -> String {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty, !baseText.isEmpty else {
+            return trimmedText
+        }
+
+        let repeatedTrimmed = collapseImmediateRepetition(around: baseText, candidate: trimmedText)
+        return repeatedTrimmed
+    }
+
+    private func collapseImmediateRepetition(around baseText: String, candidate text: String) -> String {
+        guard !baseText.isEmpty else { return text }
+        if text == baseText { return text }
+
+        let repeated = collapseLeadingRuns(of: baseText, in: text)
+        return repeated
+    }
+
+    private func collapseLeadingRuns(of unit: String, in text: String) -> String {
+        guard !unit.isEmpty else { return text }
+        guard text.hasPrefix(unit) else { return text }
+
+        var remaining = text
+        var runCount = 0
+
+        while canDropPrefixRun(remaining, unit: unit) {
+            remaining = String(remaining.dropFirst(unit.count))
+            remaining = remaining.trimmingCharacters(in: .whitespacesAndNewlines)
+            runCount += 1
+        }
+
+        if runCount <= 1 {
+            return text
+        }
+        if remaining.isEmpty {
+            return unit
+        }
+        if shouldInsertSpace(between: unit, and: remaining) {
+            return "\(unit) \(remaining)"
+        }
+        return unit + remaining
+    }
+
+    private func canDropPrefixRun(_ text: String, unit: String) -> Bool {
+        guard text.hasPrefix(unit) else { return false }
+        if text == unit { return true }
+
+        let remainder = String(text.dropFirst(unit.count))
+        let unitContainsWhitespace = unit.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+        guard unitContainsWhitespace else {
+            let unitASCII = unit.unicodeScalars.allSatisfy(\.isASCII)
+            if !unitASCII { return true }
+            guard let next = remainder.unicodeScalars.first else { return false }
+            return !CharacterSet.alphanumerics.contains(next)
+        }
+
+        return true
+    }
+
+    private func collapseDuplicateFullString(from text: String) -> String {
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !incoming.isEmpty else { return incoming }
+
+        let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
+        if fullTokens.count >= 2 {
+            for unitLength in stride(from: fullTokens.count / 2, through: 1, by: -1) {
+                let unitCount = max(1, unitLength)
+                guard fullTokens.count >= unitCount * 2 else { continue }
+
+                let unit = Array(fullTokens.prefix(unitCount))
+                var cursor = unitCount
+                var duplicateRuns = 1
+
+                while cursor + unitCount <= fullTokens.count,
+                      Array(fullTokens[cursor..<(cursor + unitCount)]) == unit {
+                    duplicateRuns += 1
+                    cursor += unitCount
+                }
+
+                if duplicateRuns >= 2 {
+                    let tail = fullTokens.dropFirst(unitCount * duplicateRuns)
+                    let unitText = unit.joined(separator: " ")
+                    guard !tail.isEmpty else {
+                        return unitText
+                    }
+                    return "\(unitText) \(tail.joined(separator: " "))"
+                }
+            }
+        }
+
+        let incomingChars = Array(incoming)
+        let maxUnitLength = incomingChars.count / 2
+        guard maxUnitLength > 0 else { return incoming }
+
+        for unitLength in stride(from: maxUnitLength, through: 1, by: -1) {
+            let unit = Array(incomingChars[0..<unitLength])
+            var cursor = unitLength
+            var duplicateRuns = 1
+
+            while cursor + unitLength <= incomingChars.count,
+                  Array(incomingChars[cursor..<(cursor + unitLength)]) == unit {
+                duplicateRuns += 1
+                cursor += unitLength
+            }
+
+            if duplicateRuns >= 2 {
+                let unitText = String(unit)
+                let tail = String(incomingChars.dropFirst(unitLength * duplicateRuns))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !tail.isEmpty else { return unitText }
+                if shouldInsertSpace(between: unitText, and: tail) {
+                    return "\(unitText) \(tail)"
+                }
+                return unitText + tail
+            }
+        }
+
+        return incoming
     }
 
     private func shouldInsertSpace(between accumulated: String, and incoming: String) -> Bool {
@@ -801,6 +1148,26 @@ final class VoiceRecordingViewModel: ObservableObject {
             }
             throw error
         }
+    }
+
+    private func lightweightFinalPolish(_ text: String) -> String {
+        var output = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else { return output }
+
+        output = output.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        output = output.replacingOccurrences(of: " ,", with: ",")
+        output = output.replacingOccurrences(of: " .", with: ".")
+        output = output.replacingOccurrences(of: " !", with: "!")
+        output = output.replacingOccurrences(of: " ?", with: "?")
+        output = output.replacingOccurrences(of: " ，", with: "，")
+        output = output.replacingOccurrences(of: " 。", with: "。")
+        output = output.replacingOccurrences(of: " ！", with: "！")
+        output = output.replacingOccurrences(of: " ？", with: "？")
+
+        if let first = output.first, first.isLetter {
+            output.replaceSubrange(output.startIndex...output.startIndex, with: String(first).uppercased())
+        }
+        return output
     }
 
     private func showErrorMessage(_ message: String) {

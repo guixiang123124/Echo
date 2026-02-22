@@ -12,6 +12,7 @@ public final class MacAppSettings: ObservableObject {
         static let recordingMode = "recordingMode"
         static let selectedASRProvider = "selectedASRProvider"
         static let asrMode = "echo.asr.mode"
+        static let streamFastEnabled = "echo.asr.streamFastEnabled"
         static let asrLanguage = "asrLanguage"
         static let openAITranscriptionModel = "echo.asr.openaiModel"
         static let deepgramModel = "echo.asr.deepgramModel"
@@ -206,6 +207,9 @@ public final class MacAppSettings: ObservableObject {
         if defaults.object(forKey: Keys.asrMode) == nil {
             defaults.set(ASRMode.batch.rawValue, forKey: Keys.asrMode)
         }
+        if defaults.object(forKey: Keys.streamFastEnabled) == nil {
+            defaults.set(true, forKey: Keys.streamFastEnabled)
+        }
         if defaults.object(forKey: Keys.openAITranscriptionModel) == nil {
             defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
         }
@@ -381,6 +385,14 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue.rawValue, forKey: Keys.asrMode)
+        }
+    }
+
+    public var streamFastEnabled: Bool {
+        get { defaults.object(forKey: Keys.streamFastEnabled) == nil ? true : defaults.bool(forKey: Keys.streamFastEnabled) }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue, forKey: Keys.streamFastEnabled)
         }
     }
 

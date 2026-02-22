@@ -19,6 +19,9 @@ public final class AppSettings: @unchecked Sendable {
             // OpenAI transcription is batch. Default to non-streaming to avoid confusing UX.
             self.defaults.set(false, forKey: Keys.preferStreaming)
         }
+        if self.defaults.object(forKey: Keys.streamFastEnabled) == nil {
+            self.defaults.set(true, forKey: Keys.streamFastEnabled)
+        }
     }
 
     // MARK: - ASR Settings
@@ -33,6 +36,12 @@ public final class AppSettings: @unchecked Sendable {
     public var preferStreaming: Bool {
         get { defaults.bool(forKey: Keys.preferStreaming, default: false) }
         set { defaults.set(newValue, forKey: Keys.preferStreaming) }
+    }
+
+    /// Whether StreamFast behavior is enabled (fast finalize + async polish)
+    public var streamFastEnabled: Bool {
+        get { defaults.bool(forKey: Keys.streamFastEnabled, default: true) }
+        set { defaults.set(newValue, forKey: Keys.streamFastEnabled) }
     }
 
     // MARK: - LLM Correction Settings
@@ -130,6 +139,7 @@ public final class AppSettings: @unchecked Sendable {
     private enum Keys {
         static let selectedASRProvider = "echo.asr.selected"
         static let preferStreaming = "echo.asr.streaming"
+        static let streamFastEnabled = "echo.asr.streamFastEnabled"
         static let correctionEnabled = "echo.correction.enabled"
         static let selectedCorrectionProvider = "echo.correction.selected"
         static let correctionHomophones = "echo.correction.homophones"

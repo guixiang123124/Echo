@@ -95,6 +95,11 @@ struct SettingsView: View {
                         get: { settings.preferStreaming },
                         set: { settings.preferStreaming = $0 }
                     ))
+
+                    Toggle("Enable StreamFast", isOn: .init(
+                        get: { settings.streamFastEnabled },
+                        set: { settings.streamFastEnabled = $0 }
+                    ))
                 }
 
                 // Auto Edit Section

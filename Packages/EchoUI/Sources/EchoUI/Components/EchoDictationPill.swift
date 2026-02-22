@@ -7,6 +7,7 @@ public struct EchoDictationPill: View {
     public let tipText: String?
     public let width: CGFloat
     public let height: CGFloat
+    @State private var highlightPhase = false
 
     public init(
         isRecording: Bool,
@@ -27,9 +28,32 @@ public struct EchoDictationPill: View {
     public var body: some View {
         ZStack {
             Capsule()
-                .fill(EchoTheme.pillBackground)
+                .fill(backgroundFill)
                 .overlay(
                     Capsule().stroke(EchoTheme.pillStroke, lineWidth: 1)
+                )
+                .overlay {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.05),
+                                    Color.white.opacity(0.24),
+                                    Color.white.opacity(0.05)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .offset(x: highlightPhase ? width * 0.34 : -width * 0.34)
+                        .blur(radius: 5)
+                        .opacity(isRecording || isProcessing ? 0.75 : 0.35)
+                }
+                .mask(Capsule())
+                .shadow(
+                    color: (isRecording ? EchoTheme.accent : EchoTheme.accentSecondary).opacity(isRecording || isProcessing ? 0.22 : 0.08),
+                    radius: isRecording || isProcessing ? 14 : 8,
+                    y: 4
                 )
 
             if isRecording {
@@ -50,12 +74,48 @@ public struct EchoDictationPill: View {
             }
         }
         .frame(width: width, height: height)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
+                highlightPhase.toggle()
+            }
+        }
+    }
+
+    private var backgroundFill: some ShapeStyle {
+        if isRecording {
+            return AnyShapeStyle(
+                LinearGradient(
+                    colors: [
+                        EchoTheme.pillBackground,
+                        EchoTheme.accentSecondary.opacity(0.28),
+                        EchoTheme.pillBackground
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+        }
+        if isProcessing {
+            return AnyShapeStyle(
+                LinearGradient(
+                    colors: [
+                        EchoTheme.pillBackground,
+                        EchoTheme.accent.opacity(0.18),
+                        EchoTheme.pillBackground
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        }
+        return AnyShapeStyle(EchoTheme.pillBackground)
     }
 }
 
 public struct ListeningPillContent: View {
     let levels: [CGFloat]
     let tipText: String?
+    @State private var pulse = false
 
     public init(levels: [CGFloat], tipText: String? = nil) {
         self.levels = levels
@@ -68,7 +128,14 @@ public struct ListeningPillContent: View {
                 .frame(width: 44, height: 16)
 
             VStack(spacing: 2) {
-                Text("Listening · tap to stop")
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(EchoTheme.accent)
+                        .frame(width: 6, height: 6)
+                        .scaleEffect(pulse ? 1.2 : 0.8)
+                        .opacity(pulse ? 1 : 0.45)
+                    Text("Listening · tap to stop")
+                }
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.primary)
                 Text(tipText ?? "Your voice, refined by Echo.")
@@ -80,6 +147,11 @@ public struct ListeningPillContent: View {
             FluidWaveformView(levels: levels)
                 .scaleEffect(x: -1, y: 1)
                 .frame(width: 44, height: 16)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.72).repeatForever(autoreverses: true)) {
+                pulse.toggle()
+            }
         }
     }
 }
