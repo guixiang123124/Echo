@@ -73,7 +73,7 @@ enum VoiceInputTrigger {
                     return
                 }
                 print("VoiceInputTrigger: Timeout opening URL: \(url.absoluteString)")
-                fail()
+                finish(false)
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: timeout)
@@ -98,6 +98,15 @@ enum VoiceInputTrigger {
             return
         }
 
+        if let inputController = viewController as? UIInputViewController {
+            let opened = openViaInputViewController(url, from: inputController)
+            if opened {
+                confirmFallbackLaunch()
+                return
+            }
+            print("VoiceInputTrigger: UIInputViewController open failed for URL: \(url.absoluteString)")
+        }
+
         let opened = openViaResponderChain(url: url, from: viewController)
         if opened {
             confirmFallbackLaunch()
@@ -119,6 +128,20 @@ enum VoiceInputTrigger {
                 }
             }
             responder = current.next
+        }
+        return false
+    }
+
+    private static func openViaInputViewController(_ url: URL, from viewController: UIInputViewController) -> Bool {
+        let selector = sel_registerName("openURL:completionHandler:")
+        if viewController.responds(to: selector) {
+            typealias OpenURLWithCompletionFunc = @convention(c) (AnyObject, Selector, URL, @escaping (Bool) -> Void) -> Void
+            let implementation = viewController.method(for: selector)
+            let function = unsafeBitCast(implementation, to: OpenURLWithCompletionFunc.self)
+            function(viewController, selector, url) { opened in
+                print("VoiceInputTrigger: openURL:completionHandler result for \(url.absoluteString): \(opened)")
+            }
+            return true
         }
         return false
     }

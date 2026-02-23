@@ -157,3 +157,21 @@ This keeps quality stable while still collecting candidates automatically.
 - Execute release branch script after Codex commit
 - Archive and upload builds
 - Complete App Store Connect submission
+
+## 2026-02-23 — iOS 外部键盘 openurl 响应修复（进行中）
+
+### 分支核对
+- `edith/launch-quality-perf` 与 `main` 对比为 `50 0`，当前无新独立提交可直接 cherry-pick。
+- 当前修复集中在 `main` 当前工作树，未发现 Edith 新提交与本问题直接耦合。
+
+### iOS 键盘修复
+- `iOS/EchoKeyboard/KeyboardView.swift`
+  - 顶部按钮改为 `Button` 提升触发稳定性。
+  - 去掉 Full Access/共享容器作为 `open` 前硬拦截，改为触发后按结果反馈。
+- `iOS/EchoKeyboard/VoiceInputTrigger.swift`
+  - 增加 `UIInputViewController` open selector 兜底，补齐 external app 点击后的唤起机会。
+  - 优化 timeout 与 fallback 回路，尽量在失败前确认 app launch ack。
+
+### 未闭环问题（待验证）
+- iOS 外部输入框内，`Settings` / `Tap to Speak` 仍可能无响应或无日志（用户端实测中）。
+- 下一轮需要确认主 App deep link 接收（`onOpenURL`）是否在所有 host app 下稳定触发。

@@ -138,17 +138,15 @@ struct KeyboardView: View {
         print("[EchoKeyboard] openMainAppVoice called")
         print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
 
-        guard state.hasOperationalFullAccess else {
-            print("[EchoKeyboard] No operational full access, showing guidance")
-            state.showToast(state.fullAccessGuidance)
-            return
-        }
-
         state.showToast("Opening Echo…")
         VoiceInputTrigger.openMainAppForVoice(from: state.viewController) { success in
             print("[EchoKeyboard] openMainAppVoice result: \(success)")
             if !success {
-                state.showToast("Couldn't open Echo. Open the app and try again.")
+                if !state.hasOperationalFullAccess {
+                    state.showToast(state.fullAccessGuidance)
+                } else {
+                    state.showToast("Couldn't open Echo. Open the app and try again.")
+                }
             }
         }
     }
@@ -157,17 +155,15 @@ struct KeyboardView: View {
         print("[EchoKeyboard] openMainAppSettings called")
         print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
 
-        guard state.hasOperationalFullAccess else {
-            print("[EchoKeyboard] No operational full access, showing guidance")
-            state.showToast(state.fullAccessGuidance)
-            return
-        }
-
         state.showToast("Opening Echo settings…")
         VoiceInputTrigger.openMainAppForSettings(from: state.viewController) { success in
             print("[EchoKeyboard] openMainAppSettings result: \(success)")
             if !success {
-                state.showToast("Couldn't open Echo. Open the app and try again.")
+                if !state.hasOperationalFullAccess {
+                    state.showToast(state.fullAccessGuidance)
+                } else {
+                    state.showToast("Couldn't open Echo. Open the app and try again.")
+                }
             }
         }
     }
@@ -231,7 +227,7 @@ private struct KeyboardTopBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Settings button - using onTapGesture for better keyboard extension compatibility
+            // Settings button - using onTapGesture for keyboard extension compatibility
             Image(systemName: "gearshape")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))
@@ -246,7 +242,7 @@ private struct KeyboardTopBar: View {
 
             Spacer()
 
-            // Voice button - using onTapGesture for better keyboard extension compatibility
+            // Voice button - using onTapGesture for keyboard extension compatibility
             EchoDictationPill(
                 isRecording: false,
                 isProcessing: false,
@@ -262,7 +258,7 @@ private struct KeyboardTopBar: View {
 
             Spacer()
 
-            // Collapse button - using onTapGesture for better keyboard extension compatibility
+            // Collapse button - using onTapGesture for keyboard extension compatibility
             Image(systemName: "chevron.down")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))
