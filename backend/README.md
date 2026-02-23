@@ -38,6 +38,12 @@ curl http://127.0.0.1:8080/healthz
    - `DATABASE_URL`
    - `JWT_SECRET` (long random string)
    - `CORS_ORIGIN` (for web console origin; use `*` during initial test)
+   - ASR proxy secrets (recommended for production):
+     - `OPENAI_API_KEY`
+     - `DEEPGRAM_API_KEY`
+     - `VOLCANO_APP_ID`
+     - `VOLCANO_ACCESS_KEY`
+     - optional: `VOLCANO_RESOURCE_ID`, `VOLCANO_ENDPOINT`
    - `APPLE_AUDIENCE` (comma-separated bundle IDs, required for Apple login verification)
    - `GOOGLE_AUDIENCE` (comma-separated Google OAuth Client IDs, required for Google ID token verification)
 4. Optional Stripe billing envs:
@@ -104,6 +110,7 @@ The app stays local-first:
 - `POST /v1/auth/apple`
 - `POST /v1/auth/google`
 - `GET /v1/auth/me`
+- `POST /v1/asr/transcribe` (authenticated ASR proxy: OpenAI / Deepgram / Volcano batch)
 - `GET /v1/billing/status`
 - `POST /v1/billing/create-checkout-session`
 - `POST /v1/billing/create-portal-session`

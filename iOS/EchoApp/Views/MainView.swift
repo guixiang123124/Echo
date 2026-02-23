@@ -17,6 +17,8 @@ struct MainView: View {
     @State private var selectedTab: Tab = .home
     @State private var deepLink: DeepLink?
     @EnvironmentObject var authSession: EchoAuthSession
+    @Environment(\.scenePhase) private var scenePhase
+    private let keyboardIntentPoll = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -51,8 +53,11 @@ struct MainView: View {
             Task { await BillingService.shared.refresh() }
         }
         .onOpenURL { url in
-            guard url.scheme == "echo", let host = url.host else { return }
-            switch host {
+            guard url.scheme == "echo" || url.scheme == "echoapp" else { return }
+            let route = (url.host?.isEmpty == false ? url.host : nil)
+                ?? url.pathComponents.dropFirst().first
+            guard let route else { return }
+            switch route {
             case "home":
                 selectedTab = .home
                 deepLink = nil
@@ -67,11 +72,25 @@ struct MainView: View {
                 deepLink = nil
             case "voice":
                 deepLink = .voice
+                AppGroupBridge().markLaunchAcknowledged()
+                AppGroupBridge().clearPendingLaunchIntent()
             case "settings":
                 deepLink = .settings
+                AppGroupBridge().markLaunchAcknowledged()
+                AppGroupBridge().clearPendingLaunchIntent()
             default:
                 break
             }
+        }
+        .onAppear {
+            consumeKeyboardLaunchIntentIfNeeded()
+        }
+        .onReceive(keyboardIntentPoll) { _ in
+            consumeKeyboardLaunchIntentIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, newValue in
+            guard newValue == .active else { return }
+            consumeKeyboardLaunchIntentIfNeeded()
         }
         .sheet(item: $deepLink) { link in
             switch link {
@@ -89,6 +108,21 @@ extension MainView.DeepLink: Identifiable {
         switch self {
         case .voice: return "voice"
         case .settings: return "settings"
+        }
+    }
+}
+
+private extension MainView {
+    func consumeKeyboardLaunchIntentIfNeeded() {
+        let bridge = AppGroupBridge()
+        guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else { return }
+        switch intent {
+        case .voice:
+            deepLink = .voice
+            bridge.markLaunchAcknowledged()
+        case .settings:
+            deepLink = .settings
+            bridge.markLaunchAcknowledged()
         }
     }
 }

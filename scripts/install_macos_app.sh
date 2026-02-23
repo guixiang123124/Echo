@@ -1,44 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Copies the latest Debug build of EchoMac.app from DerivedData into a stable location
-# so macOS permissions (Accessibility/Input Monitoring) don't keep resetting due to
-# changing build paths.
+# Installs the unified latest Release build of Echo from the fixed DerivedData path
+# used by scripts/build_and_deploy_latest.sh. This prevents Debug/Release path drift
+# and keeps a single canonical app at /Applications/Echo.app.
 #
 # Usage:
 #   ./scripts/install_macos_app.sh
 #
 # Notes:
-# - For best results, build/run the `EchoMac` scheme in Xcode with signing enabled first.
-# - We install into ~/Applications to avoid requiring admin privileges.
+# - Build with scripts/build_and_deploy_latest.sh (or Release in Xcode) before running.
 
-DERIVED_ROOT="${HOME}/Library/Developer/Xcode/DerivedData"
-DERIVED_DIR="$(ls -td "${DERIVED_ROOT}"/Echo-* 2>/dev/null | head -n 1 || true)"
-
-if [[ -z "${DERIVED_DIR}" ]]; then
-  echo "No DerivedData found for Echo. Build the EchoMac scheme in Xcode first."
-  exit 1
-fi
-
-APP_SRC="${DERIVED_DIR}/Build/Products/Debug/Echo.app"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DERIVED_DIR="${ROOT}/output/DerivedDataLatest"
+APP_SRC="${DERIVED_DIR}/Build/Products/Release/EchoMac.app"
 if [[ ! -d "${APP_SRC}" ]]; then
-  # Backwards-compat: older builds used EchoMac.app as product name.
-  APP_SRC="${DERIVED_DIR}/Build/Products/Debug/EchoMac.app"
+  APP_SRC="${DERIVED_DIR}/Build/Products/Release/Echo.app"
 fi
 
 if [[ ! -d "${APP_SRC}" ]]; then
-  echo "Echo.app not found in DerivedData."
+  echo "Release app not found in unified DerivedData path."
   echo "Expected one of:"
-  echo "  ${DERIVED_DIR}/Build/Products/Debug/Echo.app"
-  echo "  ${DERIVED_DIR}/Build/Products/Debug/EchoMac.app"
-  echo "Build the EchoMac scheme in Xcode (Debug) first, then re-run this script."
+  echo "  ${DERIVED_DIR}/Build/Products/Release/EchoMac.app"
+  echo "  ${DERIVED_DIR}/Build/Products/Release/Echo.app"
+  echo "Run scripts/build_and_deploy_latest.sh first."
   exit 1
 fi
 
-INSTALL_DIR="${HOME}/Applications"
+INSTALL_DIR="/Applications"
 APP_DEST="${INSTALL_DIR}/Echo.app"
 
-mkdir -p "${INSTALL_DIR}"
 rm -rf "${APP_DEST}"
 
 /usr/bin/ditto "${APP_SRC}" "${APP_DEST}"

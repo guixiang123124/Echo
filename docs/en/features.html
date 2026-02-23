@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>功能 - Echo</title>
+  <title>Features - Echo</title>
   <style>
     :root { --primary: #6366f1; --accent: #ec4899; --bg: #0a0a0f; --bg-secondary: #12121a; --text: #f8fafc; --text-secondary: #94a3b8; --border: rgba(255,255,255,0.08); --gradient-1: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #ec4899 100%); }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
     .bg-mesh { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99,102,241,0.2), transparent); pointer-events: none; z-index: -1; }
     header { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; padding: 16px 0; background: rgba(10,10,15,0.9); backdrop-filter: blur(20px); border-bottom: 1px solid var(--border); }
     nav { max-width: 1200px; margin: 0 auto; padding: 0 24px; display: flex; justify-content: space-between; align-items: center; }
@@ -49,7 +49,7 @@
     .preset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 16px; }
     .preset-item { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
     .preset-item.recommended { border-color: var(--accent); position: relative; }
-    .preset-item.recommended::after { content: '推荐'; position: absolute; top: -8px; right: 12px; background: var(--accent); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px; }
+    .preset-item.recommended::after { content: 'Recommended'; position: absolute; top: -8px; right: 12px; background: var(--accent); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px; }
     .preset-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
     .preset-desc { font-size: 12px; color: var(--text-secondary); }
     .metrics { padding: 60px 24px; background: var(--bg-secondary); }
@@ -68,153 +68,153 @@
   
   <header>
     <nav>
-      <a href="/" class="logo">Echo</a>
+      <a href="/en/" class="logo">Echo</a>
       <div class="nav-links">
-        <a href="/">首页</a>
-        <a href="/features.html" class="active">功能</a>
-        <a href="/about.html">关于</a>
-        <a href="/download.html">下载</a>
-        <a href="/" class="nav-cta">立即下载</a>
-        <a href="/en/features.html" class="lang-switch">English →</a>
+        <a href="/en/">Home</a>
+        <a href="/en/features.html" class="active">Features</a>
+        <a href="/en/about.html">About</a>
+        <a href="/en/download.html">Download</a>
+        <a href="/en/" class="nav-cta">Download</a>
+        <a href="/features.html" class="lang-switch">中文 →</a>
       </div>
       <button class="mobile-menu-btn" onclick="toggleMenu()">☰</button>
     </nav>
   </header>
 
   <div class="mobile-menu" id="mobileMenu">
-    <a href="/">🏠 首页</a>
-    <a href="/features.html" class="active">⚡ 功能</a>
-    <a href="/about.html">👥 关于</a>
-    <a href="/download.html">⬇️ 下载</a>
-    <a href="/en/features.html">🌐 English</a>
+    <a href="/en/">🏠 Home</a>
+    <a href="/en/features.html" class="active">⚡ Features</a>
+    <a href="/en/about.html">👥 About</a>
+    <a href="/en/download.html">⬇️ Download</a>
+    <a href="/features.html">🌐 中文</a>
   </div>
 
   <section class="page-header">
-    <h1>强大而简洁</h1>
-    <p>从想法到文字，最快的路径</p>
+    <h1>Powerful Yet Simple</h1>
+    <p>The fastest path from thought to editable text</p>
   </section>
 
   <section class="features-detail">
-    <!-- 实时流式转译 -->
+    <!-- Streaming -->
     <div class="feature-block">
       <div class="feature-content">
-        <div class="subtitle">语音识别</div>
-        <h2>⚡ 实时流式转译</h2>
-        <p>边说边出字，毫秒级延迟。先进的流式语音识别技术，无需等待录音结束即可看到文字实时出现。</p>
+        <div class="subtitle">Speech Recognition</div>
+        <h2>⚡ Real-time Streaming</h2>
+        <p>Words appear as you speak. Advanced streaming speech recognition shows text in real-time - no waiting for recording to finish.</p>
         <ul class="feature-list">
-          <li>首字延迟低至 <strong>180ms</strong></li>
-          <li>支持 Deepgram、Volcano、Whisper 多引擎</li>
-          <li>智能路由，自动选择最优识别路径</li>
-          <li>中英文混合识别</li>
+          <li>First token latency as low as <strong>180ms</strong></li>
+          <li>Multi-engine support: Deepgram, Volcano, Whisper</li>
+          <li>Intelligent routing selects optimal path</li>
+          <li>Mixed Chinese-English recognition</li>
         </ul>
         <div class="mode-card">
-          <h4>🚀 流式模式 (Stream)</h4>
-          <p style="font-size: 12px; margin-bottom: 8px;">边说边出字，速度最快，适合实时沟通</p>
+          <h4>🚀 Stream Mode</h4>
+          <p style="font-size: 12px; margin-bottom: 8px;">Speak and see text instantly. Fastest for real-time communication.</p>
           <div class="mode-tags">
-            <span class="mode-tag stream">速度优先</span>
-            <span class="mode-tag">实时可见</span>
+            <span class="mode-tag stream">Speed First</span>
+            <span class="mode-tag">Real-time</span>
           </div>
         </div>
         <div class="mode-card">
-          <h4>📦 批量模式 (Batch)</h4>
-          <p style="font-size: 12px; margin-bottom: 8px;">整段说完后统一处理，质量更稳定</p>
+          <h4>📦 Batch Mode</h4>
+          <p style="font-size: 12px; margin-bottom: 8px;">Process after you finish speaking. More consistent quality.</p>
           <div class="mode-tags">
-            <span class="mode-tag batch">质量优先</span>
-            <span class="mode-tag">适合Polish</span>
+            <span class="mode-tag batch">Quality First</span>
+            <span class="mode-tag">Better for Polish</span>
           </div>
         </div>
       </div>
       <div class="feature-visual">
         <span class="feature-icon-large">⚡</span>
-        <span style="color: var(--text-secondary); font-size: 14px;">180ms 首字延迟</span>
+        <span style="color: var(--text-secondary); font-size: 14px;">180ms First Token</span>
       </div>
     </div>
 
-    <!-- 智能预设 -->
+    <!-- Presets -->
     <div class="feature-block reverse">
       <div class="feature-content">
-        <div class="subtitle">AI 润色</div>
-        <h2>🎯 V2 智能预设</h2>
-        <p>从纯转录到深度润色，五种预设模式一键切换。根据不同场景选择最适合的处理方式。</p>
+        <div class="subtitle">AI Polish</div>
+        <h2>🎯 V2 Smart Presets</h2>
+        <p>Five preset modes from pure transcript to deep polish. Choose the best processing for your scenario with one click.</p>
         
         <div class="preset-grid">
           <div class="preset-item">
             <div class="preset-name">Pure Transcript</div>
-            <div class="preset-desc">纯转录，不润色</div>
+            <div class="preset-desc">Raw transcript only, no polish</div>
           </div>
           <div class="preset-item">
             <div class="preset-name">StreamFast</div>
-            <div class="preset-desc">极速模式，只修关键错误</div>
+            <div class="preset-desc">Speed first, fix critical errors</div>
           </div>
           <div class="preset-item recommended">
             <div class="preset-name">Smart Polish ⭐</div>
-            <div class="preset-desc">平衡质量与速度（默认）</div>
+            <div class="preset-desc">Balanced quality & speed (default)</div>
           </div>
           <div class="preset-item">
             <div class="preset-name">Deep Edit</div>
-            <div class="preset-desc">深度重写，句式优化</div>
+            <div class="preset-desc">Maximum rewrite & structure</div>
           </div>
         </div>
       </div>
       <div class="feature-visual">
         <span class="feature-icon-large">🎯</span>
-        <span style="color: var(--text-secondary); font-size: 14px;">5档预设 一键切换</span>
+        <span style="color: var(--text-secondary); font-size: 14px;">5 Presets, One Click</span>
       </div>
     </div>
 
-    <!-- AI 引擎 -->
+    <!-- AI Engines -->
     <div class="feature-block">
       <div class="feature-content">
-        <div class="subtitle">AI 润色引擎</div>
-        <h2>✨ 四大 AI 引擎</h2>
-        <p>录音结束后，可选 AI 自动润色。支持业界领先的 AI 引擎，让表达更专业、更地道。</p>
+        <div class="subtitle">AI Polish Engines</div>
+        <h2>✨ Four AI Engines</h2>
+        <p>After recording, optional AI polish. Industry-leading AI engines make your text more professional and natural.</p>
         <ul class="feature-list">
-          <li><strong>OpenAI GPT-4</strong> — 业界领先</li>
-          <li><strong>Anthropic Claude</strong> — 思考深入</li>
-          <li><strong>字节豆包</strong> — 中文优化</li>
-          <li><strong>阿里通义千问</strong> — 国产优选</li>
+          <li><strong>OpenAI GPT-4</strong> — Industry leader</li>
+          <li><strong>Anthropic Claude</strong> — Deep reasoning</li>
+          <li><strong>ByteDance Doubao</strong> — Chinese optimized</li>
+          <li><strong>Alibaba Qwen</strong> — China alternative</li>
         </ul>
       </div>
       <div class="feature-visual">
         <span class="feature-icon-large">✨</span>
-        <span style="color: var(--text-secondary); font-size: 14px;">4+ AI 引擎</span>
+        <span style="color: var(--text-secondary); font-size: 14px;">4+ AI Engines</span>
       </div>
     </div>
 
-    <!-- 翻译功能 -->
+    <!-- Translation -->
     <div class="feature-block reverse">
       <div class="feature-content">
-        <div class="subtitle">实时翻译</div>
-        <h2>🌍 实时翻译</h2>
-        <p>说中文直接出英文，说英文直接出中文。国际会议、与外国同事沟通、学习外语，都变得更简单。</p>
+        <div class="subtitle">Real-time Translation</div>
+        <h2>🌍 Real-time Translation</h2>
+        <p>Speak in Chinese, get English. Speak in English, get Chinese. International meetings, communicating with foreign colleagues, learning languages - all made simpler.</p>
         <ul class="feature-list">
-          <li>支持中文 ↔ English 双向翻译</li>
-          <li>流式翻译，边说边翻</li>
-          <li>可与其他润色模式叠加使用</li>
+          <li>Chinese ↔ English bidirectional</li>
+          <li>Stream translation as you speak</li>
+          <li>Works with other polish modes</li>
         </ul>
       </div>
       <div class="feature-visual">
         <span class="feature-icon-large">🌍</span>
-        <span style="color: var(--text-secondary); font-size: 14px;">中文 ↔ English</span>
+        <span style="color: var(--text-secondary); font-size: 14px;">Chinese ↔ English</span>
       </div>
     </div>
 
-    <!-- 可编辑 -->
+    <!-- Editable -->
     <div class="feature-block">
       <div class="feature-content">
-        <div class="subtitle">输入体验</div>
-        <h2>📝 天生可编辑</h2>
-        <p>转写结果直接插入当前输入框，随时修改。不是纯语音，是语音与文字的融合体验。</p>
+        <div class="subtitle">Input Experience</div>
+        <h2>📝 Editable by Design</h2>
+        <p>Transcribed text inserts directly into your current input field. Edit anytime. Not just voice - it's voice + text fusion.</p>
         <ul class="feature-list">
-          <li>自动插入当前聚焦输入框</li>
-          <li>支持 macOS 全局快捷键</li>
-          <li>iOS 键盘扩展支持</li>
-          <li>实时编辑与修正</li>
+          <li>Auto-insert to focused input</li>
+          <li>macOS global hotkey support</li>
+          <li>iOS keyboard extension</li>
+          <li>Real-time editing</li>
         </ul>
       </div>
       <div class="feature-visual">
         <span class="feature-icon-large">📝</span>
-        <span style="color: var(--text-secondary); font-size: 14px;">语音 + 文字融合</span>
+        <span style="color: var(--text-secondary); font-size: 14px;">Voice + Text Fusion</span>
       </div>
     </div>
   </section>
@@ -223,29 +223,29 @@
     <div class="metrics-grid">
       <div>
         <div class="metric-value">180ms</div>
-        <div class="metric-label">首字延迟</div>
+        <div class="metric-label">First Token Latency</div>
       </div>
       <div>
         <div class="metric-value">98.7%</div>
-        <div class="metric-label">识别准确率</div>
+        <div class="metric-label">Accuracy</div>
       </div>
       <div>
         <div class="metric-value">4+</div>
-        <div class="metric-label">AI 引擎</div>
+        <div class="metric-label">AI Engines</div>
       </div>
       <div>
         <div class="metric-value">2×</div>
-        <div class="metric-label">效率提升</div>
+        <div class="metric-label">Efficiency Boost</div>
       </div>
     </div>
   </section>
 
   <footer>
     <div class="footer-links">
-      <a href="/">首页</a>
-      <a href="/features.html">功能</a>
-      <a href="/about.html">关于</a>
-      <a href="/download.html">下载</a>
+      <a href="/en/">Home</a>
+      <a href="/en/features.html">Features</a>
+      <a href="/en/about.html">About</a>
+      <a href="/en/download.html">Download</a>
     </div>
     <p>© 2026 Echo. Made with ❤️ by Xiang & Edith</p>
   </footer>

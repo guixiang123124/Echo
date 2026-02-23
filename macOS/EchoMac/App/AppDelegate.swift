@@ -186,7 +186,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.settings.currentUserId = user.uid
                     let name = user.displayName ?? user.email ?? user.phoneNumber ?? "Echo User"
                     self.settings.userDisplayName = name
-                    Task { await RecordingStore.shared.migrateUser(from: self.settings.localUserId, to: user.uid) }
                 } else {
                     self.settings.switchToLocalUser()
                 }
@@ -2048,13 +2047,14 @@ private final class HomeDashboardViewModel: ObservableObject {
         return max(0, Int(Double(totalWords) / 180.0))
     }
 
-    func refresh(userId: String?) {
-        Task { await reload(userId: userId) }
+    func refresh() {
+        Task { await reload() }
     }
 
-    private func reload(userId: String?) async {
+    private func reload() async {
         isLoading = true
-        entries = await RecordingStore.shared.fetchRecent(limit: 300, userId: userId)
+        // Local-first: always show on-device history regardless of current auth identity.
+        entries = await RecordingStore.shared.fetchRecent(limit: 300, userId: nil)
         storageInfo = await RecordingStore.shared.storageInfo()
         isLoading = false
     }
@@ -2086,7 +2086,7 @@ struct EchoHomeWindowView: View {
         }
         .frame(minWidth: 1080, minHeight: 720)
         .onAppear {
-            model.refresh(userId: effectiveUserId)
+            model.refresh()
             retentionOption = HistoryRetention.from(days: settings.historyRetentionDays)
             Task { await billing.refresh() }
         }
@@ -2094,13 +2094,13 @@ struct EchoHomeWindowView: View {
             settings.historyRetentionDays = newValue.days
         }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
-            model.refresh(userId: effectiveUserId)
+            model.refresh()
         }
         .onChange(of: settings.currentUserId) { _, _ in
-            model.refresh(userId: effectiveUserId)
+            model.refresh()
         }
         .onChange(of: authSession.userId) { _, _ in
-            model.refresh(userId: effectiveUserId)
+            model.refresh()
             Task { await billing.refresh() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .echoHomeSelectSection)) { note in
@@ -2118,10 +2118,6 @@ struct EchoHomeWindowView: View {
             AuthSheetView()
                 .environmentObject(authSession)
         }
-    }
-
-    private var effectiveUserId: String? {
-        authSession.userId ?? settings.currentUserId
     }
 
     private var sidebar: some View {

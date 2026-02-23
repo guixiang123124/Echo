@@ -302,12 +302,28 @@ public final class MacAppSettings: ObservableObject {
         if defaults.object(forKey: Keys.cloudSyncEnabled) == nil {
             defaults.set(true, forKey: Keys.cloudSyncEnabled)
         }
-        if defaults.object(forKey: Keys.cloudSyncBaseURL) == nil {
+        let existingCloudBaseURL = defaults.string(forKey: Keys.cloudSyncBaseURL)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if existingCloudBaseURL.isEmpty, let bundled = Self.bundledCloudAPIBaseURL() {
+            defaults.set(bundled, forKey: Keys.cloudSyncBaseURL)
+        } else if defaults.object(forKey: Keys.cloudSyncBaseURL) == nil {
             defaults.set("", forKey: Keys.cloudSyncBaseURL)
         }
         if defaults.object(forKey: Keys.cloudUploadAudio) == nil {
             defaults.set(false, forKey: Keys.cloudUploadAudio)
         }
+    }
+
+    private static func bundledCloudAPIBaseURL() -> String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
     }
 
     // MARK: - Hotkey Settings

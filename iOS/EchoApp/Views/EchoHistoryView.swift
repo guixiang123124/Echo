@@ -56,7 +56,7 @@ struct EchoHistoryView: View {
         .confirmationDialog("Clear all history?", isPresented: $showClearHistoryConfirm, titleVisibility: .visible) {
             Button("Clear History", role: .destructive) {
                 Task {
-                    await RecordingStore.shared.deleteAll(userId: authSession.userId)
+                    await RecordingStore.shared.deleteAll(userId: nil)
                     await refresh()
                 }
             }
@@ -175,8 +175,8 @@ struct EchoHistoryView: View {
     }
 
     private func refresh() async {
-        let userId = authSession.userId
-        entries = await RecordingStore.shared.fetchRecent(limit: 300, userId: userId)
+        // Local-first: always show local history on this device.
+        entries = await RecordingStore.shared.fetchRecent(limit: 300, userId: nil)
     }
 
     private func setKeepHistoryDays(_ days: Int) {

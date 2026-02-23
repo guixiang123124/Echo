@@ -22,6 +22,7 @@ struct ProviderSettingsView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("API keys are stored securely in your device's Keychain.")
+                    Text("For production, prefer storing provider keys on your backend and exposing only your Cloud API URL to clients.")
                     Text("Tip: You can reuse the same OpenAI API key for Whisper (ASR) and Auto Edit (GPT-4o).")
                 }
                 .font(.caption)

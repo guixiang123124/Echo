@@ -1372,9 +1372,15 @@ public final class VoiceInputService: ObservableObject {
         if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
             return selectedProvider
         }
+        if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+            return proxyProvider
+        }
 
         if let fallbackProvider = resolveOpenAIProvider(), fallbackProvider.isAvailable {
             return fallbackProvider
+        }
+        if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
+            return proxyFallback
         }
 
         return nil
@@ -1428,6 +1434,37 @@ public final class VoiceInputService: ObservableObject {
             apiKey: apiKey,
             model: settings.openAITranscriptionModel
         )
+    }
+
+    private func resolveCloudProxyProvider(for providerId: String) -> (any ASRProvider)? {
+        let token = authSession.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let baseURL = settings.cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, !baseURL.isEmpty else { return nil }
+
+        let model: String?
+        let language: String?
+        switch providerId {
+        case "deepgram":
+            model = settings.deepgramModel
+            language = deepgramLanguageCode(from: settings.asrLanguage)
+        case "openai_whisper":
+            model = settings.openAITranscriptionModel
+            language = whisperLanguageCode(from: settings.asrLanguage)
+        case "volcano":
+            model = nil
+            language = deepgramLanguageCode(from: settings.asrLanguage)
+        default:
+            return nil
+        }
+
+        let provider = BackendProxyASRProvider(
+            providerId: providerId,
+            backendBaseURL: baseURL,
+            accessToken: token,
+            model: model,
+            language: language
+        )
+        return provider.isAvailable ? provider : nil
     }
 
     private func deepgramModelHint(from inputMode: String) -> String {

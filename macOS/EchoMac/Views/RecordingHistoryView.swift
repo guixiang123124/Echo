@@ -12,14 +12,15 @@ final class RecordingHistoryViewModel: ObservableObject {
 
     private var player: AVAudioPlayer?
 
-    func load(userId: String) {
-        Task { await reload(userId: userId) }
+    func load() {
+        Task { await reload() }
     }
 
-    func reload(userId: String) async {
+    func reload() async {
         isLoading = true
         errorMessage = nil
-        let items = await RecordingStore.shared.fetchRecent(limit: 200, userId: userId)
+        // Local-first: always show local history on this device.
+        let items = await RecordingStore.shared.fetchRecent(limit: 200, userId: nil)
         entries = items
         storageInfo = await RecordingStore.shared.storageInfo()
         isLoading = false
@@ -122,12 +123,9 @@ struct RecordingHistoryView: View {
             }
         }
         .frame(minWidth: 680, minHeight: 520)
-        .onAppear { model.load(userId: settings.currentUserId) }
+        .onAppear { model.load() }
         .onReceive(NotificationCenter.default.publisher(for: .echoRecordingSaved)) { _ in
-            model.load(userId: settings.currentUserId)
-        }
-        .onChange(of: settings.currentUserId) { _, newValue in
-            model.load(userId: newValue)
+            model.load()
         }
     }
 
@@ -145,7 +143,7 @@ struct RecordingHistoryView: View {
             Spacer()
 
             Button("Refresh") {
-                model.load(userId: settings.currentUserId)
+                model.load()
             }
             .buttonStyle(.bordered)
         }

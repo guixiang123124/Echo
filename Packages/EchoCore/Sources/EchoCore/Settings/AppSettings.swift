@@ -58,6 +58,11 @@ public final class AppSettings: @unchecked Sendable {
         if self.defaults.object(forKey: Keys.dictionaryAutoLearnRequireReview) == nil {
             self.defaults.set(true, forKey: Keys.dictionaryAutoLearnRequireReview)
         }
+        let existingCloudBaseURL = self.defaults.string(forKey: Keys.cloudSyncBaseURL)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if existingCloudBaseURL.isEmpty, let bundled = Self.bundledCloudAPIBaseURL() {
+            self.defaults.set(bundled, forKey: Keys.cloudSyncBaseURL)
+        }
     }
 
     // MARK: - ASR Settings
@@ -309,6 +314,18 @@ public final class AppSettings: @unchecked Sendable {
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
         static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
         static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"
+    }
+
+    private static func bundledCloudAPIBaseURL() -> String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("http://") || trimmed.hasPrefix("https://") {
+            return trimmed
+        }
+        return "https://\(trimmed)"
     }
 
     private func applyAutoEditPreset(_ preset: AutoEditPreset) {

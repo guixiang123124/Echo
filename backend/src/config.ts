@@ -35,6 +35,16 @@ export const config = {
   databaseUrl: required("DATABASE_URL"),
   jwtSecret: required("JWT_SECRET"),
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
+  asrProxy: {
+    openaiApiKey: optional("OPENAI_API_KEY"),
+    deepgramApiKey: optional("DEEPGRAM_API_KEY"),
+    volcanoAppId: optional("VOLCANO_APP_ID"),
+    volcanoAccessKey: optional("VOLCANO_ACCESS_KEY"),
+    volcanoResourceId: optional("VOLCANO_RESOURCE_ID"),
+    volcanoEndpoint:
+      optional("VOLCANO_ENDPOINT") ??
+      "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+  },
   apple: {
     audienceList: optionalList("APPLE_AUDIENCE"),
     issuer: process.env.APPLE_ISSUER ?? "https://appleid.apple.com"

@@ -69,6 +69,245 @@ function userResponseRow(row: UserRow, provider?: string) {
   };
 }
 
+const asrProxyProviderSchema = z.enum(["openai_whisper", "deepgram", "volcano"]);
+
+const asrProxyRequestSchema = z.object({
+  provider: asrProxyProviderSchema,
+  audioBase64: z.string().min(1),
+  audioMimeType: z.string().max(120).optional(),
+  model: z.string().max(120).optional(),
+  language: z.string().max(32).optional()
+});
+
+type ASRProxyProviderId = z.infer<typeof asrProxyProviderSchema>;
+type ASRProxyRequest = z.infer<typeof asrProxyRequestSchema>;
+
+function decodeAudioBase64(input: string): Buffer {
+  const payload = input.includes(",") ? (input.split(",").pop() ?? "") : input;
+  return Buffer.from(payload.replace(/\s/g, ""), "base64");
+}
+
+function mapLanguage(language?: string | null): "en" | "zh-Hans" | "mixed" | "unknown" {
+  const normalized = language?.trim().toLowerCase() ?? "";
+  if (!normalized) return "unknown";
+  if (normalized.startsWith("en")) return "en";
+  if (normalized.startsWith("zh")) return "zh-Hans";
+  if (normalized.includes("mix")) return "mixed";
+  return "unknown";
+}
+
+function parseJSONBody(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function ensureASRProxyConfigured(provider: ASRProxyProviderId): string | null {
+  switch (provider) {
+    case "openai_whisper":
+      return config.asrProxy.openaiApiKey ? null : "OPENAI_API_KEY is not configured on backend";
+    case "deepgram":
+      return config.asrProxy.deepgramApiKey ? null : "DEEPGRAM_API_KEY is not configured on backend";
+    case "volcano":
+      return config.asrProxy.volcanoAppId && config.asrProxy.volcanoAccessKey
+        ? null
+        : "VOLCANO_APP_ID / VOLCANO_ACCESS_KEY are not configured on backend";
+    default:
+      return "Unsupported provider";
+  }
+}
+
+async function transcribeViaOpenAIProxy(
+  request: ASRProxyRequest,
+  audioBuffer: Buffer
+): Promise<{ text: string; language: string }> {
+  const apiKey = config.asrProxy.openaiApiKey;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+
+  const model = request.model?.trim() || "gpt-4o-transcribe";
+  const form = new FormData();
+  const audioBytes = new Uint8Array(audioBuffer);
+  form.set("file", new Blob([audioBytes], { type: request.audioMimeType || "audio/wav" }), "audio.wav");
+  form.set("model", model);
+  form.set("response_format", "json");
+  if (request.language && request.language.trim().length > 0) {
+    form.set("language", request.language.trim());
+  }
+
+  const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: form
+  });
+
+  const raw = await response.text();
+  const json = parseJSONBody(raw);
+  if (!response.ok) {
+    const message =
+      (json?.error && typeof json.error === "object" && typeof (json.error as Record<string, unknown>).message === "string"
+        ? ((json.error as Record<string, unknown>).message as string)
+        : raw) || `OpenAI HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  const text = typeof json?.text === "string" ? json.text.trim() : "";
+  if (!text) {
+    throw new Error("OpenAI returned empty transcription");
+  }
+
+  const language = typeof json?.language === "string" ? json.language : "unknown";
+  return { text, language };
+}
+
+async function transcribeViaDeepgramProxy(
+  request: ASRProxyRequest,
+  audioBuffer: Buffer
+): Promise<{ text: string; language: string }> {
+  const apiKey = config.asrProxy.deepgramApiKey;
+  if (!apiKey) {
+    throw new Error("DEEPGRAM_API_KEY is not configured");
+  }
+
+  const model = request.model?.trim() || "nova-3";
+  const query = new URLSearchParams({
+    model,
+    punctuate: "true",
+    smart_format: "true"
+  });
+  if (request.language && request.language.trim().length > 0) {
+    query.set("language", request.language.trim());
+  }
+
+  const response = await fetch(`https://api.deepgram.com/v1/listen?${query.toString()}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${apiKey}`,
+      "Content-Type": request.audioMimeType || "audio/wav"
+    },
+    body: new Uint8Array(audioBuffer)
+  });
+
+  const raw = await response.text();
+  const json = parseJSONBody(raw);
+  if (!response.ok) {
+    throw new Error(raw || `Deepgram HTTP ${response.status}`);
+  }
+
+  const text = (
+    ((json?.results as Record<string, unknown> | undefined)?.channels as Array<Record<string, unknown>> | undefined)?.[0]
+      ?.alternatives as Array<Record<string, unknown>> | undefined
+  )?.[0]?.transcript;
+  const resolved = typeof text === "string" ? text.trim() : "";
+  if (!resolved) {
+    throw new Error("Deepgram returned empty transcription");
+  }
+
+  const language = typeof json?.metadata === "object"
+    && json.metadata
+    && typeof (json.metadata as Record<string, unknown>).detected_language === "string"
+      ? ((json.metadata as Record<string, unknown>).detected_language as string)
+      : (request.language || "unknown");
+
+  return { text: resolved, language };
+}
+
+async function transcribeViaVolcanoProxy(
+  request: ASRProxyRequest,
+  audioBuffer: Buffer
+): Promise<{ text: string; language: string }> {
+  const appId = config.asrProxy.volcanoAppId;
+  const accessKey = config.asrProxy.volcanoAccessKey;
+  if (!appId || !accessKey) {
+    throw new Error("VOLCANO_APP_ID / VOLCANO_ACCESS_KEY are not configured");
+  }
+
+  const endpoint = config.asrProxy.volcanoEndpoint;
+  const resourceId = config.asrProxy.volcanoResourceId || "volc.bigasr.auc_turbo";
+  const requestId = randomUUID();
+
+  const payload = {
+    user: { uid: requestId },
+    audio: {
+      data: audioBuffer.toString("base64"),
+      format: "wav"
+    },
+    request: {
+      model_name: "bigmodel",
+      enable_itn: true,
+      enable_punc: true
+    }
+  };
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Api-App-Key": appId,
+      "X-Api-Access-Key": accessKey,
+      "X-Api-Resource-Id": resourceId,
+      "X-Api-Request-Id": requestId,
+      "X-Api-Sequence": "-1"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const raw = await response.text();
+  const json = parseJSONBody(raw);
+  if (!response.ok) {
+    throw new Error(raw || `Volcano HTTP ${response.status}`);
+  }
+
+  const headerCode = typeof json?.header === "object" && json.header
+    ? (json.header as Record<string, unknown>).code
+    : undefined;
+  const rootCode = json?.code;
+  const okHeader = typeof headerCode !== "number" || headerCode === 20000000 || headerCode === 1000;
+  const okRoot = typeof rootCode !== "number" || rootCode === 20000000 || rootCode === 1000;
+  if (!okHeader || !okRoot) {
+    const message =
+      (typeof json?.message === "string" ? json.message : undefined)
+      || (typeof json?.header === "object"
+        && json.header
+        && typeof (json.header as Record<string, unknown>).message === "string"
+        ? ((json.header as Record<string, unknown>).message as string)
+        : undefined)
+      || "Volcano ASR request failed";
+    throw new Error(message);
+  }
+
+  const resultObj = (json?.result && typeof json.result === "object")
+    ? (json.result as Record<string, unknown>)
+    : null;
+  const textDirect = (typeof resultObj?.text === "string" ? resultObj.text : undefined)
+    || (typeof json?.text === "string" ? json.text : undefined);
+  let text = textDirect?.trim() ?? "";
+
+  if (!text && Array.isArray(resultObj?.utterances)) {
+    text = (resultObj?.utterances as Array<Record<string, unknown>>)
+      .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
+      .join(" ")
+      .trim();
+  }
+  if (!text && Array.isArray(json?.utterances)) {
+    text = (json.utterances as Array<Record<string, unknown>>)
+      .map((entry) => (typeof entry.text === "string" ? entry.text : ""))
+      .join(" ")
+      .trim();
+  }
+  if (!text) {
+    throw new Error("Volcano returned empty transcription");
+  }
+
+  return { text, language: request.language || "unknown" };
+}
+
 app.get("/healthz", async (_req, res) => {
   try {
     await healthCheck();
@@ -326,6 +565,79 @@ app.get("/v1/auth/me", authMiddleware, async (req, res) => {
     return;
   }
   res.json({ user: userResponseRow(user) });
+});
+
+app.post(["/v1/asr/transcribe", "/asr/transcribe", "/api/v1/asr/transcribe", "/api/asr/transcribe"], authMiddleware, async (req, res) => {
+  const userId = req.authUser?.id;
+  if (!userId) {
+    res.status(401).json({ error: "not_authenticated" });
+    return;
+  }
+
+  const parsed = asrProxyRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_payload", details: parsed.error.flatten() });
+    return;
+  }
+
+  const provider = parsed.data.provider;
+  const configError = ensureASRProxyConfigured(provider);
+  if (configError) {
+    res.status(503).json({ error: "provider_not_configured", message: configError, provider });
+    return;
+  }
+
+  let audioBuffer: Buffer;
+  try {
+    audioBuffer = decodeAudioBase64(parsed.data.audioBase64);
+  } catch {
+    res.status(400).json({ error: "invalid_audio_base64", message: "Unable to decode audioBase64 payload." });
+    return;
+  }
+
+  if (audioBuffer.length === 0) {
+    res.status(400).json({ error: "empty_audio", message: "Audio payload is empty." });
+    return;
+  }
+  if (audioBuffer.length > 20_000_000) {
+    res.status(413).json({ error: "audio_too_large", message: "Audio payload exceeds 20MB limit." });
+    return;
+  }
+
+  try {
+    let result: { text: string; language: string };
+    switch (provider) {
+      case "openai_whisper":
+        result = await transcribeViaOpenAIProxy(parsed.data, audioBuffer);
+        break;
+      case "deepgram":
+        result = await transcribeViaDeepgramProxy(parsed.data, audioBuffer);
+        break;
+      case "volcano":
+        result = await transcribeViaVolcanoProxy(parsed.data, audioBuffer);
+        break;
+      default:
+        res.status(400).json({ error: "unsupported_provider", provider });
+        return;
+    }
+
+    const text = result.text.trim();
+    if (!text) {
+      res.status(422).json({ error: "empty_transcription", provider });
+      return;
+    }
+
+    res.status(200).json({
+      provider,
+      mode: "proxy_batch",
+      model: parsed.data.model ?? null,
+      language: mapLanguage(result.language),
+      text
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "ASR proxy transcription failed";
+    res.status(502).json({ error: "asr_proxy_failed", provider, message });
+  }
 });
 
 const billingCheckoutSchema = z.object({

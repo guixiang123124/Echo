@@ -336,10 +336,27 @@ struct AuthSheetView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var currentNonce: String?
+    @State private var cloudAPIURL = ""
 
     var body: some View {
         NavigationStack {
             List {
+                Section("Cloud Backend") {
+                    TextField("Cloud API URL", text: $cloudAPIURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    Button("Apply Cloud API URL") {
+                        applyCloudAPIURL()
+                    }
+
+                    if !authSession.isConfigured {
+                        Text("Apple/Google sign-in requires Cloud API URL.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
                 Section("Sign in") {
                     TextField("Email", text: $email)
                         .textInputAutocapitalization(.never)
@@ -370,6 +387,7 @@ struct AuthSheetView: View {
                             Spacer()
                         }
                     }
+                    .disabled(!authSession.isConfigured || authSession.isLoading)
 
                     SignInWithAppleButton(.signIn) { request in
                         let nonce = NonceHelper.randomNonce()
@@ -390,6 +408,8 @@ struct AuthSheetView: View {
                         }
                     }
                     .frame(height: 44)
+                    .disabled(!authSession.isConfigured || authSession.isLoading)
+                    .opacity((!authSession.isConfigured || authSession.isLoading) ? 0.5 : 1.0)
                 }
 
                 if authSession.isLoading {
@@ -408,11 +428,21 @@ struct AuthSheetView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .onAppear {
+                bootstrapCloudAPIURLIfNeeded()
+            }
         }
     }
 
     @MainActor
     private func signInWithGoogle() {
+        bootstrapCloudAPIURLIfNeeded()
+
+        guard authSession.isConfigured else {
+            authSession.errorMessage = "Google sign-in requires Cloud API URL. Add URL and tap Apply first."
+            return
+        }
+
         let activeScenes = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .filter { !$0.windows.isEmpty }
@@ -437,7 +467,12 @@ struct AuthSheetView: View {
         GIDSignIn.sharedInstance.signIn(withPresenting: root) { result, error in
             if let error {
                 Task { @MainActor in
-                    self.authSession.errorMessage = error.localizedDescription
+                    let message = error.localizedDescription
+                    if message.lowercased().contains("canceled"), !self.authSession.isConfigured {
+                        self.authSession.errorMessage = "Google sign-in requires Cloud API URL. Add URL and tap Apply first."
+                    } else {
+                        self.authSession.errorMessage = message
+                    }
                 }
                 return
             }
@@ -453,6 +488,52 @@ struct AuthSheetView: View {
                 await self.authSession.signInWithGoogle(idToken: idToken)
             }
         }
+    }
+
+    @MainActor
+    private func bootstrapCloudAPIURLIfNeeded() {
+        let resolved = resolvedCloudAPIURLCandidate()
+        if cloudAPIURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !resolved.isEmpty {
+            cloudAPIURL = resolved
+        }
+        if !resolved.isEmpty, !authSession.isConfigured {
+            let settings = AppSettings()
+            settings.cloudSyncBaseURL = resolved
+            authSession.configureBackend(baseURL: resolved)
+            CloudSyncService.shared.configure(
+                baseURLString: resolved,
+                uploadAudio: settings.cloudUploadAudioEnabled
+            )
+            BillingService.shared.configure(baseURLString: resolved)
+        }
+    }
+
+    @MainActor
+    private func resolvedCloudAPIURLCandidate() -> String {
+        let fromAuth = authSession.backendBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fromAuth.isEmpty {
+            return fromAuth
+        }
+        let fromSettings = AppSettings().cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fromSettings.isEmpty {
+            return fromSettings
+        }
+        let fromBundle = (Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return fromBundle
+    }
+
+    @MainActor
+    private func applyCloudAPIURL() {
+        let normalized = cloudAPIURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let settings = AppSettings()
+        settings.cloudSyncBaseURL = normalized
+        authSession.configureBackend(baseURL: normalized)
+        CloudSyncService.shared.configure(
+            baseURLString: normalized,
+            uploadAudio: settings.cloudUploadAudioEnabled
+        )
+        BillingService.shared.configure(baseURLString: normalized)
     }
 }
 

@@ -26,14 +26,15 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>echo</string>
+				<string>echoapp</string>
 			</array>
 		</dict>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
+			<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
+				<string>com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau</string>
 			</array>
 		</dict>
 	</array>
@@ -41,9 +42,12 @@
 	<string>2</string>
 	<key>GOOGLE_CLIENT_ID_IOS</key>
 	<string>852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
+	<key>CLOUD_API_BASE_URL</key>
+	<string>https://echo-api-production-c83b.up.railway.app</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>echo</string>
+		<string>echoapp</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

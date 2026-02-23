@@ -135,12 +135,18 @@ struct KeyboardView: View {
     }
 
     private func openMainAppVoice() {
-        guard state.hasFullAccess else {
-            state.showToast("Enable Allow Full Access for Voice + AI")
+        print("[EchoKeyboard] openMainAppVoice called")
+        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
+
+        guard state.hasOperationalFullAccess else {
+            print("[EchoKeyboard] No operational full access, showing guidance")
+            state.showToast(state.fullAccessGuidance)
             return
         }
 
+        state.showToast("Opening Echo…")
         VoiceInputTrigger.openMainAppForVoice(from: state.viewController) { success in
+            print("[EchoKeyboard] openMainAppVoice result: \(success)")
             if !success {
                 state.showToast("Couldn't open Echo. Open the app and try again.")
             }
@@ -148,12 +154,18 @@ struct KeyboardView: View {
     }
 
     private func openMainAppSettings() {
-        guard state.hasFullAccess else {
-            state.showToast("Enable Allow Full Access to open Echo settings")
+        print("[EchoKeyboard] openMainAppSettings called")
+        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
+
+        guard state.hasOperationalFullAccess else {
+            print("[EchoKeyboard] No operational full access, showing guidance")
+            state.showToast(state.fullAccessGuidance)
             return
         }
 
+        state.showToast("Opening Echo settings…")
         VoiceInputTrigger.openMainAppForSettings(from: state.viewController) { success in
+            print("[EchoKeyboard] openMainAppSettings result: \(success)")
             if !success {
                 state.showToast("Couldn't open Echo. Open the app and try again.")
             }
@@ -219,43 +231,49 @@ private struct KeyboardTopBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button(action: onOpenSettings) {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color(.secondaryLabel))
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle().fill(EchoTheme.keySecondaryBackground)
-                    )
-            }
-            .buttonStyle(.plain)
-
-            Spacer()
-
-            Button(action: onTriggerVoice) {
-                EchoDictationPill(
-                    isRecording: false,
-                    isProcessing: false,
-                    levels: [],
-                    tipText: nil,
-                    width: 150,
-                    height: 30
+            // Settings button - using onTapGesture for better keyboard extension compatibility
+            Image(systemName: "gearshape")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color(.secondaryLabel))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle().fill(EchoTheme.keySecondaryBackground)
                 )
-            }
-            .buttonStyle(.plain)
+                .contentShape(Circle())
+                .onTapGesture {
+                    onOpenSettings()
+                }
 
             Spacer()
 
-            Button(action: onCollapse) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color(.secondaryLabel))
-                    .frame(width: 32, height: 32)
-                    .background(
-                        Circle().fill(EchoTheme.keySecondaryBackground)
-                    )
+            // Voice button - using onTapGesture for better keyboard extension compatibility
+            EchoDictationPill(
+                isRecording: false,
+                isProcessing: false,
+                levels: [],
+                tipText: nil,
+                width: 150,
+                height: 30
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onTriggerVoice()
             }
-            .buttonStyle(.plain)
+
+            Spacer()
+
+            // Collapse button - using onTapGesture for better keyboard extension compatibility
+            Image(systemName: "chevron.down")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(.secondaryLabel))
+                .frame(width: 32, height: 32)
+                .background(
+                    Circle().fill(EchoTheme.keySecondaryBackground)
+                )
+                .contentShape(Circle())
+                .onTapGesture {
+                    onCollapse()
+                }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

@@ -40,8 +40,12 @@ else
   echo "No backend/.env.production file found. Skipping env sync."
 fi
 
-echo "[4/4] Deploying backend service..."
-$RAILWAY up --service "$SERVICE_NAME" --environment "$ENV_NAME" .
+echo "[4/5] Building backend..."
+npm run build
+
+echo "[5/5] Deploying backend service..."
+cd "$ROOT_DIR"
+$RAILWAY up --service "$SERVICE_NAME" --environment "$ENV_NAME"
 
 echo "Deployment command sent. Check logs with:"
 echo "  npx -y @railway/cli logs --service $SERVICE_NAME --environment $ENV_NAME"
