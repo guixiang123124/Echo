@@ -51,9 +51,11 @@ targets:
         CFBundleVersion: "1"
         LSApplicationQueriesSchemes:
           - echo
+          - echoapp
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - echo
+              - echoapp
             CFBundleURLName: com.xianggui.echo.app
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau

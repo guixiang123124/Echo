@@ -11,6 +11,7 @@ struct SettingsView: View {
     @State private var showAuthSheet = false
     @State private var selectedASR: String = ""
     @State private var openAITranscriptionModel = "gpt-4o-transcribe"
+    @State private var deepgramModel = "nova-3"
     @State private var correctionEnabled = true
     @State private var autoEditPreset: AutoEditPreset = .smartPolish
     @State private var autoEditApplyMode: AutoEditApplyMode = .autoReplace
@@ -99,6 +100,20 @@ struct SettingsView: View {
                         ForEach(AvailableProviders.asrProviders) { provider in
                             Text(provider.displayName).tag(provider.id)
                         }
+                    }
+
+                    if selectedASR == "deepgram" {
+                        Picker("Deepgram Model", selection: $deepgramModel) {
+                            Text("nova-3 (recommended)").tag("nova-3")
+                            Text("nova-2").tag("nova-2")
+                        }
+                        .onChange(of: deepgramModel) { _, newValue in
+                            settings.deepgramModel = newValue
+                        }
+
+                        Text("Choose per voice scenario. nova-3 is usually first for English/mixed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     if selectedASR == "openai_whisper" {
@@ -287,6 +302,7 @@ struct SettingsView: View {
             .onAppear {
                 selectedASR = settings.selectedASRProvider
                 openAITranscriptionModel = settings.openAITranscriptionModel
+                deepgramModel = settings.deepgramModel
                 syncAutoEditSettingsFromStore()
                 selectedCorrection = settings.selectedCorrectionProvider
                 hapticEnabled = settings.hapticFeedbackEnabled
@@ -306,13 +322,15 @@ struct SettingsView: View {
             }
             .onChange(of: selectedASR) { _, newValue in
                 settings.selectedASRProvider = newValue
-            if newValue == "openai_whisper" {
+                if newValue == "openai_whisper" {
                     settings.preferStreaming = false
                 } else if !settings.preferStreaming {
                     settings.preferStreaming = true
                 }
                 if newValue == "openai_whisper" {
                     openAITranscriptionModel = settings.openAITranscriptionModel
+                } else if newValue == "deepgram" {
+                    deepgramModel = settings.deepgramModel
                 }
             }
             .onChange(of: selectedCorrection) { _, newValue in

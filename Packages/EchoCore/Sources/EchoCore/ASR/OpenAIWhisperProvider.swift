@@ -207,9 +207,6 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
     }
 
     private func responseFormatForModel(_ model: String) -> String {
-        if model.hasPrefix("gpt-4o-transcribe") || model.hasPrefix("gpt-4o-mini-transcribe") {
-            return "json"
-        }
         return "verbose_json"
     }
 

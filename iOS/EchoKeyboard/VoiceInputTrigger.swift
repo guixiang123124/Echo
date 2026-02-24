@@ -5,35 +5,69 @@ import EchoCore
 /// Since keyboard extensions cannot access the microphone,
 /// we redirect to the main app via URL scheme
 enum VoiceInputTrigger {
+    private static let launchAckTimeout: TimeInterval = 2.2
+    private static let launchAckPollInterval: TimeInterval = 0.15
+
     /// Open the main Echo app for voice recording
     /// This method uses the responder chain to find an object that can open URLs
     /// since UIApplication.shared is not available in keyboard extensions
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
         AppGroupBridge().setPendingLaunchIntent(.voice)
-        let urls = [AppGroupBridge.voiceInputURL, URL(string: "echo://voice")!]
+        let urls = [
+            AppGroupBridge.voiceInputURL,
+            URL(string: "echo:///voice")!,
+            URL(string: "echoapp://voice")!,
+            URL(string: "echoapp:///voice")!
+        ]
         open(urls: urls, from: viewController, completion: completion)
     }
 
     /// Open the main Echo app settings
     static func openMainAppForSettings(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
         AppGroupBridge().setPendingLaunchIntent(.settings)
-        let urls = [AppGroupBridge.settingsURL, URL(string: "echo://settings")!]
+        let urls = [
+            AppGroupBridge.settingsURL,
+            URL(string: "echo:///settings")!,
+            URL(string: "echoapp://settings")!,
+            URL(string: "echoapp:///settings")!
+        ]
         open(urls: urls, from: viewController, completion: completion)
     }
 
     private static func open(urls: [URL], from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
+        var didFinish = false
+
+        let finish: (Bool) -> Void = { success in
+            guard !didFinish else { return }
+            didFinish = true
+            completion?(success)
+        }
+
         func attempt(at index: Int) {
             guard index < urls.count else {
                 AppGroupBridge().clearPendingLaunchIntent()
-                completion?(false)
+                finish(false)
                 return
             }
-            open(url: urls[index], from: viewController) { success in
-                if success {
-                    completion?(true)
+
+            let candidate = urls[index]
+            open(url: candidate, from: viewController) { didInvoke in
+                guard didInvoke else {
+                    attempt(at: index + 1)
                     return
                 }
-                attempt(at: index + 1)
+
+                waitForLaunchAcknowledgement(timeout: launchAckTimeout, pollInterval: launchAckPollInterval) { acknowledged in
+                    guard !didFinish else { return }
+                    print("[VoiceInputTrigger] launch ack for \(candidate.absoluteString): \(acknowledged)")
+                    if acknowledged {
+                        finish(true)
+                        return
+                    }
+
+                    print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString), trying next URL")
+                    attempt(at: index + 1)
+                }
             }
         }
 
@@ -45,14 +79,14 @@ enum VoiceInputTrigger {
             completion?(false)
             return
         }
+
         let resolvedViewController = viewController
-
         let urlString = url.absoluteString
+        var didFinish = false
 
-        var finished = false
         let finish: (Bool) -> Void = { success in
-            guard !finished else { return }
-            finished = true
+            guard !didFinish else { return }
+            didFinish = true
             completion?(success)
         }
 
@@ -65,49 +99,27 @@ enum VoiceInputTrigger {
             print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
         }
 
-        let awaitLaunchAckThenFinish: (String, @escaping () -> Void) -> Void = { method, onFailure in
-            reportOpenAttempt("\(method) ack", false)
-            waitForLaunchAcknowledgement(timeout: 1.5, pollInterval: 0.12) { acknowledged in
-                if acknowledged {
-                    reportOpenAttempt("\(method) ack", true)
-                    finish(true)
-                } else {
-                    onFailure()
-                }
-            }
-        }
-
-        let fallback: () -> Void = {
-            reportOpenAttempt("fallback:start", false)
+        let tryFallbackOpen: () -> Bool = {
             if let inputViewController = resolvedViewController as? UIInputViewController,
                openViaInputViewController(url, from: inputViewController) {
                 reportOpenAttempt("UIInputViewController.openURL", true)
-                awaitLaunchAckThenFinish("UIInputViewController.openURL") {
-                    reportOpenAttempt("UIInputViewController.openURL", false)
-                    fail()
-                }
-                return
+                return true
             }
             if openViaResponderChain(url: url, from: resolvedViewController) {
                 reportOpenAttempt("Responder chain", true)
-                awaitLaunchAckThenFinish("Responder chain") {
-                    reportOpenAttempt("Responder chain", false)
-                    fail()
-                }
-                return
+                return true
             }
-            fail()
+            return false
         }
 
         // Primary path for app extension -> host app open.
         if let extensionContext = resolvedViewController.extensionContext {
             reportOpenAttempt("extensionContext.open", true)
+
             let timeout = DispatchWorkItem {
-                guard !finished else { return }
+                guard !didFinish else { return }
                 print("[VoiceInputTrigger] extensionContext.open timeout, trying fallback")
-                awaitLaunchAckThenFinish("extensionContext.open.timeout") {
-                    fallback()
-                }
+                finish(tryFallbackOpen())
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: timeout)
@@ -115,37 +127,26 @@ enum VoiceInputTrigger {
             extensionContext.open(url) { success in
                 timeout.cancel()
                 reportOpenAttempt("extensionContext.open completion", success)
-                guard !finished else { return }
-                if success {
-                    awaitLaunchAckThenFinish("extensionContext.open") {
-                        fallback()
+                guard !didFinish else { return }
+
+                let invoked: Bool = {
+                    if success {
+                        return true
                     }
-                    return
-                }
-                fallback()
+                    print("[VoiceInputTrigger] extensionContext.open reported failure, trying fallback")
+                    return tryFallbackOpen()
+                }()
+
+                finish(invoked)
             }
             return
         }
 
-        if let inputViewController = resolvedViewController as? UIInputViewController {
-            if openViaInputViewController(url, from: inputViewController) {
-                reportOpenAttempt("UIInputViewController.openURL", true)
-                awaitLaunchAckThenFinish("UIInputViewController.openURL direct") {
-                    fail()
-                }
-                return
-            }
-            fallback()
+        if tryFallbackOpen() {
+            finish(true)
             return
         }
 
-        if openViaResponderChain(url: url, from: resolvedViewController) {
-            reportOpenAttempt("Responder chain", true)
-            awaitLaunchAckThenFinish("Responder chain direct") {
-                fail()
-            }
-            return
-        }
         fail()
     }
 
@@ -169,15 +170,23 @@ enum VoiceInputTrigger {
                     if function(current, selector, url) {
                         return true
                     }
+
                 case "openURL:completionHandler:", "open:completionHandler:":
                     typealias OpenURLWithCompletionFunc = @convention(c) (AnyObject, Selector, URL, @escaping (Bool) -> Void) -> Void
                     let implementation = current.method(for: selector)
                     let function = unsafeBitCast(implementation, to: OpenURLWithCompletionFunc.self)
-                    var called = false
-                    function(current, selector, url) { _ in called = true }
-                    if called {
-                        return true
+                    var result = false
+                    var callbackCalled = false
+                    function(current, selector, url) { opened in
+                        callbackCalled = true
+                        result = opened
+                        print("VoiceInputTrigger: \(selector.description) completion result for \(url.absoluteString): \(opened)")
                     }
+                    if callbackCalled {
+                        return result
+                    }
+                    return true
+
                 case "openURL:options:completionHandler:":
                     typealias OpenURLWithOptionsFunc = @convention(c) (
                         AnyObject,
@@ -188,11 +197,18 @@ enum VoiceInputTrigger {
                     ) -> Void
                     let implementation = current.method(for: selector)
                     let function = unsafeBitCast(implementation, to: OpenURLWithOptionsFunc.self)
-                    var called = false
-                    function(current, selector, url, [:], { _ in called = true })
-                    if called {
-                        return true
+                    var result = false
+                    var callbackCalled = false
+                    function(current, selector, url, [:]) { opened in
+                        callbackCalled = true
+                        result = opened
+                        print("VoiceInputTrigger: openURL:options:completionHandler: completion result for \(url.absoluteString): \(opened)")
                     }
+                    if callbackCalled {
+                        return result
+                    }
+                    return true
+
                 case "openURL:options:completionHandler:sourceApplication:":
                     typealias OpenURLWithSourceFunc = @convention(c) (
                         AnyObject,
@@ -204,11 +220,18 @@ enum VoiceInputTrigger {
                     ) -> Void
                     let implementation = current.method(for: selector)
                     let function = unsafeBitCast(implementation, to: OpenURLWithSourceFunc.self)
-                    var called = false
-                    function(current, selector, url, [:], { _ in called = true }, "")
-                    if called {
-                        return true
+                    var result = false
+                    var callbackCalled = false
+                    function(current, selector, url, [:], { opened in
+                        callbackCalled = true
+                        result = opened
+                        print("VoiceInputTrigger: openURL:options:completionHandler:sourceApplication: completion result for \(url.absoluteString): \(opened)")
+                    }, "")
+                    if callbackCalled {
+                        return result
                     }
+                    return true
+
                 default:
                     break
                 }
@@ -224,8 +247,17 @@ enum VoiceInputTrigger {
             typealias OpenURLWithCompletionFunc = @convention(c) (AnyObject, Selector, URL, @escaping (Bool) -> Void) -> Void
             let implementation = viewController.method(for: selector)
             let function = unsafeBitCast(implementation, to: OpenURLWithCompletionFunc.self)
+            var result = false
+            var callbackCalled = false
             function(viewController, selector, url) { opened in
-                print("VoiceInputTrigger: openURL:completionHandler result for \(url.absoluteString): \(opened)")
+                callbackCalled = true
+                result = opened
+                print("VoiceInputTrigger: openURL:completion result for \(url.absoluteString): \(opened)")
+            }
+            print("VoiceInputTrigger: openURL:completion handler invocation attempted for \(url.absoluteString)")
+
+            if callbackCalled {
+                return result
             }
             return true
         }

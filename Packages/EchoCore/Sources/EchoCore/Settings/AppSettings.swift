@@ -9,6 +9,7 @@ public final class AppSettings: @unchecked Sendable {
         "gpt-4o-transcribe",
         "gpt-4o-mini-transcribe"
     ]
+    private static let supportedDeepgramModels: Set<String> = ["nova-2", "nova-3"]
 
     private let defaults: UserDefaults
 
@@ -37,6 +38,12 @@ public final class AppSettings: @unchecked Sendable {
         }
         if self.defaults.object(forKey: Keys.openAITranscriptionModel) == nil {
             self.defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
+        }
+        if self.defaults.object(forKey: Keys.deepgramModel) == nil {
+            self.defaults.set("nova-3", forKey: Keys.deepgramModel)
+        } else if let raw = self.defaults.string(forKey: Keys.deepgramModel),
+                  !Self.supportedDeepgramModels.contains(raw) {
+            self.defaults.set("nova-3", forKey: Keys.deepgramModel)
         }
         if self.defaults.object(forKey: Keys.streamFastEnabled) == nil {
             self.defaults.set(true, forKey: Keys.streamFastEnabled)
@@ -154,6 +161,20 @@ public final class AppSettings: @unchecked Sendable {
                 defaults.set(newValue, forKey: Keys.openAITranscriptionModel)
             } else {
                 defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
+            }
+        }
+    }
+
+    public var deepgramModel: String {
+        get {
+            let rawValue = defaults.string(forKey: Keys.deepgramModel) ?? "nova-3"
+            return Self.supportedDeepgramModels.contains(rawValue) ? rawValue : "nova-3"
+        }
+        set {
+            if Self.supportedDeepgramModels.contains(newValue) {
+                defaults.set(newValue, forKey: Keys.deepgramModel)
+            } else {
+                defaults.set("nova-3", forKey: Keys.deepgramModel)
             }
         }
     }
@@ -339,6 +360,7 @@ public final class AppSettings: @unchecked Sendable {
         static let hapticFeedback = "echo.keyboard.haptic"
         static let autoCapitalization = "echo.keyboard.autocap"
         static let pendingTranscription = "echo.ipc.pending_transcription"
+        static let deepgramModel = "echo.asr.deepgramModel"
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
         static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
         static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"

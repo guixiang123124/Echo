@@ -134,7 +134,8 @@ async function transcribeViaOpenAIProxy(
   const audioBytes = new Uint8Array(audioBuffer);
   form.set("file", new Blob([audioBytes], { type: request.audioMimeType || "audio/wav" }), "audio.wav");
   form.set("model", model);
-  form.set("response_format", "json");
+  const responseFormat = "verbose_json";
+  form.set("response_format", responseFormat);
   if (request.language && request.language.trim().length > 0) {
     form.set("language", request.language.trim());
   }
@@ -158,18 +159,93 @@ async function transcribeViaOpenAIProxy(
   }
 
   const directText = typeof json?.text === "string" ? json.text.trim() : "";
-  const segmentText = extractOpenAITextFromSegments(json?.segments);
-  const text = [directText, segmentText]
+  const isVerbose = responseFormat === "verbose_json";
+  const segmentText = isVerbose ? extractOpenAITextFromSegments(json?.segments) : undefined;
+  if (directText.length === 0 && isVerbose) {
+    const verboseCandidates = parseVerboseOpenAIText(json);
+    if (verboseCandidates.length > 0) {
+      const best = verboseCandidates
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+        .sort((a, b) => b.length - a.length)[0];
+      if (best) {
+        return {
+          text: best,
+          language: typeof json?.language === "string" ? mapLanguage(json.language) : "unknown"
+        };
+      }
+    }
+  }
+  const candidates = [directText, segmentText]
     .map((value) => value?.trim() ?? "")
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
-    .sort((a, b) => b.length - a.length)[0] || "";
+    .sort((a, b) => b.length - a.length);
+  const text = candidates[0] ?? "";
   if (!text) {
     throw new Error("OpenAI returned empty transcription");
   }
 
-  const language = typeof json?.language === "string" ? json.language : "unknown";
+  const language = mapLanguage(typeof json?.language === "string" ? json.language : "unknown");
   return { text, language };
+}
+
+function parseVerboseOpenAIText(json: Record<string, unknown> | null): string[] {
+  if (!json) {
+    return [];
+  }
+
+  const segmentText = extractOpenAITextFromSegments(json["segments"]);
+  const wordText = extractOpenAIWordText(json["segments"]);
+  const responseText =
+    typeof json["text"] === "string"
+      ? (json["text"] as string).trim()
+      : "";
+
+  const merged = [responseText, segmentText, wordText]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0)
+    .join("\n")
+    .trim();
+
+  if (!merged) {
+    return [];
+  }
+  return [responseText, segmentText, wordText]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value.length > 0);
+}
+
+function extractOpenAIWordText(segmentsValue: unknown): string {
+  if (!Array.isArray(segmentsValue)) {
+    return "";
+  }
+
+  const parts = segmentsValue
+    .map((segment) => (segment as Record<string, unknown>))
+    .map((segment) => {
+      const words = Array.isArray(segment["words"]) ? (segment["words"] as Array<unknown>) : [];
+      return words
+        .map((entry) => {
+          if (!entry || typeof entry !== "object") {
+            return "";
+          }
+          const typedEntry = entry as Record<string, unknown>;
+          const text = typedEntry["word"];
+          return typeof text === "string" ? text : "";
+        })
+        .filter((item) => item.length > 0)
+        .join(" ");
+    })
+    .filter((segment) => segment.length > 0)
+    .join(" ")
+    .trim();
+
+  if (!parts) {
+    return "";
+  }
+
+  return parts;
 }
 
 function extractOpenAITextFromSegments(segments: unknown): string | undefined {

@@ -957,7 +957,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         let language: String?
         switch providerId {
         case "deepgram":
-            model = deepgramModelHint(from: settings.defaultInputMode)
+            model = settings.deepgramModel
             language = deepgramLanguageHint(from: settings.defaultInputMode)
         case "openai_whisper":
             model = settings.openAITranscriptionModel
@@ -986,7 +986,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             return provider.isAvailable ? provider : nil
         case "deepgram":
             let languageHint = deepgramLanguageHint(from: settings.defaultInputMode)
-            let resolvedModel = deepgramModelHint(from: settings.defaultInputMode)
+            let resolvedModel = settings.deepgramModel
             let provider = DeepgramASRProvider(
                 keyStore: keyStore,
                 model: resolvedModel,
@@ -1000,15 +1000,6 @@ final class VoiceRecordingViewModel: ObservableObject {
                 model: settings.openAITranscriptionModel
             )
             return provider.isAvailable ? provider : nil
-        }
-    }
-
-    private func deepgramModelHint(from inputMode: String) -> String {
-        switch inputMode {
-        case "pinyin":
-            return "nova-2"
-        default:
-            return "nova-3"
         }
     }
 
