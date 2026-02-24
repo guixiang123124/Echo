@@ -10,6 +10,7 @@ struct SettingsView: View {
     @StateObject private var cloudSync = CloudSyncService.shared
     @State private var showAuthSheet = false
     @State private var selectedASR: String = ""
+    @State private var openAITranscriptionModel = "gpt-4o-transcribe"
     @State private var correctionEnabled = true
     @State private var autoEditPreset: AutoEditPreset = .smartPolish
     @State private var autoEditApplyMode: AutoEditApplyMode = .autoReplace
@@ -97,6 +98,17 @@ struct SettingsView: View {
                     Picker("Provider", selection: $selectedASR) {
                         ForEach(AvailableProviders.asrProviders) { provider in
                             Text(provider.displayName).tag(provider.id)
+                        }
+                    }
+
+                    if selectedASR == "openai_whisper" {
+                        Picker("OpenAI Transcription Model", selection: $openAITranscriptionModel) {
+                            Text("Whisper-1").tag("whisper-1")
+                            Text("GPT-4o Transcribe").tag("gpt-4o-transcribe")
+                            Text("GPT-4o Mini Transcribe").tag("gpt-4o-mini-transcribe")
+                        }
+                        .onChange(of: openAITranscriptionModel) { _, newValue in
+                            settings.openAITranscriptionModel = newValue
                         }
                     }
 
@@ -274,6 +286,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onAppear {
                 selectedASR = settings.selectedASRProvider
+                openAITranscriptionModel = settings.openAITranscriptionModel
                 syncAutoEditSettingsFromStore()
                 selectedCorrection = settings.selectedCorrectionProvider
                 hapticEnabled = settings.hapticFeedbackEnabled
@@ -293,10 +306,13 @@ struct SettingsView: View {
             }
             .onChange(of: selectedASR) { _, newValue in
                 settings.selectedASRProvider = newValue
-                if newValue == "openai_whisper" {
+            if newValue == "openai_whisper" {
                     settings.preferStreaming = false
                 } else if !settings.preferStreaming {
                     settings.preferStreaming = true
+                }
+                if newValue == "openai_whisper" {
+                    openAITranscriptionModel = settings.openAITranscriptionModel
                 }
             }
             .onChange(of: selectedCorrection) { _, newValue in

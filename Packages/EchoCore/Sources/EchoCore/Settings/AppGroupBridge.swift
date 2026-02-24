@@ -101,11 +101,11 @@ public struct AppGroupBridge: Sendable {
 
     /// URL scheme for keyboard to open the main app for voice input
     public static var voiceInputURL: URL {
-        URL(string: "echoapp://voice")!
+        URL(string: "echo://voice")!
     }
 
     /// URL scheme for keyboard to open settings
     public static var settingsURL: URL {
-        URL(string: "echoapp://settings")!
+        URL(string: "echo://settings")!
     }
 }

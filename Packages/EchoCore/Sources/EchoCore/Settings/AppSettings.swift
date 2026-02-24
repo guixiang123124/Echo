@@ -4,6 +4,11 @@ import Foundation
 public final class AppSettings: @unchecked Sendable {
     public static let appGroupIdentifier = "group.com.xianggui.echo.shared"
     private static let supportedASRProviders: Set<String> = ["openai_whisper", "deepgram", "volcano"]
+    private static let supportedOpenAIModels: Set<String> = [
+        "whisper-1",
+        "gpt-4o-transcribe",
+        "gpt-4o-mini-transcribe"
+    ]
 
     private let defaults: UserDefaults
 
@@ -24,6 +29,14 @@ public final class AppSettings: @unchecked Sendable {
         if self.defaults.object(forKey: Keys.preferStreaming) == nil {
             // OpenAI transcription is batch. Default to non-streaming to avoid confusing UX.
             self.defaults.set(false, forKey: Keys.preferStreaming)
+        }
+        if let selected = self.defaults.string(forKey: Keys.selectedASRProvider), selected != "openai_whisper" {
+            if self.defaults.bool(forKey: Keys.preferStreaming) == false {
+                self.defaults.set(true, forKey: Keys.preferStreaming)
+            }
+        }
+        if self.defaults.object(forKey: Keys.openAITranscriptionModel) == nil {
+            self.defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
         }
         if self.defaults.object(forKey: Keys.streamFastEnabled) == nil {
             self.defaults.set(true, forKey: Keys.streamFastEnabled)
@@ -128,6 +141,20 @@ public final class AppSettings: @unchecked Sendable {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.autoEditApplyMode)
+        }
+    }
+
+    public var openAITranscriptionModel: String {
+        get {
+            let rawValue = defaults.string(forKey: Keys.openAITranscriptionModel) ?? "gpt-4o-transcribe"
+            return Self.supportedOpenAIModels.contains(rawValue) ? rawValue : "gpt-4o-transcribe"
+        }
+        set {
+            if Self.supportedOpenAIModels.contains(newValue) {
+                defaults.set(newValue, forKey: Keys.openAITranscriptionModel)
+            } else {
+                defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
+            }
         }
     }
 
@@ -292,6 +319,7 @@ public final class AppSettings: @unchecked Sendable {
         static let selectedASRProvider = "echo.asr.selected"
         static let preferStreaming = "echo.asr.streaming"
         static let streamFastEnabled = "echo.asr.streamFastEnabled"
+        static let openAITranscriptionModel = "echo.asr.openAIModel"
         static let correctionEnabled = "echo.correction.enabled"
         static let autoEditPreset = "echo.correction.preset"
         static let autoEditApplyMode = "echo.correction.applyMode"

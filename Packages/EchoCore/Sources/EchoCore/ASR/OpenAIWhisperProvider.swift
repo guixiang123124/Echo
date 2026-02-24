@@ -110,8 +110,18 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
     // MARK: - Private
 
     private func parseResponse(data: Data) throws -> TranscriptionResult {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = json["text"] as? String else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ASRError.transcriptionFailed("Failed to parse Whisper API response")
+        }
+
+        let segmentText = parseSegmentsText(from: json["segments"])
+        let wordText = parseWordsText(from: json["words"])
+        let textCandidates = [json["text"] as? String, segmentText, wordText]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.count > $1.count }
+
+        guard let text = textCandidates.first else {
             throw ASRError.transcriptionFailed("Failed to parse Whisper API response")
         }
 
@@ -149,6 +159,51 @@ public final class OpenAIWhisperProvider: ASRProvider, @unchecked Sendable {
             isFinal: true,
             wordConfidences: wordConfidences
         )
+    }
+
+    private func parseSegmentsText(from value: Any?) -> String? {
+        guard let segments = value as? [[String: Any]], !segments.isEmpty else {
+            return nil
+        }
+
+        let segmentTexts = segments.compactMap { segment -> String? in
+            if let text = segment["text"] as? String {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
+                }
+            }
+
+            if let words = segment["words"] as? [[String: Any]], !words.isEmpty {
+                let parts = words.compactMap { wordData -> String? in
+                    guard let word = wordData["word"] as? String else { return nil }
+                    let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }
+                if !parts.isEmpty {
+                    return parts.joined(separator: " ")
+                }
+            }
+
+            return nil
+        }
+
+        let merged = segmentTexts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return merged.isEmpty ? nil : merged
+    }
+
+    private func parseWordsText(from value: Any?) -> String? {
+        guard let words = value as? [[String: Any]], !words.isEmpty else {
+            return nil
+        }
+
+        let parts = words.compactMap { item -> String? in
+            guard let word = item["word"] as? String else { return nil }
+            let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        let merged = parts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return merged.isEmpty ? nil : merged
     }
 
     private func responseFormatForModel(_ model: String) -> String {

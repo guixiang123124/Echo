@@ -13,7 +13,9 @@ struct ProviderSettingsView: View {
     private var extraKeyIds: [String] {
         [
             "volcano_app_id",
-            "volcano_access_key"
+            "volcano_access_key",
+            "volcano_resource_id",
+            "volcano_endpoint"
         ]
     }
 
@@ -39,6 +41,16 @@ struct ProviderSettingsView: View {
                             secondLabel: "Access Key",
                             secondKeyId: "volcano_access_key"
                         )
+                        optionalKeyRow(
+                            title: "Resource ID (optional)",
+                            keyId: "volcano_resource_id",
+                            placeholder: "volc.bigasr.auc_turbo"
+                        )
+                        optionalKeyRow(
+                            title: "Endpoint (optional)",
+                            keyId: "volcano_endpoint",
+                            placeholder: "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+                        )
                     } else {
                         apiKeyRow(for: provider)
                     }
@@ -53,6 +65,49 @@ struct ProviderSettingsView: View {
         }
         .navigationTitle("API Keys")
         .onAppear(perform: loadKeys)
+    }
+
+    private func optionalKeyRow(
+        title: String,
+        keyId: String,
+        placeholder: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            HStack {
+                if let key = apiKeys[keyId], !key.isEmpty {
+                    Text(key)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Spacer()
+
+                    Button("Remove") {
+                        removeKey(for: keyId)
+                    }
+                    .foregroundColor(.red)
+                    .font(.caption)
+                } else {
+                    TextField(placeholder, text: binding(for: keyId))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption)
+
+                    Button("Save") {
+                        saveKey(for: keyId)
+                    }
+                    .font(.caption)
+                    .disabled((apiKeys[keyId] ?? "").isEmpty)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private func apiKeyRow(for provider: ProviderConfig) -> some View {

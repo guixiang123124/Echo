@@ -914,7 +914,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         if selectedId == "openai_whisper" {
             let provider = OpenAIWhisperProvider(
                 keyStore: keyStore,
-                model: "gpt-4o-transcribe"
+                model: settings.openAITranscriptionModel
             )
             if provider.isAvailable {
                 return ASRProviderResolutionResult(provider: provider, usedFallback: false, fallbackMessage: "")
@@ -927,7 +927,7 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         let fallback = OpenAIWhisperProvider(
             keyStore: keyStore,
-            model: "gpt-4o-transcribe"
+            model: settings.openAITranscriptionModel
         )
         if fallback.isAvailable {
             return ASRProviderResolutionResult(
@@ -960,7 +960,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             model = deepgramModelHint(from: settings.defaultInputMode)
             language = deepgramLanguageHint(from: settings.defaultInputMode)
         case "openai_whisper":
-            model = "gpt-4o-transcribe"
+            model = settings.openAITranscriptionModel
             language = settings.defaultInputMode == "pinyin" ? "zh" : nil
         case "volcano":
             model = nil
@@ -997,7 +997,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             // Default to OpenAI Whisper (batch transcription).
             let provider = OpenAIWhisperProvider(
                 keyStore: keyStore,
-                model: "gpt-4o-transcribe"
+                model: settings.openAITranscriptionModel
             )
             return provider.isAvailable ? provider : nil
         }
@@ -1355,7 +1355,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         }
         let fallback = OpenAIWhisperProvider(
             keyStore: keyStore,
-            model: "gpt-4o-transcribe"
+            model: settings.openAITranscriptionModel
         )
         guard fallback.isAvailable else { return nil }
         return fallback

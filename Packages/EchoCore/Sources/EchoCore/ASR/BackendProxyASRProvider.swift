@@ -5,7 +5,7 @@ import Foundation
 public final class BackendProxyASRProvider: ASRProvider, @unchecked Sendable {
     public let id: String
     public let displayName: String
-    public let supportsStreaming = false
+    public let supportsStreaming = true
     public let requiresNetwork = true
     public let supportedLanguages: Set<String> = ["zh-Hans", "en"]
 
@@ -14,6 +14,15 @@ public final class BackendProxyASRProvider: ASRProvider, @unchecked Sendable {
     private let accessToken: String
     private let model: String?
     private let language: String?
+    private let streamStateLock = NSLock()
+    private var streamTask: Task<Void, Never>?
+    private var streamIsActive = false
+    private var streamChunks: [AudioChunk] = []
+    private var streamLatestResultText = ""
+    private var streamLatestLanguage = RecognizedLanguage.unknown
+    private var streamContinuation: AsyncStream<TranscriptionResult>.Continuation?
+    private var streamLastRequestAt = Date.distantPast
+    private let streamRequestInterval: TimeInterval = 0.75
 
     public init(
         providerId: String,
@@ -107,16 +116,52 @@ public final class BackendProxyASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     public func startStreaming() -> AsyncStream<TranscriptionResult> {
-        AsyncStream { $0.finish() }
+        AsyncStream { continuation in
+            if !startStreamSession(with: continuation) {
+                continuation.finish()
+                return
+            }
+
+            let task = Task {
+                await self.runStreamingLoop(continuation: continuation)
+            }
+            setStreamTask(task)
+
+            continuation.onTermination = { @Sendable _ in
+                Task {
+                    await self.stopStreamSession()
+                }
+            }
+        }
     }
 
     public func feedAudio(_ chunk: AudioChunk) async throws {
-        _ = chunk
-        throw ASRError.streamingNotSupported
+        guard !chunk.isEmpty else { return }
+        guard isStreamActive() else {
+            throw ASRError.streamingNotSupported
+        }
+        appendStreamChunk(chunk)
     }
 
     public func stopStreaming() async throws -> TranscriptionResult? {
-        nil
+        let finalChunk = finalizeStreamSession()
+        await stopStreamSession()
+
+        guard let finalChunk else {
+            return nil
+        }
+
+        do {
+            let result = try await transcribe(audio: finalChunk)
+            return TranscriptionResult(
+                text: result.text,
+                language: result.language,
+                isFinal: true,
+                wordConfidences: result.wordConfidences
+            )
+        } catch {
+            return makeFinalStreamingResultFromLatest()
+        }
     }
 
     private func buildEndpoints() -> [URL]? {
@@ -139,12 +184,10 @@ public final class BackendProxyASRProvider: ASRProvider, @unchecked Sendable {
             }
         }
 
-        // Root-relative routes (most common)
         append(URL(string: "/v1/asr/transcribe", relativeTo: baseURL))
         append(URL(string: "/api/v1/asr/transcribe", relativeTo: baseURL))
         append(URL(string: "/api/asr/transcribe", relativeTo: baseURL))
 
-        // Prefix-preserving routes (for deployments mounted under subpaths)
         let scopedBaseRaw = normalized.hasSuffix("/") ? normalized : normalized + "/"
         if let scopedBaseURL = URL(string: scopedBaseRaw) {
             append(URL(string: "v1/asr/transcribe", relativeTo: scopedBaseURL))
@@ -214,6 +257,164 @@ public final class BackendProxyASRProvider: ASRProvider, @unchecked Sendable {
             return .mixed
         }
         return .unknown
+    }
+
+    private func startStreamSession(
+        with continuation: AsyncStream<TranscriptionResult>.Continuation
+    ) -> Bool {
+        withStreamState {
+            guard !streamIsActive else { return false }
+            streamIsActive = true
+            streamChunks.removeAll()
+            streamLatestResultText = ""
+            streamLatestLanguage = .unknown
+            streamLastRequestAt = Date.distantPast
+            streamContinuation = continuation
+            return true
+        }
+    }
+
+    private func stopStreamSession() async {
+        let continuation = withStreamState {
+            let currentContinuation = streamContinuation
+            streamContinuation = nil
+            streamIsActive = false
+            return currentContinuation
+        }
+        setStreamTask(nil)
+        continuation?.finish()
+    }
+
+    private func finalizeStreamSession() -> AudioChunk? {
+        withStreamState {
+            let chunk = makeCombinedChunk(streamChunks)
+            if !streamChunks.isEmpty {
+                streamChunks.removeAll()
+            }
+            streamLastRequestAt = Date.distantPast
+            return chunk
+        }
+    }
+
+    private func runStreamingLoop(continuation: AsyncStream<TranscriptionResult>.Continuation) async {
+        while isStreamActive() {
+            guard let snapshot = pollStreamAudioSnapshot() else {
+                await continueAfterStreamInterval(reason: nil)
+                continue
+            }
+
+            do {
+                let response = try await transcribe(audio: snapshot.chunk)
+                let text = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else {
+                    await continueAfterStreamInterval(reason: "empty-result")
+                    continue
+                }
+
+                let latestTextChanged = withStreamState {
+                    let changed = streamLatestResultText != text
+                    if changed {
+                        streamLatestResultText = text
+                        streamLatestLanguage = response.language
+                    }
+                    return changed
+                }
+
+                if latestTextChanged {
+                    continuation.yield(
+                        TranscriptionResult(
+                            text: text,
+                            language: response.language,
+                            isFinal: false,
+                            wordConfidences: response.wordConfidences
+                        )
+                    )
+                }
+            } catch {
+                // Keep streaming alive if backend hiccups; finalization will fall back.
+            }
+        }
+    }
+
+    private func continueAfterStreamInterval(reason: String?) async {
+        _ = reason
+        try? await Task.sleep(for: .milliseconds(180))
+    }
+
+    private func pollStreamAudioSnapshot() -> (chunk: AudioChunk, text: String)? {
+        withStreamState {
+            guard streamIsActive else { return nil }
+            if !isReadyForNextStreamRequest() {
+                return nil
+            }
+
+            let nextChunk = makeCombinedChunk(streamChunks)
+            guard let chunk = nextChunk else { return nil }
+
+            streamLastRequestAt = Date()
+            return (chunk: chunk, text: streamLatestResultText)
+        }
+    }
+
+    private func makeFinalStreamingResultFromLatest() -> TranscriptionResult? {
+        let text = withStreamState {
+            let latest = streamLatestResultText
+            let language = streamLatestLanguage
+            return latest.isEmpty ? nil : TranscriptionResult(
+                text: latest,
+                language: language,
+                isFinal: true
+            )
+        }
+        return text
+    }
+
+    private func isReadyForNextStreamRequest() -> Bool {
+        if streamChunks.isEmpty {
+            return false
+        }
+        if Date().timeIntervalSince(streamLastRequestAt) < streamRequestInterval {
+            return false
+        }
+        return true
+    }
+
+    private func appendStreamChunk(_ chunk: AudioChunk) {
+        withStreamState {
+            guard streamIsActive else { return }
+            streamChunks.append(chunk)
+        }
+    }
+
+    private func setStreamTask(_ task: Task<Void, Never>?) {
+        let old = withStreamState { () -> Task<Void, Never>? in
+            let current = streamTask
+            streamTask = task
+            return current
+        }
+        old?.cancel()
+    }
+
+    private func isStreamActive() -> Bool {
+        withStreamState { streamIsActive }
+    }
+
+    private func withStreamState<T>(_ operation: () -> T) -> T {
+        streamStateLock.lock()
+        defer { streamStateLock.unlock() }
+        return operation()
+    }
+
+    private func makeCombinedChunk(_ chunks: [AudioChunk]) -> AudioChunk? {
+        guard !chunks.isEmpty else { return nil }
+
+        let data = chunks.reduce(Data()) { partial, chunk in
+            partial + chunk.data
+        }
+        guard !data.isEmpty else { return nil }
+        let format = chunks.first?.format ?? .default
+        let duration = chunks.reduce(0.0) { total, chunk in total + chunk.duration }
+        return AudioChunk(data: data, format: format, duration: duration)
     }
 }
 

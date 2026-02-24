@@ -157,13 +157,58 @@ async function transcribeViaOpenAIProxy(
     throw new Error(message);
   }
 
-  const text = typeof json?.text === "string" ? json.text.trim() : "";
+  const directText = typeof json?.text === "string" ? json.text.trim() : "";
+  const segmentText = extractOpenAITextFromSegments(json?.segments);
+  const text = [directText, segmentText]
+    .map((value) => value?.trim() ?? "")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .sort((a, b) => b.length - a.length)[0] || "";
   if (!text) {
     throw new Error("OpenAI returned empty transcription");
   }
 
   const language = typeof json?.language === "string" ? json.language : "unknown";
   return { text, language };
+}
+
+function extractOpenAITextFromSegments(segments: unknown): string | undefined {
+  if (!Array.isArray(segments)) {
+    return undefined;
+  }
+
+  const parts = segments
+    .map((segment) => {
+      if (segment && typeof segment === "object") {
+        const typedSegment = segment as Record<string, unknown>;
+        if (typeof typedSegment.text === "string") {
+          const text = typedSegment.text.trim();
+          if (text.length > 0) return text;
+        }
+
+        const wordsValue = typedSegment.words;
+        if (Array.isArray(wordsValue)) {
+          const words = wordsValue
+            .map((word) => (word && typeof word === "object"
+              ? (word as Record<string, unknown>).word
+              : undefined))
+            .map((word) => (typeof word === "string" ? word.trim() : ""))
+            .filter((word) => word.length > 0);
+
+          if (words.length > 0) {
+            return words.join(" ");
+          }
+        }
+      }
+      return undefined;
+    })
+    .filter((value): value is string => Boolean(value && value.length > 0));
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+
+  return parts.join(" ").trim();
 }
 
 async function transcribeViaDeepgramProxy(

@@ -16,6 +16,7 @@ CLI prioritizes env/file over Keychain.
 
 ### Volcano
 - Env: `VOLCANO_APP_ID`, `VOLCANO_ACCESS_KEY`
+- Optional: `VOLCANO_RESOURCE_ID`, `VOLCANO_ENDPOINT`
 - File: `~/.volcano_token` (access key only; app id defaults to `6490217589`)
 
 ### Deepgram

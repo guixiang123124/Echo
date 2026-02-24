@@ -52,6 +52,9 @@
     .preset-item.recommended::after { content: 'Recommended'; position: absolute; top: -8px; right: 12px; background: var(--accent); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px; }
     .preset-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
     .preset-desc { font-size: 12px; color: var(--text-secondary); }
+    .flexibility-note { background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(236,72,153,0.1)); border: 1px solid rgba(99,102,241,0.3); border-radius: 12px; padding: 20px; margin: 40px 0; }
+    .flexibility-note h3 { color: var(--primary); font-size: 16px; margin-bottom: 12px; }
+    .flexibility-note p { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
     .metrics { padding: 60px 24px; background: var(--bg-secondary); }
     .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; max-width: 1000px; margin: 0 auto; text-align: center; }
     .metric-value { font-size: 48px; font-weight: 800; background: var(--gradient-1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -103,21 +106,22 @@
         <p>Words appear as you speak. Advanced streaming speech recognition shows text in real-time - no waiting for recording to finish.</p>
         <ul class="feature-list">
           <li>First token latency as low as <strong>180ms</strong></li>
-          <li>Multi-engine support: Deepgram, Volcano, Whisper</li>
+          <li>Multi-engine: Deepgram, ByteDance Volcano, OpenAI Whisper</li>
           <li>Intelligent routing selects optimal path</li>
           <li>Mixed Chinese-English recognition</li>
         </ul>
         <div class="mode-card">
           <h4>🚀 Stream Mode — Speed First</h4>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Speak and see text instantly. Best for real-time communication.</p>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Speak and see text instantly. Spot and fix errors in real-time.</p>
           <div class="mode-tags">
             <span class="mode-tag stream">Fastest</span>
             <span class="mode-tag">Real-time</span>
+            <span class="mode-tag">Fix as you speak</span>
           </div>
         </div>
         <div class="mode-card">
           <h4>📦 Batch Mode — Quality First</h4>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Process after you finish speaking. More consistent quality.</p>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">Process after you finish speaking. Better for deep Polish.</p>
           <div class="mode-tags">
             <span class="mode-tag batch">Better for Polish</span>
             <span class="mode-tag">Stable Results</span>
@@ -217,6 +221,18 @@
         <span style="color: var(--text-secondary); font-size: 14px;">Voice + Text</span>
       </div>
     </div>
+
+    <!-- Flexibility Note -->
+    <div class="flexibility-note">
+      <h3>💡 Echo's Flexibility Design</h3>
+      <p>We believe everyone has different needs. Echo provides dual flexibility:</p>
+      <p style="margin-top: 12px;">
+        <strong>1. API Flexibility</strong>: Logged-in users get cloud proxy to protect API keys. Non-logged users can bring their own keys — flexibility meets security.
+      </p>
+      <p style="margin-top: 8px;">
+        <strong>2. Mode Switching</strong>: Stream mode for speed, Batch mode for quality — choose based on your scenario.
+      </p>
+    </div>
   </section>
 
   <section class="metrics">
@@ -236,10 +252,6 @@
       <div>
         <div class="metric-value">5</div>
         <div class="metric-label">Presets</div>
-      </div>
-      <div>
-        <div class="metric-value">2×</div>
-        <div class="metric-label">Efficiency Boost</div>
       </div>
     </div>
   </section>

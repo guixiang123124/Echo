@@ -41,6 +41,14 @@ enum VoiceInputTrigger {
     }
 
     private static func open(url: URL, from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
+        guard let viewController else {
+            completion?(false)
+            return
+        }
+        let resolvedViewController = viewController
+
+        let urlString = url.absoluteString
+
         var finished = false
         let finish: (Bool) -> Void = { success in
             guard !finished else { return }
@@ -53,63 +61,89 @@ enum VoiceInputTrigger {
             finish(false)
         }
 
-        let confirmFallbackLaunch: () -> Void = {
-            waitForLaunchAcknowledgement { acknowledged in
+        let reportOpenAttempt: (_ path: String, _ success: Bool) -> Void = { path, success in
+            print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
+        }
+
+        let awaitLaunchAckThenFinish: (String, @escaping () -> Void) -> Void = { method, onFailure in
+            reportOpenAttempt("\(method) ack", false)
+            waitForLaunchAcknowledgement(timeout: 1.5, pollInterval: 0.12) { acknowledged in
                 if acknowledged {
+                    reportOpenAttempt("\(method) ack", true)
                     finish(true)
-                    return
+                } else {
+                    onFailure()
                 }
-                fail()
             }
         }
 
+        let fallback: () -> Void = {
+            reportOpenAttempt("fallback:start", false)
+            if let inputViewController = resolvedViewController as? UIInputViewController,
+               openViaInputViewController(url, from: inputViewController) {
+                reportOpenAttempt("UIInputViewController.openURL", true)
+                awaitLaunchAckThenFinish("UIInputViewController.openURL") {
+                    reportOpenAttempt("UIInputViewController.openURL", false)
+                    fail()
+                }
+                return
+            }
+            if openViaResponderChain(url: url, from: resolvedViewController) {
+                reportOpenAttempt("Responder chain", true)
+                awaitLaunchAckThenFinish("Responder chain") {
+                    reportOpenAttempt("Responder chain", false)
+                    fail()
+                }
+                return
+            }
+            fail()
+        }
+
         // Primary path for app extension -> host app open.
-        if let extensionContext = viewController?.extensionContext {
+        if let extensionContext = resolvedViewController.extensionContext {
+            reportOpenAttempt("extensionContext.open", true)
             let timeout = DispatchWorkItem {
                 guard !finished else { return }
-                let fallback = openViaResponderChain(url: url, from: viewController)
-                if fallback {
-                    confirmFallbackLaunch()
-                    return
+                print("[VoiceInputTrigger] extensionContext.open timeout, trying fallback")
+                awaitLaunchAckThenFinish("extensionContext.open.timeout") {
+                    fallback()
                 }
-                print("VoiceInputTrigger: Timeout opening URL: \(url.absoluteString)")
-                finish(false)
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: timeout)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: timeout)
 
             extensionContext.open(url) { success in
                 timeout.cancel()
+                reportOpenAttempt("extensionContext.open completion", success)
                 guard !finished else { return }
                 if success {
-                    finish(true)
+                    awaitLaunchAckThenFinish("extensionContext.open") {
+                        fallback()
+                    }
                     return
                 }
-
-                // Fallback when extensionContext.open fails on some host app states.
-                let fallback = openViaResponderChain(url: url, from: viewController)
-                if fallback {
-                    confirmFallbackLaunch()
-                    return
-                }
-                print("VoiceInputTrigger: Failed to open URL: \(url.absoluteString)")
-                fail()
+                fallback()
             }
             return
         }
 
-        if let inputController = viewController as? UIInputViewController {
-            let opened = openViaInputViewController(url, from: inputController)
-            if opened {
-                confirmFallbackLaunch()
+        if let inputViewController = resolvedViewController as? UIInputViewController {
+            if openViaInputViewController(url, from: inputViewController) {
+                reportOpenAttempt("UIInputViewController.openURL", true)
+                awaitLaunchAckThenFinish("UIInputViewController.openURL direct") {
+                    fail()
+                }
                 return
             }
-            print("VoiceInputTrigger: UIInputViewController open failed for URL: \(url.absoluteString)")
+            fallback()
+            return
         }
 
-        let opened = openViaResponderChain(url: url, from: viewController)
-        if opened {
-            confirmFallbackLaunch()
+        if openViaResponderChain(url: url, from: resolvedViewController) {
+            reportOpenAttempt("Responder chain", true)
+            awaitLaunchAckThenFinish("Responder chain direct") {
+                fail()
+            }
             return
         }
         fail()
@@ -118,13 +152,65 @@ enum VoiceInputTrigger {
     private static func openViaResponderChain(url: URL, from viewController: UIViewController?) -> Bool {
         var responder: UIResponder? = viewController
         while let current = responder {
-            let selector = sel_registerName("openURL:")
-            if current.responds(to: selector) {
-                typealias OpenURLFunc = @convention(c) (AnyObject, Selector, URL) -> Bool
-                let implementation = current.method(for: selector)
-                let function = unsafeBitCast(implementation, to: OpenURLFunc.self)
-                if function(current, selector, url) {
-                    return true
+            let selectors: [Selector] = [
+                sel_registerName("openURL:"),
+                sel_registerName("openURL:completionHandler:"),
+                sel_registerName("openURL:options:completionHandler:"),
+                sel_registerName("openURL:options:completionHandler:sourceApplication:"),
+                sel_registerName("open:completionHandler:")
+            ]
+
+            for selector in selectors where current.responds(to: selector) {
+                switch selector.description {
+                case "openURL:":
+                    typealias OpenURLFunc = @convention(c) (AnyObject, Selector, URL) -> Bool
+                    let implementation = current.method(for: selector)
+                    let function = unsafeBitCast(implementation, to: OpenURLFunc.self)
+                    if function(current, selector, url) {
+                        return true
+                    }
+                case "openURL:completionHandler:", "open:completionHandler:":
+                    typealias OpenURLWithCompletionFunc = @convention(c) (AnyObject, Selector, URL, @escaping (Bool) -> Void) -> Void
+                    let implementation = current.method(for: selector)
+                    let function = unsafeBitCast(implementation, to: OpenURLWithCompletionFunc.self)
+                    var called = false
+                    function(current, selector, url) { _ in called = true }
+                    if called {
+                        return true
+                    }
+                case "openURL:options:completionHandler:":
+                    typealias OpenURLWithOptionsFunc = @convention(c) (
+                        AnyObject,
+                        Selector,
+                        URL,
+                        [AnyHashable: Any],
+                        @escaping (Bool) -> Void
+                    ) -> Void
+                    let implementation = current.method(for: selector)
+                    let function = unsafeBitCast(implementation, to: OpenURLWithOptionsFunc.self)
+                    var called = false
+                    function(current, selector, url, [:], { _ in called = true })
+                    if called {
+                        return true
+                    }
+                case "openURL:options:completionHandler:sourceApplication:":
+                    typealias OpenURLWithSourceFunc = @convention(c) (
+                        AnyObject,
+                        Selector,
+                        URL,
+                        [AnyHashable: Any],
+                        @escaping (Bool) -> Void,
+                        String
+                    ) -> Void
+                    let implementation = current.method(for: selector)
+                    let function = unsafeBitCast(implementation, to: OpenURLWithSourceFunc.self)
+                    var called = false
+                    function(current, selector, url, [:], { _ in called = true }, "")
+                    if called {
+                        return true
+                    }
+                default:
+                    break
                 }
             }
             responder = current.next

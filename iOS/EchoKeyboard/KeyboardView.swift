@@ -227,49 +227,46 @@ private struct KeyboardTopBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Settings button - using onTapGesture for keyboard extension compatibility
-            Image(systemName: "gearshape")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(Color(.secondaryLabel))
-                .frame(width: 32, height: 32)
-                .background(
-                    Circle().fill(EchoTheme.keySecondaryBackground)
-                )
-                .contentShape(Circle())
-                .onTapGesture {
-                    onOpenSettings()
-                }
-
-            Spacer()
-
-            // Voice button - using onTapGesture for keyboard extension compatibility
-            EchoDictationPill(
-                isRecording: false,
-                isProcessing: false,
-                levels: [],
-                tipText: nil,
-                width: 150,
-                height: 30
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onTriggerVoice()
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle().fill(EchoTheme.keySecondaryBackground)
+                    )
+                    .contentShape(Circle())
             }
+            .buttonStyle(.plain)
 
             Spacer()
 
-            // Collapse button - using onTapGesture for keyboard extension compatibility
-            Image(systemName: "chevron.down")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color(.secondaryLabel))
-                .frame(width: 32, height: 32)
-                .background(
-                    Circle().fill(EchoTheme.keySecondaryBackground)
+            Button(action: onTriggerVoice) {
+                EchoDictationPill(
+                    isRecording: false,
+                    isProcessing: false,
+                    levels: [],
+                    tipText: nil,
+                    width: 150,
+                    height: 30
                 )
-                .contentShape(Circle())
-                .onTapGesture {
-                    onCollapse()
-                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button(action: onCollapse) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color(.secondaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(
+                        Circle().fill(EchoTheme.keySecondaryBackground)
+                    )
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

@@ -52,6 +52,9 @@
     .preset-item.recommended::after { content: '推荐'; position: absolute; top: -8px; right: 12px; background: var(--accent); color: white; font-size: 10px; padding: 2px 8px; border-radius: 10px; }
     .preset-name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
     .preset-desc { font-size: 12px; color: var(--text-secondary); }
+    .flexibility-note { background: linear-gradient(135deg, rgba(99,102,241,0.1), rgba(236,72,153,0.1)); border: 1px solid rgba(99,102,241,0.3); border-radius: 12px; padding: 20px; margin: 40px 0; }
+    .flexibility-note h3 { color: var(--primary); font-size: 16px; margin-bottom: 12px; }
+    .flexibility-note p { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
     .metrics { padding: 60px 24px; background: var(--bg-secondary); }
     .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; max-width: 1000px; margin: 0 auto; text-align: center; }
     .metric-value { font-size: 48px; font-weight: 800; background: var(--gradient-1); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
@@ -103,23 +106,24 @@
         <p>边说边出字，毫秒级延迟。先进的流式语音识别技术，无需等待录音结束即可看到文字实时出现。</p>
         <ul class="feature-list">
           <li>首字延迟低至 <strong>180ms</strong></li>
-          <li>支持 Deepgram、Volcano、Whisper 多引擎</li>
+          <li>支持 Deepgram、字节火山引擎、OpenAI Whisper 多引擎</li>
           <li>智能路由，自动选择最优识别路径</li>
           <li>中英文混合识别</li>
         </ul>
         <div class="mode-card">
           <h4>🚀 流式模式 (Stream) — 速度优先</h4>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">边说边出字，实时可见，适合实时沟通</p>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">边说边出字，实时可见，错别字即时发现即时修正</p>
           <div class="mode-tags">
             <span class="mode-tag stream">速度最快</span>
             <span class="mode-tag">实时可见</span>
+            <span class="mode-tag">边转边修</span>
           </div>
         </div>
         <div class="mode-card">
           <h4>📦 批量模式 (Batch) — 质量优先</h4>
-          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">整段说完后统一处理，质量更稳定</p>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">整段说完后统一处理，质量更稳定，适合深度 Polish</p>
           <div class="mode-tags">
-            <span class="mode-tag batch">更适合Polish</span>
+            <span class="mode-tag batch">适合Polish</span>
             <span class="mode-tag">结果稳定</span>
           </div>
         </div>
@@ -162,11 +166,11 @@
       </div>
     </div>
 
-    <!-- 功能3: AI引擎 -->
+    <!-- 功能3: 多引擎识别 -->
     <div class="feature-block">
       <div class="feature-content">
-        <div class="subtitle">AI 润色引擎</div>
-        <h2>✨ 智能语音引擎</h2>
+        <div class="subtitle">语音引擎</div>
+        <h2>✨ 多引擎智能路由</h2>
         <p>业界领先的语音识别方案，多引擎智能路由，确保最佳识别效果。</p>
         <ul class="feature-list">
           <li><strong>Deepgram</strong> — 英文识别王者，极速流式</li>
@@ -217,6 +221,18 @@
         <span style="color: var(--text-secondary); font-size: 14px;">语音 + 文字融合</span>
       </div>
     </div>
+
+    <!-- 灵活性说明 -->
+    <div class="flexibility-note">
+      <h3>💡 Echo 的灵活性设计</h3>
+      <p>我们相信每个人都有不同的需求。Echo 提供双重灵活性：</p>
+      <p style="margin-top: 12px;">
+        <strong>1. API 灵活选择</strong>：登录用户使用云端代理保护 API Key，未登录用户可自行配置 API Key — 灵活与安全兼顾。
+      </p>
+      <p style="margin-top: 8px;">
+        <strong>2. 模式按需切换</strong>：Stream 模式追求极致速度，Batch 模式追求质量定制 — 场景决定选择。
+      </p>
+    </div>
   </section>
 
   <section class="metrics">
@@ -236,10 +252,6 @@
       <div>
         <div class="metric-value">5</div>
         <div class="metric-label">预设模式</div>
-      </div>
-      <div>
-        <div class="metric-value">2×</div>
-        <div class="metric-label">效率提升</div>
       </div>
     </div>
   </section>

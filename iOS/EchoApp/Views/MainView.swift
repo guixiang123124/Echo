@@ -53,10 +53,16 @@ struct MainView: View {
             Task { await BillingService.shared.refresh() }
         }
         .onOpenURL { url in
-            guard url.scheme == "echo" || url.scheme == "echoapp" else { return }
+            print("[EchoApp] onOpenURL received: \(url.absoluteString)")
+            guard url.scheme == "echo" || url.scheme == "echoapp" else {
+                print("[EchoApp] onOpenURL ignored due unsupported scheme: \(url.scheme ?? "<none>")")
+                return
+            }
             let route = (url.host?.isEmpty == false ? url.host : nil)
                 ?? url.pathComponents.dropFirst().first
+                .map { $0.lowercased() }
             guard let route else { return }
+            print("[EchoApp] onOpenURL parsed route: \(route)")
             switch route {
             case "home":
                 selectedTab = .home
@@ -79,6 +85,7 @@ struct MainView: View {
                 AppGroupBridge().markLaunchAcknowledged()
                 AppGroupBridge().clearPendingLaunchIntent()
             default:
+                print("[EchoApp] onOpenURL unsupported route: \(route)")
                 break
             }
         }
@@ -115,7 +122,11 @@ extension MainView.DeepLink: Identifiable {
 private extension MainView {
     func consumeKeyboardLaunchIntentIfNeeded() {
         let bridge = AppGroupBridge()
-        guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else { return }
+        guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else {
+            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
+            return
+        }
+        print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
         switch intent {
         case .voice:
             deepLink = .voice

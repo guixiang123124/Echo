@@ -64,7 +64,7 @@ curl http://127.0.0.1:8080/healthz
 CLI-first deployment (after `railway login`):
 
 ```bash
-cd /Users/xianggui/Downloads/Echo
+cd /Users/xianggui/.openclaw/workspace/Echo
 cp backend/.env.production.example backend/.env.production
 # fill real values in backend/.env.production
 ./scripts/deploy_railway_backend.sh
@@ -75,7 +75,7 @@ cp backend/.env.production.example backend/.env.production
 You can auto-create (or reuse) Echo product/prices and webhook by script:
 
 ```bash
-cd /Users/xianggui/Downloads/Echo/backend
+cd /Users/xianggui/.openclaw/workspace/Echo/backend
 export STRIPE_SECRET_KEY=sk_live_xxx
 export ECHO_API_BASE_URL=https://echo-api-production-c83b.up.railway.app
 export RAILWAY_SYNC=true
