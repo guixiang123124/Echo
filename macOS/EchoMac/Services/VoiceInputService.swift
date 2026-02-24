@@ -1040,7 +1040,7 @@ public final class VoiceInputService: ObservableObject {
     private func sanitizeStreamingText(_ text: String, previousText: String) -> String {
         let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = removeObviousConsecutiveRepetition(in: incoming, baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines))
-        if cleaned.count > 1200 {
+        if cleaned.count > 260 {
             return cleaned
         }
         return collapseDuplicateFullString(from: cleaned)
@@ -1107,7 +1107,7 @@ public final class VoiceInputService: ObservableObject {
     private func collapseDuplicateFullString(from text: String) -> String {
         let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !incoming.isEmpty else { return incoming }
-        if incoming.count > 1200 { return incoming }
+        if incoming.count > 260 { return incoming }
 
         let fullTokens = incoming.split { $0.isWhitespace || $0.isNewline }
         if fullTokens.count >= 2 {

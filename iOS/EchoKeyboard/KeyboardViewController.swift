@@ -117,7 +117,7 @@ class KeyboardState: ObservableObject {
     }
 
     var hasOperationalFullAccess: Bool {
-        hasFullAccess && AppGroupBridge.hasSharedContainerAccess
+        hasFullAccess
     }
 
     var fullAccessGuidance: String {
@@ -127,7 +127,7 @@ class KeyboardState: ObservableObject {
         if !AppGroupBridge.hasSharedContainerAccess {
             return "Shared keyboard access unavailable. Reopen Echo Keyboard once."
         }
-        return "Enable Allow Full Access in iOS Keyboard settings"
+        return "Ready to open Echo"
     }
 
     func showToast(_ message: String, duration: TimeInterval = 1.8) {

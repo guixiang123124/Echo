@@ -1167,7 +1167,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             in: incoming,
             baseText: previousText.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        if cleaned.count > 1200 {
+        if cleaned.count > 260 {
             return cleaned
         }
         return collapseDuplicateFullString(from: cleaned)
