@@ -209,7 +209,21 @@ public final class VoiceInputService: ObservableObject {
 
             if isStreamingSession {
                 let asrStart = Date()
-                let finalResult = try await provider.stopStreaming()
+                let finalResult: TranscriptionResult?
+                do {
+                    finalResult = try await provider.stopStreaming()
+                } catch {
+                    finalResult = nil
+                    let stopError = errorCodeValue(for: error)
+                    logStage("stream", traceId: traceId, message: "stop_stream_error=\(stopError)")
+                    await recordingStore.appendAuditEvent(
+                        traceId: traceId,
+                        stage: "stream",
+                        event: "stop_failed",
+                        providerId: provider.id,
+                        message: stopError
+                    )
+                }
                 stopStreamingResults()
 
                 let accumulatedText = partialTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -245,40 +259,15 @@ public final class VoiceInputService: ObservableObject {
 
                 logStage("merge", traceId: traceId, message: "stream merged_len=\(mergedText.count) partial_len=\(strongestPartial.count)")
 
-                let forceBatchFinalizeAfterStream = false
-                let shouldFallbackToBatch = forceBatchFinalizeAfterStream
-                    || shouldFallbackToBatchFromStreaming(
-                        finalText: mergedText,
-                        accumulatedText: strongestPartial,
-                        audioDuration: totalDuration
-                    )
-
-                if !mergedText.isEmpty && !shouldFallbackToBatch {
+                if !mergedText.isEmpty {
                     transcription = TranscriptionResult(text: mergedText, language: finalResult?.language ?? .unknown, isFinal: true)
-                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                } else if !strongestPartial.isEmpty {
+                    transcription = TranscriptionResult(text: strongestPartial, language: finalResult?.language ?? .unknown, isFinal: true)
+                    mergedText = strongestPartial
                 } else {
-                    if forceBatchFinalizeAfterStream {
-                        DiagnosticsState.shared.log(
-                            "Streaming final-pass enabled -> run batch finalization (duration=\(String(format: "%.2f", totalDuration))s)"
-                        )
-                    } else {
-                        DiagnosticsState.shared.log(
-                            "Streaming final weak -> fallback batch transcribe (duration=\(String(format: "%.2f", totalDuration))s)"
-                        )
-                    }
-                    logStage("merge", traceId: traceId, message: "fallback_to_batch duration_s=\(String(format: "%.2f", totalDuration))")
-                    let fallback = try await transcribeAudioWithFallback(
-                        primaryProvider: provider,
-                        fallbackProvider: fallbackProvider,
-                        audio: combinedChunk
-                    )
-                    transcription = fallback.result
-                    providerForStorage = fallback.provider
-                    if fallback.provider.id != provider.id {
-                        fallbackUsed = true
-                    }
-                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
+                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
                 }
+                asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
             } else {
                 DiagnosticsState.shared.log(
                     "Audio captured: chunks=\(audioChunks.count), bytes=\(combinedData.count), duration=\(String(format: "%.2f", totalDuration))s"
@@ -510,7 +499,7 @@ public final class VoiceInputService: ObservableObject {
             stopStreamingResults()
 
             let errorString = error.localizedDescription
-            if !audioChunks.isEmpty {
+            if !streamSessionActive && !audioChunks.isEmpty {
                 let combinedData = audioChunks.reduce(Data()) { $0 + $1.data }
                 let totalDuration = audioChunks.reduce(0) { $0 + $1.duration }
                 let format = audioChunks.first?.format ?? .default

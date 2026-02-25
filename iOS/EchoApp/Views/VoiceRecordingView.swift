@@ -458,53 +458,34 @@ final class VoiceRecordingViewModel: ObservableObject {
             let asrStart = Date()
             let transcription: TranscriptionResult
             if streamingActive {
-                let final = try await provider.stopStreaming()
+                let final: TranscriptionResult?
+                do {
+                    final = try await provider.stopStreaming()
+                } catch {
+                    final = nil
+                }
                 stopStreamingResults()
                 let strongestPartial = transcribedText.trimmingCharacters(in: .whitespacesAndNewlines)
                 strongestStreamPartial = strongestPartial
                 let merged = mergedStreamingText(finalText: final?.text, accumulatedText: strongestPartial)
                 let mergedText = merged.trimmingCharacters(in: .whitespacesAndNewlines)
 
-                let forceBatchFinalizeAfterStream = false
-                let shouldBatchFinalize = forceBatchFinalizeAfterStream
-                    || shouldFallbackToBatchFromStreaming(finalText: mergedText, accumulatedText: transcribedText)
-
-                if shouldBatchFinalize {
-                    let fallbackProvider = fallbackASRProvider(for: provider.id)
-                    let fallbackStart = Date()
-
-                    if let fallbackProvider {
-                        let fallbackResult = try await transcribeAudioWithFallback(
-                            primaryProvider: provider,
-                            fallbackProvider: fallbackProvider,
-                            audio: combinedChunk
-                        )
-                        transcription = fallbackResult.result
-                        providerForStorage = fallbackResult.provider
-                        if fallbackProvider.id != provider.id {
-                            fallbackUsed = true
-                        }
-                        asrLatencyMs = Int(Date().timeIntervalSince(fallbackStart) * 1000)
-                    } else {
-                        let directResult = try await provider.transcribe(audio: combinedChunk)
-                        let directText = directResult.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !directText.isEmpty else {
-                            throw ASRError.transcriptionFailed("Streaming returned empty transcription")
-                        }
-                        transcription = directResult
-                        asrLatencyMs = Int(Date().timeIntervalSince(fallbackStart) * 1000)
-                    }
-                } else {
+                if !mergedText.isEmpty {
                     transcription = TranscriptionResult(
                         text: mergedText,
                         language: final?.language ?? .unknown,
                         isFinal: true
                     )
+                } else if !strongestPartial.isEmpty {
+                    transcription = TranscriptionResult(
+                        text: strongestPartial,
+                        language: final?.language ?? .unknown,
+                        isFinal: true
+                    )
+                } else {
+                    throw ASRError.transcriptionFailed("Streaming returned empty transcription")
                 }
-
-                if asrLatencyMs == nil {
-                    asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
-                }
+                asrLatencyMs = Int(Date().timeIntervalSince(asrStart) * 1000)
             } else {
                 let fallbackProvider = fallbackASRProvider(for: provider.id)
                 let batchStart = Date()
@@ -677,63 +658,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             deliverResult()
         } catch {
             if streamingActive {
-                try? await provider.stopStreaming()
-                stopStreamingResults()
-
-                do {
-                    let fallbackProvider = fallbackASRProvider(for: provider.id)
-                    let recovered = try await transcribeAudioWithFallback(
-                        primaryProvider: provider,
-                        fallbackProvider: fallbackProvider,
-                        audio: combinedChunk
-                    )
-                    let fallbackRaw = recovered.result.text
-                    let finalText = fallbackRaw.isEmpty ? transcribedText : fallbackRaw
-                    let recoveredFallbackUsed = recovered.provider.id != provider.id
-
-                    let finalMetrics = StreamingMetrics(
-                        providerId: recovered.provider.id,
-                        providerName: recovered.provider.displayName,
-                        mode: recoveredFallbackUsed ? "batch-fallback" : "stream-recovered",
-                        startDate: streamMetrics?.startDate ?? Date(),
-                        firstPartialMs: streamFirstPartialMs,
-                        firstFinalMs: streamFirstFinalMs,
-                        fallbackUsed: recoveredFallbackUsed || streamingActive,
-                        error: nil
-                    )
-
-                    await RecordingStore.shared.saveRecording(
-                        audio: combinedChunk,
-                        asrProviderId: recovered.provider.id,
-                        asrProviderName: recovered.provider.displayName,
-                        correctionProviderId: nil,
-                        transcriptRaw: fallbackRaw,
-                        transcriptFinal: finalText,
-                        error: nil,
-                        userId: authSession.userId,
-                        asrLatencyMs: asrLatencyMs,
-                        correctionLatencyMs: correctionLatencyMs,
-                        totalLatencyMs: totalLatencyMs,
-                        streamMode: recovered.provider.id == provider.id ? "stream-recovered" : "batch-fallback",
-                        firstPartialMs: streamFirstPartialMs,
-                        firstFinalMs: streamFirstFinalMs,
-                        fallbackUsed: recoveredFallbackUsed || streamingActive
-                    )
-
-                    transcribedText = finalText
-                    isProcessing = false
-                    statusText = "Ready"
-                    showStreamStatus = false
-                    streamStatusText = ""
-                    logStreamingMetrics(finalMetrics, totalMs: totalLatencyMs, asrMs: asrLatencyMs, correctionMs: correctionLatencyMs)
-                    deliverResult()
-                    streamMetrics = nil
-                    return
-                } catch {
-                    // keep fallback failure and continue normal error handling
-                }
-            } else {
-                try? await provider.stopStreaming()
+                _ = try? await provider.stopStreaming()
                 stopStreamingResults()
             }
 
@@ -751,7 +676,7 @@ final class VoiceRecordingViewModel: ObservableObject {
                 error: error.localizedDescription,
                 userId: authSession.userId,
                 streamMode: sessionMode,
-                fallbackUsed: streamingActive,
+                fallbackUsed: fallbackUsed,
                 errorCode: "\(type(of: error)):\(errorCodeValue(for: error))"
             )
             isProcessing = false
