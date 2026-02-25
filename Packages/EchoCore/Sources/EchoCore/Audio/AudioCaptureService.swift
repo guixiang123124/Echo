@@ -18,6 +18,7 @@ public final class AudioCaptureService: @unchecked Sendable {
     private let format: AudioStreamFormat
     #if os(iOS)
     private var audioSessionConfigured = false
+    private var interruptionObserver: NSObjectProtocol?
     #endif
 
     public init(format: AudioStreamFormat = .default) {
@@ -31,11 +32,20 @@ public final class AudioCaptureService: @unchecked Sendable {
         var audioCont: AsyncStream<AudioChunk>.Continuation!
         self.audioStream = AsyncStream { audioCont = $0 }
         self.audioContinuation = audioCont
+
+        #if os(iOS)
+        setupInterruptionObserver()
+        #endif
     }
 
     deinit {
         stateContinuation.finish()
         audioContinuation.finish()
+        #if os(iOS)
+        if let observer = interruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        #endif
     }
 
     /// Stream of state changes
@@ -106,6 +116,7 @@ public final class AudioCaptureService: @unchecked Sendable {
         engine.stop()
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        audioSessionConfigured = false
         #endif
         stateContinuation.yield(.idle)
     }
@@ -119,6 +130,35 @@ public final class AudioCaptureService: @unchecked Sendable {
             audioSessionConfigured = true
         }
         try session.setActive(true, options: [.notifyOthersOnDeactivation])
+    }
+
+    private func setupInterruptionObserver() {
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            self?.handleAudioSessionInterruption(notification)
+        }
+    }
+
+    private func handleAudioSessionInterruption(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            audioSessionConfigured = false
+            stateContinuation.yield(.paused)
+        case .ended:
+            audioSessionConfigured = false
+            stateContinuation.yield(.paused)
+        @unknown default:
+            break
+        }
     }
     #endif
 

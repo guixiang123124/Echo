@@ -1,6 +1,6 @@
 import Foundation
 
-/// ASR provider using ByteDance Volcano Engine BigModel API (batch mode)
+/// ASR provider using ByteDance Volcano Engine BigModel API (batch + streaming)
 public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     public let id = "volcano"
     public let displayName = "Volcano Engine (火山引擎)"
@@ -19,6 +19,9 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     private let accessKeyOverride: String?
     private let resourceIdOverride: String?
     private let endpointOverride: String?
+
+    private var streamingSession: VolcanoStreamingSession?
+    private let sessionLock = NSLock()
 
     private func diagnosticsLog(_ message: String) {
         print("🧭 VolcanoDiag: \(message)")
@@ -39,22 +42,28 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     public var isAvailable: Bool {
-        // Allow explicit overrides (useful for tests / dependency injection)
-        if let appIdOverride, !appIdOverride.isEmpty,
-           let accessKeyOverride, !accessKeyOverride.isEmpty {
+        if let appId = normalized(appIdOverride),
+           let accessKey = normalized(accessKeyOverride),
+           !appId.isEmpty && !accessKey.isEmpty {
             return true
         }
 
-        // Otherwise check Keychain entries
-        return keyStore.hasKey(for: Self.appIdKeyId) && keyStore.hasKey(for: Self.accessKeyKeyId)
+        guard let appId = resolveAppId(),
+              let accessKey = resolveAccessKey() else {
+            return false
+        }
+
+        let normalizedAppId = normalized(appId)
+        let normalizedAccess = normalized(accessKey)
+        return !(normalizedAppId ?? "").isEmpty && !(normalizedAccess ?? "").isEmpty
     }
 
     public func transcribe(audio: AudioChunk) async throws -> TranscriptionResult {
         guard !audio.isEmpty else { throw ASRError.noAudioData }
 
-        let appId = try (appIdOverride ?? keyStore.retrieve(for: Self.appIdKeyId)) ?? ""
-        let accessKey = try (accessKeyOverride ?? keyStore.retrieve(for: Self.accessKeyKeyId)) ?? ""
-        guard !appId.isEmpty, !accessKey.isEmpty else {
+        let appId = resolveAppId().flatMap(normalized)
+        let accessKey = resolveAccessKey().flatMap(normalized)
+        guard let appId, let accessKey, !appId.isEmpty, !accessKey.isEmpty else {
             throw ASRError.apiKeyMissing
         }
 
@@ -74,14 +83,8 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
             )
         } catch {
             let message = (error as? ASRError)?.errorDescription ?? error.localizedDescription
-            let resourceNotGranted = message.contains("requested resource not granted") || message.contains("45000030")
-            if resourceNotGranted {
-                let fallbackResources: [String] = {
-                    if preferredResource == "volc.bigasr.auc_turbo" {
-                        return ["volc.seedasr.auc", "volc.bigasr.auc"]
-                    }
-                    return [preferredResource]
-                }()
+            if shouldFallbackToSubmitQuery(message: message) {
+                let fallbackResources = fallbackResourceCandidates(for: preferredResource, failureMessage: message)
 
                 for resource in fallbackResources {
                     if let result = try await transcribeViaSubmitQueryIfPossible(
@@ -98,13 +101,11 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
         }
     }
 
-    private var streamingSession: VolcanoStreamingSession?
-
     public func startStreaming() -> AsyncStream<TranscriptionResult> {
         do {
-            let appId = try (appIdOverride ?? keyStore.retrieve(for: Self.appIdKeyId)) ?? ""
-            let accessKey = try (accessKeyOverride ?? keyStore.retrieve(for: Self.accessKeyKeyId)) ?? ""
-            guard !appId.isEmpty, !accessKey.isEmpty else {
+            guard let appId = resolveAppId().flatMap(normalized),
+                  let accessKey = resolveAccessKey().flatMap(normalized),
+                  !appId.isEmpty, !accessKey.isEmpty else {
                 return AsyncStream { $0.finish() }
             }
 
@@ -134,30 +135,37 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
             )
 
             let session = VolcanoStreamingSession(config: config)
-            self.streamingSession = session
+            sessionLock.withLock { self.streamingSession = session }
             return session.start()
         } catch {
             return AsyncStream { $0.finish() }
         }
     }
 
+    private func normalized(_ value: String?) -> String? {
+        value?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     public func feedAudio(_ chunk: AudioChunk) async throws {
-        guard let session = streamingSession else {
+        let session = sessionLock.withLock { streamingSession }
+        guard let session else {
             throw ASRError.streamingNotSupported
         }
         session.feedAudio(chunk)
     }
 
     public func stopStreaming() async throws -> TranscriptionResult? {
-        guard let session = streamingSession else { return nil }
-        let result = await session.stop()
-        streamingSession = nil
-        return result
+        let session = sessionLock.withLock { () -> VolcanoStreamingSession? in
+            let s = streamingSession
+            streamingSession = nil
+            return s
+        }
+        guard let session else { return nil }
+        return await session.stop()
     }
 
     private func resolvedStreamingResourceId() throws -> String {
-        let configured = try (resourceIdOverride ?? keyStore.retrieve(for: Self.resourceIdKeyId))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let configured = resolveResourceId()?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let mapped = Self.mapStreamingResourceId(configured)
         if !Self.isStreamingResourceId(mapped) {
@@ -206,15 +214,125 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
         return configured
     }
 
+    // MARK: - Key Resolution
+
+    private func resolveAppId() -> String? {
+        if let override = normalized(appIdOverride), !override.isEmpty {
+            return override
+        }
+        return firstNonEmptyValue(for: [
+            Self.appIdKeyId,
+            "volcano_appId",
+            "volcano_appid",
+            "volcano.app.id"
+        ])
+    }
+
+    private func resolveAccessKey() -> String? {
+        if let override = normalized(accessKeyOverride), !override.isEmpty {
+            return override
+        }
+        return firstNonEmptyValue(for: [
+            Self.accessKeyKeyId,
+            "volcano_token",
+            "volcano.accesskey",
+            "volcano_accesskey"
+        ])
+    }
+
+    private func resolveResourceId() -> String? {
+        if let override = normalized(resourceIdOverride), !override.isEmpty {
+            return override
+        }
+        return firstNonEmptyValue(for: [
+            Self.resourceIdKeyId,
+            "volcano_resourceId",
+            "volcano_resource.id",
+            "volcano_resource_id"
+        ])
+    }
+
+    private func resolveEndpoint() -> String? {
+        if let override = normalized(endpointOverride), !override.isEmpty {
+            return override
+        }
+        return firstNonEmptyValue(for: [
+            Self.endpointKeyId,
+            "volcano_api_endpoint",
+            "volcano_endpoint"
+        ])
+    }
+
+    private func firstNonEmptyValue(for keyIds: [String]) -> String? {
+        for keyId in keyIds {
+            if let value = (try? keyStore.retrieve(for: keyId))?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !value.isEmpty {
+                return value
+            }
+        }
+        return nil
+    }
+
     // MARK: - Private
 
     private func resolvedResourceId() throws -> String {
-        let resourceId = try (resourceIdOverride ?? keyStore.retrieve(for: Self.resourceIdKeyId))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resourceId = resolveResourceId()
         return (resourceId?.isEmpty == false) ? resourceId! : "volc.bigasr.auc_turbo"
     }
 
+    private func shouldFallbackToSubmitQuery(message: String) -> Bool {
+        let normalized = message.lowercased()
+        if normalized.contains("requested resource not granted") { return true }
+        if normalized.contains("45000030") { return true }
+        if normalized.contains("resource") && normalized.contains("not") { return true }
+        if normalized.contains("invalid resource") { return true }
+        if normalized.contains("no available resource") { return true }
+        if normalized.contains("model") && normalized.contains("not found") { return true }
+        if normalized.contains("bad request") { return true }
+        return false
+    }
+
+    private func fallbackResourceCandidates(for preferredResource: String, failureMessage: String) -> [String] {
+        let normalized = preferredResource.trimmingCharacters(in: .whitespacesAndNewlines)
+        let loweredMessage = failureMessage.lowercased()
+        var candidates: [String] = []
+
+        if !normalized.isEmpty {
+            candidates.append(normalized)
+        } else {
+            candidates.append("volc.bigasr.auc_turbo")
+        }
+
+        let knownResources = [
+            "volc.bigasr.auc_turbo",
+            "volc.bigasr.auc",
+            "volc.bigasr.auc.duration",
+            "volc.bigasr.sauc",
+            "volc.bigasr.sauc.duration",
+            "volc.seedasr.auc",
+            "volc.seedasr.auc.duration",
+            "volc.seedasr.sauc",
+            "volc.seedasr.sauc.duration",
+            "volc.bigasr.flash"
+        ]
+
+        for resource in knownResources {
+            if loweredMessage.contains(resource.lowercased()) {
+                continue
+            }
+            if !candidates.contains(resource) {
+                candidates.append(resource)
+            }
+        }
+
+        if candidates.isEmpty {
+            candidates = ["volc.bigasr.auc_turbo"]
+        }
+        return candidates
+    }
+
     private func resolvedEndpointURL() throws -> URL {
-        let endpoint = try (endpointOverride ?? keyStore.retrieve(for: Self.endpointKeyId))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let endpoint = resolveEndpoint()
         let endpointString = (endpoint?.isEmpty == false) ? endpoint! : "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
         guard let url = URL(string: endpointString) else {
             throw ASRError.apiError("Volcano endpoint is invalid: \(endpointString)")
