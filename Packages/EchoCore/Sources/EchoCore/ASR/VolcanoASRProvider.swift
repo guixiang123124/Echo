@@ -102,44 +102,37 @@ public final class VolcanoASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     public func startStreaming() -> AsyncStream<TranscriptionResult> {
-        do {
-            guard let appId = resolveAppId().flatMap(normalized),
-                  let accessKey = resolveAccessKey().flatMap(normalized),
-                  !appId.isEmpty, !accessKey.isEmpty else {
-                return AsyncStream { $0.finish() }
-            }
-
-            let resourceId: String
-            do {
-                let resolved = try resolvedStreamingResourceId()
-                resourceId = resolved
-                diagnosticsLog("stream resource selected=\(resourceId)")
-            } catch {
-                diagnosticsLog("stream resource resolution failed: \(error.localizedDescription)")
-                return AsyncStream { $0.finish() }
-            }
-
-            guard let streamEndpoint = URL(string: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async") else {
-                diagnosticsLog("invalid stream endpoint URL")
-                return AsyncStream { $0.finish() }
-            }
-            let config = VolcanoStreamingSession.Config(
-                appId: appId,
-                accessKey: accessKey,
-                resourceId: resourceId,
-                endpoint: streamEndpoint,
-                sampleRate: 16000,
-                enableITN: true,
-                enablePunc: true,
-                enableDDC: false
-            )
-
-            let session = VolcanoStreamingSession(config: config)
-            sessionLock.withLock { self.streamingSession = session }
-            return session.start()
-        } catch {
+        guard let appId = resolveAppId().flatMap(normalized),
+              let accessKey = resolveAccessKey().flatMap(normalized),
+              !appId.isEmpty, !accessKey.isEmpty else {
             return AsyncStream { $0.finish() }
         }
+
+        guard let resourceId = try? resolvedStreamingResourceId() else {
+            diagnosticsLog("stream resource resolution failed")
+            return AsyncStream { $0.finish() }
+        }
+        diagnosticsLog("stream resource selected=\(resourceId)")
+
+        guard let streamEndpoint = URL(string: "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async") else {
+            diagnosticsLog("invalid stream endpoint URL")
+            return AsyncStream { $0.finish() }
+        }
+
+        let config = VolcanoStreamingSession.Config(
+            appId: appId,
+            accessKey: accessKey,
+            resourceId: resourceId,
+            endpoint: streamEndpoint,
+            sampleRate: 16000,
+            enableITN: true,
+            enablePunc: true,
+            enableDDC: false
+        )
+
+        let session = VolcanoStreamingSession(config: config)
+        sessionLock.withLock { self.streamingSession = session }
+        return session.start()
     }
 
     private func normalized(_ value: String?) -> String? {
