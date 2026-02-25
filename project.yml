@@ -43,6 +43,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: iOS/EchoApp/EchoApp.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: D7BK236H9B
     info:
       path: iOS/EchoApp/Info.plist
       properties:
@@ -51,16 +52,19 @@ targets:
         CFBundleVersion: "1"
         LSApplicationQueriesSchemes:
           - echo
+          - echoapp
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - echo
+              - echoapp
             CFBundleURLName: com.xianggui.echo.app
           - CFBundleURLSchemes:
-              - com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com
-            CFBundleURLName: com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com
+              - com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau
+            CFBundleURLName: com.googleusercontent.apps.852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau
         NSMicrophoneUsageDescription: "Echo needs microphone access to transcribe your speech to text."
         NSSpeechRecognitionUsageDescription: "Echo uses speech recognition to convert your voice to text."
         GOOGLE_CLIENT_ID_IOS: "852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com"
+        CLOUD_API_BASE_URL: "https://echo-api-production-c83b.up.railway.app"
     entitlements:
       path: iOS/EchoApp/EchoApp.entitlements
       properties:
@@ -85,6 +89,7 @@ targets:
         INFOPLIST_FILE: iOS/EchoKeyboard/Info.plist
         CODE_SIGN_ENTITLEMENTS: iOS/EchoKeyboard/EchoKeyboard.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: D7BK236H9B
     info:
       path: iOS/EchoKeyboard/Info.plist
       properties:
@@ -136,6 +141,7 @@ targets:
         NSMicrophoneUsageDescription: "Echo needs microphone access to transcribe your speech to text."
         NSInputMonitoringUsageDescription: "Echo needs input monitoring to detect global hotkeys."
         GOOGLE_CLIENT_ID_MAC: "852034251160-6bdpkhrdcv5or59ogk8nort09hqfessa.apps.googleusercontent.com"
+        CLOUD_API_BASE_URL: "https://echo-api-production-c83b.up.railway.app"
     entitlements:
       path: macOS/EchoMac/EchoMac.entitlements
       properties:

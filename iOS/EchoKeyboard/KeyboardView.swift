@@ -135,27 +135,35 @@ struct KeyboardView: View {
     }
 
     private func openMainAppVoice() {
-        guard state.hasFullAccess else {
-            state.showToast("Enable Allow Full Access for Voice + AI")
-            return
-        }
+        print("[EchoKeyboard] openMainAppVoice called")
+        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
 
+        state.showToast("Opening Echo…")
         VoiceInputTrigger.openMainAppForVoice(from: state.viewController) { success in
+            print("[EchoKeyboard] openMainAppVoice result: \(success)")
             if !success {
-                state.showToast("Couldn't open Echo. Open the app and try again.")
+                if !state.hasOperationalFullAccess {
+                    state.showToast(state.fullAccessGuidance)
+                } else {
+                    state.showToast("Couldn't open Echo. Open the app and try again.")
+                }
             }
         }
     }
 
     private func openMainAppSettings() {
-        guard state.hasFullAccess else {
-            state.showToast("Enable Allow Full Access to open Echo settings")
-            return
-        }
+        print("[EchoKeyboard] openMainAppSettings called")
+        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
 
+        state.showToast("Opening Echo settings…")
         VoiceInputTrigger.openMainAppForSettings(from: state.viewController) { success in
+            print("[EchoKeyboard] openMainAppSettings result: \(success)")
             if !success {
-                state.showToast("Couldn't open Echo. Open the app and try again.")
+                if !state.hasOperationalFullAccess {
+                    state.showToast(state.fullAccessGuidance)
+                } else {
+                    state.showToast("Couldn't open Echo. Open the app and try again.")
+                }
             }
         }
     }
@@ -219,7 +227,7 @@ private struct KeyboardTopBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Settings - onTapGesture for keyboard extension compatibility
+            // Settings button - using onTapGesture for keyboard extension compatibility
             Image(systemName: "gearshape")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))
@@ -228,11 +236,13 @@ private struct KeyboardTopBar: View {
                     Circle().fill(EchoTheme.keySecondaryBackground)
                 )
                 .contentShape(Circle())
-                .onTapGesture { onOpenSettings() }
+                .onTapGesture {
+                    onOpenSettings()
+                }
 
             Spacer()
 
-            // Voice pill - onTapGesture for keyboard extension compatibility
+            // Voice button - using onTapGesture for keyboard extension compatibility
             EchoDictationPill(
                 isRecording: false,
                 isProcessing: false,
@@ -242,11 +252,13 @@ private struct KeyboardTopBar: View {
                 height: 30
             )
             .contentShape(Rectangle())
-            .onTapGesture { onTriggerVoice() }
+            .onTapGesture {
+                onTriggerVoice()
+            }
 
             Spacer()
 
-            // Collapse - onTapGesture for keyboard extension compatibility
+            // Collapse button - using onTapGesture for keyboard extension compatibility
             Image(systemName: "chevron.down")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))
@@ -255,7 +267,9 @@ private struct KeyboardTopBar: View {
                     Circle().fill(EchoTheme.keySecondaryBackground)
                 )
                 .contentShape(Circle())
-                .onTapGesture { onCollapse() }
+                .onTapGesture {
+                    onCollapse()
+                }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)

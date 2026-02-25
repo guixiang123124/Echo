@@ -1154,6 +1154,7 @@ struct AuthSheetView: View {
 
     @State private var email = ""
     @State private var password = ""
+    @State private var cloudAPIURL = ""
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
@@ -1164,6 +1165,24 @@ struct AuthSheetView: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Cloud Backend")
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    TextField("Cloud API URL", text: $cloudAPIURL)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Apply") {
+                        applyCloudAPIURL()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                if !authSession.isConfigured {
+                    Text("Apple/Google sign-in requires Cloud API URL.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             VStack(alignment: .leading, spacing: 12) {
@@ -1251,10 +1270,20 @@ struct AuthSheetView: View {
         }
         .padding(20)
         .frame(width: 420)
+        .onAppear {
+            bootstrapCloudAPIURLIfNeeded()
+        }
     }
 
     @MainActor
     private func signInWithGoogle() {
+        bootstrapCloudAPIURLIfNeeded()
+
+        guard authSession.isConfigured else {
+            authSession.errorMessage = "Google sign-in requires Cloud API URL. Add URL and tap Apply first."
+            return
+        }
+
         let clientID = (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID_MAC") as? String)
             ?? (Bundle.main.object(forInfoDictionaryKey: "GOOGLE_CLIENT_ID") as? String)
 
@@ -1286,7 +1315,12 @@ struct AuthSheetView: View {
         GIDSignIn.sharedInstance.signIn(withPresenting: presentingWindow) { result, error in
             if let error {
                 Task { @MainActor in
-                    self.authSession.errorMessage = error.localizedDescription
+                    let message = error.localizedDescription
+                    if message.lowercased().contains("canceled"), !self.authSession.isConfigured {
+                        self.authSession.errorMessage = "Google sign-in requires Cloud API URL. Add URL and tap Apply first."
+                    } else {
+                        self.authSession.errorMessage = message
+                    }
                 }
                 return
             }
@@ -1303,6 +1337,52 @@ struct AuthSheetView: View {
                 await self.authSession.signInWithGoogle(idToken: tokenString)
             }
         }
+    }
+
+    @MainActor
+    private func bootstrapCloudAPIURLIfNeeded() {
+        let resolved = resolvedCloudAPIURLCandidate()
+        if cloudAPIURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !resolved.isEmpty {
+            cloudAPIURL = resolved
+        }
+        if !resolved.isEmpty, !authSession.isConfigured {
+            let settings = MacAppSettings.shared
+            settings.cloudSyncBaseURL = resolved
+            authSession.configureBackend(baseURL: resolved)
+            CloudSyncService.shared.configure(
+                baseURLString: resolved,
+                uploadAudio: settings.cloudUploadAudioEnabled
+            )
+            BillingService.shared.configure(baseURLString: resolved)
+        }
+    }
+
+    @MainActor
+    private func resolvedCloudAPIURLCandidate() -> String {
+        let fromAuth = authSession.backendBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fromAuth.isEmpty {
+            return fromAuth
+        }
+        let fromSettings = MacAppSettings.shared.cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !fromSettings.isEmpty {
+            return fromSettings
+        }
+        let fromBundle = (Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return fromBundle
+    }
+
+    @MainActor
+    private func applyCloudAPIURL() {
+        let normalized = cloudAPIURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let settings = MacAppSettings.shared
+        settings.cloudSyncBaseURL = normalized
+        authSession.configureBackend(baseURL: normalized)
+        CloudSyncService.shared.configure(
+            baseURLString: normalized,
+            uploadAudio: settings.cloudUploadAudioEnabled
+        )
+        BillingService.shared.configure(baseURLString: normalized)
     }
 }
 

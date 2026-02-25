@@ -74,22 +74,24 @@ struct VoiceRecordingView: View {
                     }
                 }
 
-                ToolbarItemGroup(placement: .keyboard) {
-                    KeyboardAccessoryBar(
-                        isRecording: viewModel.isRecording,
-                        isProcessing: viewModel.isProcessing,
-                        audioLevels: viewModel.audioLevels,
-                        tipText: viewModel.tipText,
-                        onToggleRecording: {
-                            Task { await viewModel.toggleRecording() }
-                        },
-                        onOpenSettings: {
-                            showSettings = true
-                        },
-                        onDismissKeyboard: {
-                            isFocused = false
-                        }
-                    )
+                if !startForKeyboard {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        KeyboardAccessoryBar(
+                            isRecording: viewModel.isRecording,
+                            isProcessing: viewModel.isProcessing,
+                            audioLevels: viewModel.audioLevels,
+                            tipText: viewModel.tipText,
+                            onToggleRecording: {
+                                Task { await viewModel.toggleRecording() }
+                            },
+                            onOpenSettings: {
+                                showSettings = true
+                            },
+                            onDismissKeyboard: {
+                                isFocused = false
+                            }
+                        )
+                    }
                 }
             }
             .alert("Error", isPresented: $viewModel.showError) {
@@ -288,7 +290,7 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         // Resolve ASR provider based on Settings.
         guard let providerResult = resolveASRProvider() else {
-            showErrorMessage("Speech recognition is not configured. Add your API key in Settings > API Keys.")
+            showErrorMessage("Speech recognition is not configured. Add provider keys in Settings > API Keys, or configure your Cloud API URL for backend-managed auth/sync.")
             return
         }
         let provider = providerResult.provider
@@ -905,21 +907,27 @@ final class VoiceRecordingViewModel: ObservableObject {
         if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
             return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
         }
+        if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+            return ASRProviderResolutionResult(provider: proxyProvider, usedFallback: false, fallbackMessage: "")
+        }
 
         if selectedId == "openai_whisper" {
             let provider = OpenAIWhisperProvider(
                 keyStore: keyStore,
-                model: "gpt-4o-transcribe"
+                model: settings.openAITranscriptionModel
             )
             if provider.isAvailable {
                 return ASRProviderResolutionResult(provider: provider, usedFallback: false, fallbackMessage: "")
+            }
+            if let proxyProvider = resolveCloudProxyProvider(for: "openai_whisper") {
+                return ASRProviderResolutionResult(provider: proxyProvider, usedFallback: false, fallbackMessage: "")
             }
             return nil
         }
 
         let fallback = OpenAIWhisperProvider(
             keyStore: keyStore,
-            model: "gpt-4o-transcribe"
+            model: settings.openAITranscriptionModel
         )
         if fallback.isAvailable {
             return ASRProviderResolutionResult(
@@ -929,7 +937,46 @@ final class VoiceRecordingViewModel: ObservableObject {
             )
         }
 
+        if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
+            return ASRProviderResolutionResult(
+                provider: proxyFallback,
+                usedFallback: true,
+                fallbackMessage: "fallback: selected provider unavailable, using backend OpenAI proxy"
+            )
+        }
+
         return nil
+    }
+
+    private func resolveCloudProxyProvider(for providerId: String) -> (any ASRProvider)? {
+        let token = authSession.accessToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let baseURL = authSession.backendBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, !baseURL.isEmpty else { return nil }
+
+        let model: String?
+        let language: String?
+        switch providerId {
+        case "deepgram":
+            model = settings.deepgramModel
+            language = deepgramLanguageHint(from: settings.defaultInputMode)
+        case "openai_whisper":
+            model = settings.openAITranscriptionModel
+            language = settings.defaultInputMode == "pinyin" ? "zh" : nil
+        case "volcano":
+            model = nil
+            language = settings.defaultInputMode == "pinyin" ? "zh-CN" : nil
+        default:
+            return nil
+        }
+
+        let provider = BackendProxyASRProvider(
+            providerId: providerId,
+            backendBaseURL: baseURL,
+            accessToken: token,
+            model: model,
+            language: language
+        )
+        return provider.isAvailable ? provider : nil
     }
 
     private func asrProvider(for providerId: String) -> (any ASRProvider)? {
@@ -939,7 +986,7 @@ final class VoiceRecordingViewModel: ObservableObject {
             return provider.isAvailable ? provider : nil
         case "deepgram":
             let languageHint = deepgramLanguageHint(from: settings.defaultInputMode)
-            let resolvedModel = deepgramModelHint(from: settings.defaultInputMode)
+            let resolvedModel = settings.deepgramModel
             let provider = DeepgramASRProvider(
                 keyStore: keyStore,
                 model: resolvedModel,
@@ -950,18 +997,9 @@ final class VoiceRecordingViewModel: ObservableObject {
             // Default to OpenAI Whisper (batch transcription).
             let provider = OpenAIWhisperProvider(
                 keyStore: keyStore,
-                model: "gpt-4o-transcribe"
+                model: settings.openAITranscriptionModel
             )
             return provider.isAvailable ? provider : nil
-        }
-    }
-
-    private func deepgramModelHint(from inputMode: String) -> String {
-        switch inputMode {
-        case "pinyin":
-            return "nova-2"
-        default:
-            return "nova-3"
         }
     }
 
@@ -1308,7 +1346,7 @@ final class VoiceRecordingViewModel: ObservableObject {
         }
         let fallback = OpenAIWhisperProvider(
             keyStore: keyStore,
-            model: "gpt-4o-transcribe"
+            model: settings.openAITranscriptionModel
         )
         guard fallback.isAvailable else { return nil }
         return fallback

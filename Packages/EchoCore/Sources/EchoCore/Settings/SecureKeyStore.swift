@@ -13,7 +13,7 @@ public struct SecureKeyStore: Sendable {
 
     /// Store an API key securely
     public func store(key: String, for provider: String) throws {
-#if os(macOS) && DEBUG
+#if DEBUG
         // Dev path: keep UserDefaults fast-path, but also mirror to Keychain so
         // values are visible across processes (App <-> CLI benchmark tools).
         UserDefaults.standard.set(key, forKey: devDefaultsKey(for: provider))
@@ -32,7 +32,7 @@ public struct SecureKeyStore: Sendable {
             return cached
         }
 
-#if os(macOS) && DEBUG
+#if DEBUG
         // Debug mode: prefer UserDefaults (no prompt), then fallback to Keychain
         // so CLI can still read keys entered by the app and vice versa.
         if let key = UserDefaults.standard.string(forKey: devDefaultsKey(for: provider)), !key.isEmpty {
@@ -53,7 +53,7 @@ public struct SecureKeyStore: Sendable {
 
     /// Delete an API key
     public func delete(for provider: String) throws {
-#if os(macOS) && DEBUG
+#if DEBUG
         UserDefaults.standard.removeObject(forKey: devDefaultsKey(for: provider))
         try deleteFromKeychain(for: provider)
         clearCachedValue(for: provider)
@@ -70,7 +70,7 @@ public struct SecureKeyStore: Sendable {
             return true
         }
 
-#if os(macOS) && DEBUG
+#if DEBUG
         if UserDefaults.standard.string(forKey: devDefaultsKey(for: provider))?.isEmpty == false {
             return true
         }

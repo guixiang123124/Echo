@@ -68,8 +68,15 @@ public final class EchoAuthSession: ObservableObject {
     }
 
     public func start() {
-        backendBaseURL = defaults.string(forKey: Keys.backendBaseURL) ?? ""
-        isConfigured = normalizedBackendURLString != nil
+        let persistedURL = normalize(defaults.string(forKey: Keys.backendBaseURL))
+        let appSettingsURL = normalize(AppSettings().cloudSyncBaseURL)
+        let bundledURL = bundledBackendURLString
+        let resolved = persistedURL ?? appSettingsURL ?? bundledURL
+        backendBaseURL = resolved ?? ""
+        if persistedURL == nil, let resolved {
+            defaults.set(resolved, forKey: Keys.backendBaseURL)
+        }
+        isConfigured = resolved != nil
         restoreSession()
     }
 
@@ -93,6 +100,7 @@ public final class EchoAuthSession: ObservableObject {
     }
 
     public func signIn(email: String, password: String) async {
+        guard !isLoading else { return }
         errorMessage = nil
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedEmail.isEmpty, !password.isEmpty else {
@@ -128,6 +136,7 @@ public final class EchoAuthSession: ObservableObject {
     }
 
     public func signUp(email: String, password: String) async {
+        guard !isLoading else { return }
         errorMessage = nil
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedEmail.isEmpty, !password.isEmpty else {
@@ -162,6 +171,7 @@ public final class EchoAuthSession: ObservableObject {
     }
 
     public func signInWithApple(credential: ASAuthorizationAppleIDCredential, nonce: String) async {
+        guard !isLoading else { return }
         errorMessage = nil
 
         guard let backendBaseURL = normalizedBackendURLString else {
@@ -205,6 +215,7 @@ public final class EchoAuthSession: ObservableObject {
     }
 
     public func signInWithGoogle(idToken: String) async {
+        guard !isLoading else { return }
         errorMessage = nil
 
         guard let backendBaseURL = normalizedBackendURLString else {
@@ -256,6 +267,13 @@ public final class EchoAuthSession: ObservableObject {
 private extension EchoAuthSession {
     var normalizedBackendURLString: String? {
         normalize(backendBaseURL)
+    }
+
+    var bundledBackendURLString: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String else {
+            return nil
+        }
+        return normalize(raw)
     }
 
     func normalize(_ raw: String?) -> String? {
@@ -338,6 +356,7 @@ private extension EchoAuthSession {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(payload)
+        request.timeoutInterval = 20
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {

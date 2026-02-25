@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -85,7 +85,7 @@
 		2BCB0395E05C1ED9A4EB7D32 /* EchoAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoAccountView.swift; sourceTree = "<group>"; };
 		2BCD9DEAE8F92647CA0ACC0F /* AppGroupBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGroupBridge.swift; sourceTree = "<group>"; };
 		2E4E62FF3DB13310FFFADD70 /* VoiceInputTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputTrigger.swift; sourceTree = "<group>"; };
-		316A6A48741F39BFAE952EAC /* EchoKeyboard.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = EchoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		316A6A48741F39BFAE952EAC /* EchoKeyboard.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = EchoKeyboard.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		3264015A559436A02F9AC5E0 /* EchoHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EchoHomeView.swift; sourceTree = "<group>"; };
 		3A46ADD2A184BAA35E1972A3 /* EchoApp.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EchoApp.entitlements; sourceTree = "<group>"; };
 		3B159DB9FC5EDFF798E7FDA9 /* EchoKeyboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = EchoKeyboard.entitlements; sourceTree = "<group>"; };
@@ -93,7 +93,7 @@
 		42504B6C26D7B81C526FDB02 /* SettingsWindowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowView.swift; sourceTree = "<group>"; };
 		428E1139BCE059371A2BD55B /* RecordingHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingHistoryView.swift; sourceTree = "<group>"; };
 		44DAB73DB615073C7B1C28C0 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		5D949C3AB54EA114F4019414 /* EchoApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5D949C3AB54EA114F4019414 /* EchoApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = EchoApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		60E6B8DB8104A64E3D8931F0 /* PinyinKeyboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinyinKeyboardView.swift; sourceTree = "<group>"; };
 		649DABD8990CCB215783B7DB /* VoiceInputService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInputService.swift; sourceTree = "<group>"; };
 		6BD25056283CAB3E7823FAD8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -376,6 +376,12 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					40675497E1E8EB0044625C3C = {
+						DevelopmentTeam = D7BK236H9B;
+					};
+					5DDBE07F0CAB146B16894090 = {
+						DevelopmentTeam = D7BK236H9B;
+					};
 					B3329956549C2F8A92D0A105 = {
 						DevelopmentTeam = D7BK236H9B;
 						ProvisioningStyle = Automatic;
@@ -397,6 +403,7 @@
 				786DD5B6A3392D99E938D35E /* XCLocalSwiftPackageReference "Packages/EchoCore" */,
 				5131C4151E47DFE8DC3DADF5 /* XCLocalSwiftPackageReference "Packages/EchoUI" */,
 			);
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -555,7 +562,9 @@
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
 				SDKROOT = macosx;
@@ -572,7 +581,9 @@
 				DEVELOPMENT_TEAM = D7BK236H9B;
 				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = macOS/EchoMac/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.xianggui.echo.mac;
 				SDKROOT = macosx;
@@ -631,7 +642,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -696,7 +707,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

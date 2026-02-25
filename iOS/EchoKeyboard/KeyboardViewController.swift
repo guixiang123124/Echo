@@ -6,9 +6,11 @@ import EchoCore
 class KeyboardViewController: UIInputViewController {
     private var hostingController: UIHostingController<KeyboardView>?
     private let keyboardState = KeyboardState()
+    private var transcriptionPollTimer: Timer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        print("[EchoKeyboard] viewDidLoad")
 
         let keyboardView = KeyboardView(
             state: keyboardState,
@@ -28,6 +30,7 @@ class KeyboardViewController: UIInputViewController {
 
         // Set the view controller reference for opening URLs
         keyboardState.viewController = self
+        print("[EchoKeyboard] viewController set, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
 
         NSLayoutConstraint.activate([
             hostingController.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -41,7 +44,14 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        print("[EchoKeyboard] viewWillAppear, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
         checkForPendingTranscription()
+        startTranscriptionPolling()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        stopTranscriptionPolling()
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
@@ -57,6 +67,22 @@ class KeyboardViewController: UIInputViewController {
             guard !trimmed.isEmpty else { return }
             textDocumentProxy.insertText(trimmed)
         }
+    }
+
+    private func startTranscriptionPolling() {
+        guard transcriptionPollTimer == nil else { return }
+        transcriptionPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.checkForPendingTranscription()
+        }
+    }
+
+    private func stopTranscriptionPolling() {
+        transcriptionPollTimer?.invalidate()
+        transcriptionPollTimer = nil
+    }
+
+    deinit {
+        stopTranscriptionPolling()
     }
 }
 
@@ -85,7 +111,23 @@ class KeyboardState: ObservableObject {
     }
 
     var hasFullAccess: Bool {
-        (viewController as? UIInputViewController)?.hasFullAccess ?? false
+        let access = (viewController as? UIInputViewController)?.hasFullAccess ?? false
+        print("[KeyboardState] hasFullAccess check: viewController exists = \(viewController != nil), access = \(access)")
+        return access
+    }
+
+    var hasOperationalFullAccess: Bool {
+        hasFullAccess
+    }
+
+    var fullAccessGuidance: String {
+        if !hasFullAccess {
+            return "Enable Allow Full Access in iOS Keyboard settings"
+        }
+        if !AppGroupBridge.hasSharedContainerAccess {
+            return "Shared keyboard access unavailable. Reopen Echo Keyboard once."
+        }
+        return "Ready to open Echo"
     }
 
     func showToast(_ message: String, duration: TimeInterval = 1.8) {
