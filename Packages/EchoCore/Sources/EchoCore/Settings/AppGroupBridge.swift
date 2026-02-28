@@ -66,6 +66,7 @@ public struct AppGroupBridge: Sendable {
         // Dictation state
         static let dictationState = "echo.dictation.state"
         static let dictationSessionId = "echo.dictation.sessionId"
+        static let dictationStateAt = "echo.dictation.stateAt"
         // Streaming partial
         static let streamingText = "echo.streaming.text"
         static let streamingSequence = "echo.streaming.sequence"
@@ -273,6 +274,7 @@ public struct AppGroupBridge: Sendable {
     public func setDictationState(_ state: DictationState, sessionId: String) {
         bridgeDefaults.set(state.rawValue, forKey: Keys.dictationState)
         bridgeDefaults.set(sessionId, forKey: Keys.dictationSessionId)
+        bridgeDefaults.set(Date().timeIntervalSince1970, forKey: Keys.dictationStateAt)
         bridgeDefaults.synchronize()
     }
 
@@ -284,6 +286,35 @@ public struct AppGroupBridge: Sendable {
         }
         let sessionId = bridgeDefaults.string(forKey: Keys.dictationSessionId) ?? ""
         return (state, sessionId)
+    }
+
+    /// Returns whether the dictation state was written within the provided age.
+    public func hasRecentDictationState(maxAge: TimeInterval) -> Bool {
+        let timestamp = bridgeDefaults.double(forKey: Keys.dictationStateAt)
+        guard timestamp > 0 else { return false }
+        let age = Date().timeIntervalSince1970 - timestamp
+        return age >= 0 && age <= maxAge
+    }
+
+    /// Read dictation state with its timestamp.
+    public func readDictationStateWithTimestamp() -> (state: DictationState, sessionId: String, at: TimeInterval)? {
+        guard let raw = bridgeDefaults.string(forKey: Keys.dictationState),
+              let state = DictationState(rawValue: raw) else {
+            return nil
+        }
+
+        let sessionId = bridgeDefaults.string(forKey: Keys.dictationSessionId) ?? ""
+        let timestamp = bridgeDefaults.double(forKey: Keys.dictationStateAt)
+        guard timestamp > 0 else { return nil }
+        return (state: state, sessionId: sessionId, at: timestamp)
+    }
+
+    /// Clear persisted dictation state.
+    public func clearDictationState() {
+        bridgeDefaults.removeObject(forKey: Keys.dictationState)
+        bridgeDefaults.removeObject(forKey: Keys.dictationSessionId)
+        bridgeDefaults.removeObject(forKey: Keys.dictationStateAt)
+        bridgeDefaults.synchronize()
     }
 
     // MARK: - Streaming Partial IPC

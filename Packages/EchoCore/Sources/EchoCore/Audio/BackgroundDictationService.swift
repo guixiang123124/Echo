@@ -125,6 +125,29 @@ public final class BackgroundDictationService: ObservableObject {
         await performStopDictation()
     }
 
+    /// Start dictation specifically for a keyboard intent. Handles edge cases like
+    /// already-recording sessions or finalizing state.
+    public func startDictationForKeyboardIntent() async {
+        switch state {
+        case .idle, .error:
+            await performStartDictation()
+
+        case .recording, .transcribing:
+            if hasActiveRecordingPipeline() {
+                return
+            }
+            await recoverAndRestartDictationSession()
+
+        case .finalizing:
+            let becameIdle = await waitForStateToBecomeIdle(timeout: 1.0)
+            if becameIdle {
+                await performStartDictation()
+            } else {
+                await recoverAndRestartDictationSession()
+            }
+        }
+    }
+
     /// Toggle dictation (start if idle, stop if recording/transcribing).
     public func toggleDictation() async {
         switch state {
@@ -564,6 +587,49 @@ public final class BackgroundDictationService: ObservableObject {
                 print("[BackgroundDictation] Idle timeout — audio engine stopped, session deactivated")
             }
         }
+    }
+
+    // MARK: - Session Recovery
+
+    private func recoverAndRestartDictationSession() async {
+        if state == .recording || state == .transcribing {
+            await performStopDictation()
+        } else {
+            recordingTask?.cancel()
+            streamingResultTask?.cancel()
+            recordingTask = nil
+            streamingResultTask = nil
+        }
+
+        state = .idle
+        bridge.setRecording(false)
+        bridge.setDictationState(.idle, sessionId: sessionId)
+        darwin.post(.stateChanged)
+        currentProvider = nil
+        await performStartDictation()
+    }
+
+    private func hasActiveRecordingPipeline() -> Bool {
+        guard state == .recording || state == .transcribing else { return false }
+
+        if let recordingTask, !recordingTask.isCancelled {
+            return true
+        }
+        if let streamingResultTask, !streamingResultTask.isCancelled {
+            return true
+        }
+        return audioService?.isEngineRunning ?? false
+    }
+
+    private func waitForStateToBecomeIdle(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if case .idle = state {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 60_000_000)
+        }
+        return false
     }
 
     // MARK: - Helpers

@@ -7,12 +7,14 @@ class KeyboardViewController: UIInputViewController {
    private var hostingController: UIHostingController<KeyboardView>?
    private let keyboardState = KeyboardState()
    private var transcriptionPollTimer: Timer?
-
-   // Streaming text injection tracking
+   private var dictationNotificationTokens: [DarwinNotificationCenter.ObservationToken] = []
    private var lastStreamingSequence: Int = 0
-   private var lastInjectedLength: Int = 0
-   private var currentStreamingSessionId: String = ""
-   private var transcriptionReadyToken: DarwinNotificationCenter.ObservationToken?
+   private var activeStreamingSessionId: String = ""
+   private var lastStreamingText: String = ""
+   private var lastFinalStreamingText: String = ""
+   private var lastFinalStreamingAt: Date = .distantPast
+   private let staleDictationStateWindow: TimeInterval = 2.6
+   private var lastObservedDictationSessionId: String?
 
    override func viewDidLoad() {
        super.viewDidLoad()
@@ -48,18 +50,20 @@ class KeyboardViewController: UIInputViewController {
        self.hostingController = hostingController
    }
 
-   override func viewWillAppear(_ animated: Bool) {
-       super.viewWillAppear(animated)
-       print("[EchoKeyboard] viewWillAppear, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
-       checkForPendingTranscription()
-       startTranscriptionPolling()
-       startStreamingObservation()
-   }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        print("[EchoKeyboard] viewWillAppear, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
+        clearStaleStreamingStateIfNeeded()
+        syncStreamingStateFromBridge()
+        checkForPendingTranscription()
+        startTranscriptionPolling()
+        startDictationObservers()
+    }
 
    override func viewWillDisappear(_ animated: Bool) {
        super.viewWillDisappear(animated)
        stopTranscriptionPolling()
-       stopStreamingObservation()
+       stopDictationObservers()
    }
 
    override func textDidChange(_ textInput: UITextInput?) {
@@ -69,66 +73,66 @@ class KeyboardViewController: UIInputViewController {
 
    /// Check if the main app has returned a voice transcription
    private func checkForPendingTranscription() {
-       let bridge = AppGroupBridge()
-       if let transcription = bridge.receivePendingTranscription() {
+        let bridge = AppGroupBridge()
+       clearStaleStreamingStateIfNeeded()
+
+        if consumeStreamingPartial(from: bridge) {
+            return
+        }
+
+        if let transcription = bridge.receivePendingTranscription() {
            let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
            guard !trimmed.isEmpty else { return }
-           textDocumentProxy.insertText(trimmed)
-       }
-   }
 
-   // MARK: - Streaming Text Injection
-
-   private func startStreamingObservation() {
-       guard transcriptionReadyToken == nil else { return }
-       transcriptionReadyToken = DarwinNotificationCenter.shared.observe(.transcriptionReady) { [weak self] in
-           DispatchQueue.main.async {
-               self?.handleStreamingPartialReady()
+           // Avoid duplicate insertion when stream final also writes legacy pending text.
+           if Date().timeIntervalSince(lastFinalStreamingAt) <= 3,
+              !lastFinalStreamingText.isEmpty,
+              trimmed == lastFinalStreamingText {
+               return
            }
-       }
-       print("[EchoKeyboard] Started streaming observation")
-   }
+           textDocumentProxy.insertText(trimmed)
+        }
+    }
 
-   private func stopStreamingObservation() {
-       if let token = transcriptionReadyToken {
-           DarwinNotificationCenter.shared.removeObservation(token)
-           transcriptionReadyToken = nil
-       }
-   }
-
-   private func handleStreamingPartialReady() {
+   private func clearStaleStreamingStateIfNeeded() {
        let bridge = AppGroupBridge()
-       guard let partial = bridge.readStreamingPartial() else { return }
+       let stateIsFresh = bridge.hasRecentDictationState(maxAge: staleDictationStateWindow)
+       let hasStreamingData = bridge.readStreamingPartial() != nil
+       let hasLegacyPendingText = bridge.hasPendingTranscription
 
-       // New session — reset tracking
-       if partial.sessionId != currentStreamingSessionId {
-           currentStreamingSessionId = partial.sessionId
-           lastStreamingSequence = 0
-           lastInjectedLength = 0
+       if let dictationState = bridge.readDictationState() {
+           if stateIsFresh, dictationState.state != .idle {
+               return
+           }
+           if stateIsFresh,
+              dictationState.state == .idle,
+              (hasStreamingData || hasLegacyPendingText) {
+               return
+           }
+       } else if stateIsFresh {
+           return
        }
 
-       // Only process newer sequences
-       guard partial.sequence > lastStreamingSequence else { return }
-       lastStreamingSequence = partial.sequence
-
-       let newText = partial.text.trimmingCharacters(in: .whitespacesAndNewlines)
-       guard !newText.isEmpty else { return }
-
-       // Delete previously injected text, then insert the updated text
-       for _ in 0..<lastInjectedLength {
-           textDocumentProxy.deleteBackward()
-       }
-       textDocumentProxy.insertText(newText)
-       lastInjectedLength = newText.count
-
-       print("[EchoKeyboard] Injected streaming partial seq=\(partial.sequence) len=\(newText.count) final=\(partial.isFinal)")
-
-       // If this is the final result, reset tracking for next session
-       if partial.isFinal {
-           lastInjectedLength = 0
-           lastStreamingSequence = 0
-       }
+        resetStreamingStateTracking()
+        bridge.clearStreamingData()
+        _ = bridge.receivePendingTranscription()
    }
+
+    private func syncStreamingStateFromBridge() {
+       let bridge = AppGroupBridge()
+       guard let dictationState = bridge.readDictationState() else { return }
+
+       let currentSession = dictationState.sessionId
+
+       if let previousSession = lastObservedDictationSessionId,
+          !previousSession.isEmpty,
+          !currentSession.isEmpty,
+          previousSession != currentSession {
+           resetStreamingStateTracking()
+       }
+
+       lastObservedDictationSessionId = currentSession
+    }
 
    private func startTranscriptionPolling() {
        guard transcriptionPollTimer == nil else { return }
@@ -142,9 +146,113 @@ class KeyboardViewController: UIInputViewController {
        transcriptionPollTimer = nil
    }
 
+   private func startDictationObservers() {
+       stopDictationObservers()
+       let darwin = DarwinNotificationCenter.shared
+
+       dictationNotificationTokens.append(
+           darwin.observe(.transcriptionReady) { [weak self] in
+               DispatchQueue.main.async { [weak self] in
+                   self?.checkForPendingTranscription()
+               }
+           }
+       )
+
+        dictationNotificationTokens.append(
+            darwin.observe(.stateChanged) { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                   self?.keyboardState.syncVoiceState()
+                   self?.syncStreamingStateFromBridge()
+                   self?.checkForPendingTranscription()
+                }
+            }
+        )
+
+        dictationNotificationTokens.append(
+            darwin.observe(.heartbeat) { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                   self?.keyboardState.syncVoiceState()
+                   self?.clearStaleStreamingStateIfNeeded()
+                }
+            }
+        )
+   }
+
+   private func stopDictationObservers() {
+       dictationNotificationTokens.forEach { token in
+           DarwinNotificationCenter.shared.removeObservation(token)
+       }
+       dictationNotificationTokens.removeAll()
+   }
+
+   private func consumeStreamingPartial(from bridge: AppGroupBridge) -> Bool {
+       guard bridge.hasRecentDictationState(maxAge: staleDictationStateWindow) || bridge.hasRecentHeartbeat(maxAge: staleDictationStateWindow + 0.5) else {
+           resetStreamingStateTracking()
+           bridge.clearStreamingData()
+           return false
+       }
+
+       guard let partial = bridge.readStreamingPartial() else {
+            return false
+        }
+
+       guard !partial.sessionId.isEmpty else {
+           return false
+       }
+
+       if partial.sessionId != activeStreamingSessionId {
+           activeStreamingSessionId = partial.sessionId
+           lastStreamingSequence = 0
+           lastStreamingText = ""
+       }
+
+       if partial.sequence <= lastStreamingSequence {
+           return false
+       }
+       lastStreamingSequence = partial.sequence
+
+       let trimmed = partial.text.trimmingCharacters(in: .whitespacesAndNewlines)
+       guard !trimmed.isEmpty else {
+           if partial.isFinal {
+               lastFinalStreamingText = ""
+               lastFinalStreamingAt = Date()
+               bridge.clearStreamingData()
+           }
+           return false
+       }
+
+       replaceTextInInput(trimmed)
+
+       if partial.isFinal {
+           lastFinalStreamingText = trimmed
+           lastFinalStreamingAt = Date()
+           bridge.clearStreamingData()
+       }
+
+       return true
+   }
+
+   private func replaceTextInInput(_ text: String) {
+        if !lastStreamingText.isEmpty {
+           for _ in 0..<lastStreamingText.utf16.count {
+               textDocumentProxy.deleteBackward()
+           }
+       }
+        textDocumentProxy.insertText(text)
+        lastStreamingText = text
+   }
+
+   private func resetStreamingStateTracking() {
+       activeStreamingSessionId = ""
+       lastStreamingSequence = 0
+       lastStreamingText = ""
+       lastFinalStreamingText = ""
+       lastFinalStreamingAt = .distantPast
+   }
+
    deinit {
        stopTranscriptionPolling()
-       stopStreamingObservation()
+       stopDictationObservers()
    }
 }
 
@@ -159,8 +267,9 @@ class KeyboardState: ObservableObject {
    @Published var toastVisible: Bool = false
    /// Voice recording state - synced from main app via AppGroupBridge
    @Published var isVoiceRecording: Bool = false
-    /// Whether background dictation is alive (heartbeat within 6s)
-    @Published var isBackgroundDictationAlive: Bool = false
+   /// Whether background dictation is alive (heartbeat within 6s)
+   @Published var isBackgroundDictationAlive: Bool = false
+   private let dictationStateFreshnessWindow: TimeInterval = 2.6
 
    let pinyinEngine = PinyinEngine()
    let actionHandler = KeyboardActionHandler()
@@ -188,11 +297,21 @@ class KeyboardState: ObservableObject {
    }
 
    /// Sync voice recording state from AppGroupBridge
-    private func syncVoiceState() {
+   func syncVoiceState() {
        let bridge = AppGroupBridge()
-       isVoiceRecording = bridge.isRecording
-       isBackgroundDictationAlive = bridge.isEngineHealthy
-    }
+       if bridge.hasRecentDictationState(maxAge: dictationStateFreshnessWindow),
+          let dictationState = bridge.readDictationState() {
+           isVoiceRecording = switch dictationState.state {
+           case .recording, .transcribing, .finalizing:
+               true
+           case .idle, .error:
+               false
+           }
+       } else {
+           isVoiceRecording = bridge.isRecording
+       }
+       isBackgroundDictationAlive = bridge.hasRecentHeartbeat(maxAge: 6)
+   }
 
    deinit {
        voiceStateTimer?.invalidate()

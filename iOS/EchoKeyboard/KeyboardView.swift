@@ -9,20 +9,19 @@ struct KeyboardView: View {
    let textDocumentProxy: UITextDocumentProxy
    let onNextKeyboard: () -> Void
 
-   var body: some View {
+    var body: some View {
        VStack(spacing: 0) {
            KeyboardTopBar(
-               isBackgroundDictationAlive: state.isBackgroundDictationAlive,
-               isVoiceRecording: state.isVoiceRecording,
-               onTriggerVoice: {
-                   openMainAppVoice()
-               },
-               onCollapse: {
-                   (state.viewController as? UIInputViewController)?.dismissKeyboard()
-               }
-           )
+            isVoiceRecording: state.isVoiceRecording,
+            onTriggerVoice: {
+                openMainAppVoice()
+            },
+            onCollapse: {
+                (state.viewController as? UIInputViewController)?.dismissKeyboard()
+            }
+            )
 
-           // Candidate bar (for Pinyin mode)
+        // Candidate bar (for Pinyin mode)
            if state.inputMode == .pinyin && !state.pinyinCandidates.isEmpty {
                CandidateBarView(
                    candidates: state.pinyinCandidates,
@@ -224,7 +223,6 @@ struct KeyboardView: View {
 // MARK: - Top Bar
 
 private struct KeyboardTopBar: View {
-   let isBackgroundDictationAlive: Bool
    let isVoiceRecording: Bool
    let onTriggerVoice: () -> Void
    let onCollapse: () -> Void
@@ -242,40 +240,22 @@ private struct KeyboardTopBar: View {
                    )
            }
 
-           Spacer()
+        Spacer()
 
-           // Voice button — conditional: Darwin notification if engine alive, Link to open app otherwise
-           if isBackgroundDictationAlive {
-               Button {
-                   let darwin = DarwinNotificationCenter.shared
-                   if isVoiceRecording {
-                       darwin.post(.dictationStop)
-                   } else {
-                       darwin.post(.dictationStart)
-                   }
-               } label: {
-                   EchoDictationPill(
-                       isRecording: isVoiceRecording,
-                       isProcessing: false,
-                       levels: [],
-                       tipText: isVoiceRecording ? "Tap to stop" : nil,
-                       width: 150,
-                       height: 30
-                   )
-               }
-               .buttonStyle(.plain)
-           } else {
-               Link(destination: AppGroupBridge.voiceInputURL) {
-                   EchoDictationPill(
-                       isRecording: false,
-                       isProcessing: false,
-                       levels: [],
-                       tipText: nil,
-                       width: 150,
-                       height: 30
-                   )
-               }
+           // Voice button — unified trigger path with Start/Stop fallback handling.
+           Button {
+               onTriggerVoice()
+           } label: {
+               EchoDictationPill(
+                   isRecording: isVoiceRecording,
+                   isProcessing: false,
+                   levels: [],
+                   tipText: isVoiceRecording ? "Tap to stop" : nil,
+                   width: 150,
+                   height: 30
+               )
            }
+           .buttonStyle(.plain)
 
            Spacer()
 

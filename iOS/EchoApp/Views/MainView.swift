@@ -1,5 +1,6 @@
 import SwiftUI
 import EchoCore
+import UIKit
 
 struct MainView: View {
    private enum Tab: Int {
@@ -15,6 +16,7 @@ struct MainView: View {
 
    @State private var selectedTab: Tab = .home
    @State private var deepLink: DeepLink?
+   @State private var isHandlingKeyboardVoiceIntent = false
    @EnvironmentObject var authSession: EchoAuthSession
    @EnvironmentObject var backgroundDictation: BackgroundDictationService
    @Environment(\.scenePhase) private var scenePhase
@@ -52,7 +54,7 @@ struct MainView: View {
            BillingService.shared.updateAuthState(user: user)
            Task { await BillingService.shared.refresh() }
        }
-       .onOpenURL { url in
+    .onOpenURL { url in
            print("[EchoApp] onOpenURL received: \(url.absoluteString)")
            guard url.scheme == "echo" || url.scheme == "echoapp" else {
                print("[EchoApp] onOpenURL ignored due unsupported scheme: \(url.scheme ?? "<none>")")
@@ -77,16 +79,11 @@ struct MainView: View {
                selectedTab = .account
                deepLink = nil
            case "voice":
-               let bridge = AppGroupBridge()
-               bridge.markLaunchAcknowledged()
-               bridge.clearPendingLaunchIntent()
-               // Start dictation directly — no VoiceRecordingView sheet needed
-               Task { await backgroundDictation.startDictation() }
-               print("[EchoApp] voice deep link: started background dictation directly")
-           case "settings":
-               deepLink = .settings
-               AppGroupBridge().markLaunchAcknowledged()
-               AppGroupBridge().clearPendingLaunchIntent()
+                handleVoiceDeepLink()
+            case "settings":
+                deepLink = .settings
+                AppGroupBridge().markLaunchAcknowledged()
+                AppGroupBridge().clearPendingLaunchIntent()
            default:
                print("[EchoApp] onOpenURL unsupported route: \(route)")
                break
@@ -102,9 +99,8 @@ struct MainView: View {
            guard newValue == .active else { return }
            consumeKeyboardLaunchIntentIfNeeded()
        }
-       .overlay(alignment: .top) {
+       .overlay {
            BackgroundDictationOverlay(service: backgroundDictation)
-               .animation(.easeInOut(duration: 0.25), value: backgroundDictation.state != .idle)
        }
        .sheet(item: $deepLink) { link in
            switch link {
@@ -123,25 +119,126 @@ extension MainView.DeepLink: Identifiable {
    }
 }
 
-private extension MainView {
-   func consumeKeyboardLaunchIntentIfNeeded() {
+   private extension MainView {
+    func handleVoiceDeepLink() {
+        guard !isHandlingKeyboardVoiceIntent else {
+            print("[EchoApp] handleVoiceDeepLink skipped: already handling")
+            return
+        }
+
+        isHandlingKeyboardVoiceIntent = true
+        let bridge = AppGroupBridge()
+        bridge.markLaunchAcknowledged()
+
+        Task {
+            defer {
+                Task { @MainActor in
+                    isHandlingKeyboardVoiceIntent = false
+                }
+            }
+
+            await MainActor.run {
+                backgroundDictation.activate(authSession: authSession)
+            }
+
+            await backgroundDictation.startDictationForKeyboardIntent()
+            var started = await waitForRecordingState(timeout: 1.2)
+
+            if !started {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                started = await waitForRecordingState(timeout: 1.2)
+            }
+
+            let shouldReturn: Bool = await MainActor.run {
+                switch backgroundDictation.state {
+                case .recording, .transcribing, .finalizing:
+                    return true
+                case .error, .idle:
+                    return false
+                }
+            }
+
+            await MainActor.run {
+                if started || shouldReturn {
+                    bridge.clearPendingLaunchIntent()
+                    autoReturnToHostAppIfNeeded()
+                    return
+                }
+
+                if case .error = backgroundDictation.state {
+                    print("[EchoApp] handleVoiceDeepLink: dictation entered error state, keeping app foreground")
+                    bridge.clearPendingLaunchIntent()
+                } else {
+                    print("[EchoApp] handleVoiceDeepLink: dictation not started yet; keeping pending intent for retry")
+                }
+            }
+        }
+    }
+
+    func waitForRecordingState(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if case .recording = backgroundDictation.state {
+                return true
+            }
+            if case .transcribing = backgroundDictation.state {
+                return true
+            }
+            if case .finalizing = backgroundDictation.state {
+                return true
+            }
+            if case .error = backgroundDictation.state {
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 80_000_000)
+        }
+        return false
+    }
+
+    func consumeKeyboardLaunchIntentIfNeeded() {
        let bridge = AppGroupBridge()
-       guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else {
+       guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
            return
        }
        print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
        switch intent {
        case .voice, .voiceControl:
-           bridge.markLaunchAcknowledged()
-           // Start dictation directly — no VoiceRecordingView sheet needed
-           Task { await backgroundDictation.startDictation() }
-           print("[EchoApp] keyboard intent: started background dictation directly")
-       case .settings:
-           deepLink = .settings
-           bridge.markLaunchAcknowledged()
-       }
-   }
+           handleVoiceDeepLink()
+        case .settings:
+            deepLink = .settings
+            bridge.markLaunchAcknowledged()
+        }
+    }
+
+    func autoReturnToHostAppIfNeeded() {
+        guard backgroundDictation.state.canReturnToKeyboard else {
+            return
+        }
+        let selector = NSSelectorFromString("suspend")
+        guard UIApplication.shared.responds(to: selector) else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            UIApplication.shared.perform(selector)
+        }
+    }
+}
+
+private extension BackgroundDictationService.SessionState {
+    var isIdle: Bool {
+        if case .idle = self { return true }
+        return false
+    }
+
+    var canReturnToKeyboard: Bool {
+        switch self {
+        case .error:
+            return false
+        default:
+            return true
+        }
+    }
 }
 
 enum EchoMobileTheme {
