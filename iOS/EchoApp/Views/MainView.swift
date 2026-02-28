@@ -149,7 +149,7 @@ extension MainView.DeepLink: Identifiable {
                 await backgroundDictation.stopDictation()
                 await MainActor.run {
                     bridge.clearPendingLaunchIntent()
-                    autoReturnToHostAppIfNeeded()
+                    autoReturnToHostApp()
                 }
                 return
 
@@ -157,7 +157,7 @@ extension MainView.DeepLink: Identifiable {
                 print("[EchoApp] handleVoiceDeepLink: finalizing, returning immediately")
                 await MainActor.run {
                     bridge.clearPendingLaunchIntent()
-                    autoReturnToHostAppIfNeeded()
+                    autoReturnToHostApp()
                 }
                 return
 
@@ -166,35 +166,24 @@ extension MainView.DeepLink: Identifiable {
             }
 
             await backgroundDictation.startDictationForKeyboardIntent()
-            var started = await waitForRecordingState(timeout: 0.8)
 
-            if !started {
-                try? await Task.sleep(nanoseconds: 150_000_000)
-                started = await waitForRecordingState(timeout: 0.5)
-            }
-
-            let shouldReturn: Bool = await MainActor.run {
-                switch backgroundDictation.state {
-                case .recording, .transcribing, .finalizing:
-                    return true
-                case .error, .idle:
-                    return false
-                }
-            }
+            // Wait briefly for recording to initialize, then return regardless.
+            // On cold launch the audio engine may take a moment to spin up.
+            // The recording continues in background via audio background mode.
+            let started = await waitForRecordingState(timeout: 1.5)
+            print("[EchoApp] handleVoiceDeepLink: recording started=\(started), state=\(backgroundDictation.state)")
 
             await MainActor.run {
-                if started || shouldReturn {
-                    bridge.clearPendingLaunchIntent()
-                    autoReturnToHostAppIfNeeded()
+                bridge.clearPendingLaunchIntent()
+
+                if case .error = backgroundDictation.state {
+                    print("[EchoApp] handleVoiceDeepLink: error state, staying in app")
                     return
                 }
 
-                if case .error = backgroundDictation.state {
-                    print("[EchoApp] handleVoiceDeepLink: dictation entered error state, keeping app foreground")
-                    bridge.clearPendingLaunchIntent()
-                } else {
-                    print("[EchoApp] handleVoiceDeepLink: dictation not started yet; keeping pending intent for retry")
-                }
+                // Always return to the previous app. Even if recording hasn't
+                // fully started yet, the audio background mode keeps us alive.
+                autoReturnToHostApp()
             }
         }
     }
@@ -235,32 +224,18 @@ extension MainView.DeepLink: Identifiable {
         }
     }
 
-    func autoReturnToHostAppIfNeeded() {
-        guard backgroundDictation.state.canReturnToKeyboard else {
-            return
-        }
+    func autoReturnToHostApp() {
         let selector = NSSelectorFromString("suspend")
         guard UIApplication.shared.responds(to: selector) else {
+            print("[EchoApp] autoReturnToHostApp: suspend selector not available")
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        // Delay to ensure the app's UI is fully presented before suspending.
+        // On cold launch, 0.05s is too fast — the window may not be ready.
+        print("[EchoApp] autoReturnToHostApp: scheduling suspend in 0.4s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            print("[EchoApp] autoReturnToHostApp: calling suspend now")
             UIApplication.shared.perform(selector)
-        }
-    }
-}
-
-private extension BackgroundDictationService.SessionState {
-    var isIdle: Bool {
-        if case .idle = self { return true }
-        return false
-    }
-
-    var canReturnToKeyboard: Bool {
-        switch self {
-        case .error:
-            return false
-        default:
-            return true
         }
     }
 }
