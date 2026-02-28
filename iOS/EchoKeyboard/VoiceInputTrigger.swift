@@ -15,8 +15,8 @@ enum VoiceInputTrigger {
         return bridge.isEngineHealthy
     }
 
-    /// Smart voice trigger: if background dictation alive, use Darwin notification;
-    /// if engine healthy (old path), send voice command;
+    /// Smart voice trigger: if engine is healthy, use Darwin notification;
+    /// if not healthy, send a one-shot voice command (for paths where this is used),
     /// otherwise, jump to main app to start engine.
     static func triggerVoiceInput(
         isCurrentlyRecording: Bool,
@@ -25,7 +25,7 @@ enum VoiceInputTrigger {
     ) {
         let bridge = AppGroupBridge()
 
-        // Prefer Darwin notification path if background dictation is alive
+        // Prefer Darwin notification path when heartbeat is fresh.
         if bridge.hasRecentHeartbeat(maxAge: 6) {
             let darwin = DarwinNotificationCenter.shared
             if isCurrentlyRecording {
@@ -37,7 +37,8 @@ enum VoiceInputTrigger {
             return
         }
 
-        if bridge.isEngineHealthy {
+        // If heartbeat is stale but app is still alive, use command channel.
+        if bridge.isEngineRunning {
             let command: AppGroupBridge.VoiceCommand = isCurrentlyRecording ? .stop : .start
             bridge.sendVoiceCommand(command)
             completion?(true)

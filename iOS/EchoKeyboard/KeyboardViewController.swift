@@ -8,6 +8,12 @@ class KeyboardViewController: UIInputViewController {
    private let keyboardState = KeyboardState()
    private var transcriptionPollTimer: Timer?
 
+   // Streaming text injection tracking
+   private var lastStreamingSequence: Int = 0
+   private var lastInjectedLength: Int = 0
+   private var currentStreamingSessionId: String = ""
+   private var transcriptionReadyToken: DarwinNotificationCenter.ObservationToken?
+
    override func viewDidLoad() {
        super.viewDidLoad()
        print("[EchoKeyboard] viewDidLoad")
@@ -47,11 +53,13 @@ class KeyboardViewController: UIInputViewController {
        print("[EchoKeyboard] viewWillAppear, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
        checkForPendingTranscription()
        startTranscriptionPolling()
+       startStreamingObservation()
    }
 
    override func viewWillDisappear(_ animated: Bool) {
        super.viewWillDisappear(animated)
        stopTranscriptionPolling()
+       stopStreamingObservation()
    }
 
    override func textDidChange(_ textInput: UITextInput?) {
@@ -69,6 +77,59 @@ class KeyboardViewController: UIInputViewController {
        }
    }
 
+   // MARK: - Streaming Text Injection
+
+   private func startStreamingObservation() {
+       guard transcriptionReadyToken == nil else { return }
+       transcriptionReadyToken = DarwinNotificationCenter.shared.observe(.transcriptionReady) { [weak self] in
+           DispatchQueue.main.async {
+               self?.handleStreamingPartialReady()
+           }
+       }
+       print("[EchoKeyboard] Started streaming observation")
+   }
+
+   private func stopStreamingObservation() {
+       if let token = transcriptionReadyToken {
+           DarwinNotificationCenter.shared.removeObservation(token)
+           transcriptionReadyToken = nil
+       }
+   }
+
+   private func handleStreamingPartialReady() {
+       let bridge = AppGroupBridge()
+       guard let partial = bridge.readStreamingPartial() else { return }
+
+       // New session — reset tracking
+       if partial.sessionId != currentStreamingSessionId {
+           currentStreamingSessionId = partial.sessionId
+           lastStreamingSequence = 0
+           lastInjectedLength = 0
+       }
+
+       // Only process newer sequences
+       guard partial.sequence > lastStreamingSequence else { return }
+       lastStreamingSequence = partial.sequence
+
+       let newText = partial.text.trimmingCharacters(in: .whitespacesAndNewlines)
+       guard !newText.isEmpty else { return }
+
+       // Delete previously injected text, then insert the updated text
+       for _ in 0..<lastInjectedLength {
+           textDocumentProxy.deleteBackward()
+       }
+       textDocumentProxy.insertText(newText)
+       lastInjectedLength = newText.count
+
+       print("[EchoKeyboard] Injected streaming partial seq=\(partial.sequence) len=\(newText.count) final=\(partial.isFinal)")
+
+       // If this is the final result, reset tracking for next session
+       if partial.isFinal {
+           lastInjectedLength = 0
+           lastStreamingSequence = 0
+       }
+   }
+
    private func startTranscriptionPolling() {
        guard transcriptionPollTimer == nil else { return }
        transcriptionPollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -83,6 +144,7 @@ class KeyboardViewController: UIInputViewController {
 
    deinit {
        stopTranscriptionPolling()
+       stopStreamingObservation()
    }
 }
 
@@ -97,8 +159,8 @@ class KeyboardState: ObservableObject {
    @Published var toastVisible: Bool = false
    /// Voice recording state - synced from main app via AppGroupBridge
    @Published var isVoiceRecording: Bool = false
-   /// Whether background dictation is alive (heartbeat within 6s)
-   @Published var isBackgroundDictationAlive: Bool = false
+    /// Whether background dictation is alive (heartbeat within 6s)
+    @Published var isBackgroundDictationAlive: Bool = false
 
    let pinyinEngine = PinyinEngine()
    let actionHandler = KeyboardActionHandler()
@@ -126,11 +188,11 @@ class KeyboardState: ObservableObject {
    }
 
    /// Sync voice recording state from AppGroupBridge
-   private func syncVoiceState() {
+    private func syncVoiceState() {
        let bridge = AppGroupBridge()
        isVoiceRecording = bridge.isRecording
-       isBackgroundDictationAlive = bridge.hasRecentHeartbeat(maxAge: 6)
-   }
+       isBackgroundDictationAlive = bridge.isEngineHealthy
+    }
 
    deinit {
        voiceStateTimer?.invalidate()

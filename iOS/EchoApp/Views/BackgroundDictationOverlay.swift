@@ -7,21 +7,24 @@ struct BackgroundDictationOverlay: View {
    @ObservedObject var service: BackgroundDictationService
 
    var body: some View {
-       HStack(spacing: 10) {
-           statusIndicator
-           statusText
-           Spacer()
-           stopButton
+       if service.state != .idle {
+           HStack(spacing: 10) {
+               statusIndicator
+               statusText
+               Spacer()
+               stopButton
+           }
+           .padding(.horizontal, 16)
+           .padding(.vertical, 10)
+           .background(
+               RoundedRectangle(cornerRadius: 14, style: .continuous)
+                   .fill(.ultraThinMaterial)
+                   .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+           )
+           .padding(.horizontal, 16)
+           .padding(.top, 8)
+           .transition(.move(edge: .top).combined(with: .opacity))
        }
-       .padding(.horizontal, 16)
-       .padding(.vertical, 10)
-       .background(
-           RoundedRectangle(cornerRadius: 14, style: .continuous)
-               .fill(.ultraThinMaterial)
-               .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
-       )
-       .padding(.horizontal, 16)
-       .padding(.top, 8)
    }
 
    @ViewBuilder

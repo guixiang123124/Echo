@@ -10,7 +10,6 @@ struct MainView: View {
    }
 
    fileprivate enum DeepLink {
-       case voice
        case settings
    }
 
@@ -78,18 +77,12 @@ struct MainView: View {
                selectedTab = .account
                deepLink = nil
            case "voice":
-               // Check if engine is already running
                let bridge = AppGroupBridge()
-               if bridge.isEngineHealthy {
-                   // Engine running - send Start command and close immediately
-                   bridge.sendVoiceCommand(.start)
-                   print("[EchoApp] Engine ready, sent Start command")
-               } else {
-                   // Engine not running - need to start it
-                   deepLink = .voice
-                   bridge.markLaunchAcknowledged()
-                   bridge.clearPendingLaunchIntent()
-               }
+               bridge.markLaunchAcknowledged()
+               bridge.clearPendingLaunchIntent()
+               // Start dictation directly — no VoiceRecordingView sheet needed
+               Task { await backgroundDictation.startDictation() }
+               print("[EchoApp] voice deep link: started background dictation directly")
            case "settings":
                deepLink = .settings
                AppGroupBridge().markLaunchAcknowledged()
@@ -109,13 +102,12 @@ struct MainView: View {
            guard newValue == .active else { return }
            consumeKeyboardLaunchIntentIfNeeded()
        }
-       .overlay {
+       .overlay(alignment: .top) {
            BackgroundDictationOverlay(service: backgroundDictation)
+               .animation(.easeInOut(duration: 0.25), value: backgroundDictation.state != .idle)
        }
        .sheet(item: $deepLink) { link in
            switch link {
-           case .voice:
-               VoiceRecordingView(startForKeyboard: true)
            case .settings:
                SettingsView()
            }
@@ -126,7 +118,6 @@ struct MainView: View {
 extension MainView.DeepLink: Identifiable {
    var id: String {
        switch self {
-       case .voice: return "voice"
        case .settings: return "settings"
        }
    }
@@ -142,8 +133,10 @@ private extension MainView {
        print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
        switch intent {
        case .voice, .voiceControl:
-           deepLink = .voice
            bridge.markLaunchAcknowledged()
+           // Start dictation directly — no VoiceRecordingView sheet needed
+           Task { await backgroundDictation.startDictation() }
+           print("[EchoApp] keyboard intent: started background dictation directly")
        case .settings:
            deepLink = .settings
            bridge.markLaunchAcknowledged()
