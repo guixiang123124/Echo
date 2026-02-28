@@ -1116,8 +1116,18 @@ public final class DeepgramASRProvider: ASRProvider, @unchecked Sendable {
     }
 
     private func resolveApiKey() throws -> String {
-        let candidate = try apiKeyOverride ?? keyStore.retrieve(for: id)
-        return normalizeApiKey(candidate)
+        if let override = apiKeyOverride {
+            let key = normalizeApiKey(override)
+            if !key.isEmpty { return key }
+        }
+        // Try multiple key names for compatibility
+        let keyNames = [id, "deepgram_key", "deepgram_api_key", "deepgram.api.key"]
+        for name in keyNames {
+            if let key = try keyStore.retrieve(for: name), !key.isEmpty {
+                return normalizeApiKey(key)
+            }
+        }
+        return ""
     }
 
     private func normalizeApiKey(_ value: String?) -> String {

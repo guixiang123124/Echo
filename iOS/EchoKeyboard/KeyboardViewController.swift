@@ -97,6 +97,8 @@ class KeyboardState: ObservableObject {
    @Published var toastVisible: Bool = false
    /// Voice recording state - synced from main app via AppGroupBridge
    @Published var isVoiceRecording: Bool = false
+   /// Whether background dictation is alive (heartbeat within 6s)
+   @Published var isBackgroundDictationAlive: Bool = false
 
    let pinyinEngine = PinyinEngine()
    let actionHandler = KeyboardActionHandler()
@@ -127,6 +129,7 @@ class KeyboardState: ObservableObject {
    private func syncVoiceState() {
        let bridge = AppGroupBridge()
        isVoiceRecording = bridge.isRecording
+       isBackgroundDictationAlive = bridge.hasRecentHeartbeat(maxAge: 6)
    }
 
    deinit {

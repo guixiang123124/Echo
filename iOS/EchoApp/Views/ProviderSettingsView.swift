@@ -174,7 +174,10 @@ struct ProviderSettingsView: View {
     }
 
     private func saveKey(for providerId: String) {
-        guard let key = apiKeys[providerId], !key.isEmpty else { return }
+        guard let raw = apiKeys[providerId] else { return }
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        apiKeys[providerId] = key
         try? keyStore.store(key: key, for: providerId)
     }
 

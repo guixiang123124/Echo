@@ -49,6 +49,7 @@ public final class MacAppSettings: ObservableObject {
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
         static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
         static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"
+        static let apiCallMode = "echo.api.callMode"
     }
 
     // MARK: - Hotkey Types
@@ -727,6 +728,35 @@ public final class MacAppSettings: ObservableObject {
         set {
             objectWillChange.send()
             defaults.set(newValue, forKey: Keys.cloudUploadAudio)
+        }
+    }
+
+    /// How ASR/LLM API calls are routed (client-direct vs backend proxy)
+    public var apiCallMode: APICallMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.apiCallMode),
+                  let mode = APICallMode(rawValue: rawValue) else {
+                return .clientDirect
+            }
+            return mode
+        }
+        set {
+            objectWillChange.send()
+            defaults.set(newValue.rawValue, forKey: Keys.apiCallMode)
+        }
+    }
+
+    /// Normalize OpenAI model names that may use aliases.
+    public func normalizeOpenAIModel() {
+        let raw = defaults.string(forKey: Keys.openAITranscriptionModel) ?? "gpt-4o-transcribe"
+        let aliasMap: [String: String] = [
+            "gpt-4o": "gpt-4o-transcribe",
+            "gpt-4o-mini": "gpt-4o-mini-transcribe",
+            "whisper": "whisper-1"
+        ]
+        if let normalized = aliasMap[raw] {
+            objectWillChange.send()
+            defaults.set(normalized, forKey: Keys.openAITranscriptionModel)
         }
     }
 

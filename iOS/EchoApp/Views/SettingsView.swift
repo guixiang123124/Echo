@@ -253,6 +253,41 @@ struct SettingsView: View {
                     }
                 }
 
+                // API Mode Section
+                Section("API Mode") {
+                    Picker("API Call Mode", selection: .init(
+                        get: { settings.apiCallMode },
+                        set: { settings.apiCallMode = $0 }
+                    )) {
+                        ForEach(APICallMode.allCases) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+
+                    if settings.apiCallMode == .backendProxy {
+                        if !authSession.isSignedIn {
+                            Text("Sign in on Account tab first for backend proxy mode.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else if settings.cloudSyncBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("Set Cloud API URL above for backend proxy.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        } else {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("Backend Proxy ready")
+                                    .font(.caption)
+                            }
+                        }
+                    } else {
+                        Text("Client Direct uses locally stored API keys for ASR.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 // API Keys Section
                 Section("API Keys") {
                     NavigationLink("Manage API Keys") {

@@ -381,6 +381,22 @@ public final class AppSettings: @unchecked Sendable {
         static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"
     }
 
+    /// Normalize OpenAI model names that may use aliases.
+    /// Maps common aliases like "gpt-4o" to the proper transcription model name.
+    public func normalizeOpenAIModel() {
+        let raw = defaults.string(forKey: Keys.openAITranscriptionModel) ?? "gpt-4o-transcribe"
+        let aliasMap: [String: String] = [
+            "gpt-4o": "gpt-4o-transcribe",
+            "gpt-4o-mini": "gpt-4o-mini-transcribe",
+            "whisper": "whisper-1"
+        ]
+        if let normalized = aliasMap[raw] {
+            defaults.set(normalized, forKey: Keys.openAITranscriptionModel)
+        } else if !Self.supportedOpenAIModels.contains(raw) {
+            defaults.set("gpt-4o-transcribe", forKey: Keys.openAITranscriptionModel)
+        }
+    }
+
     private static func bundledCloudAPIBaseURL() -> String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: "CLOUD_API_BASE_URL") as? String else {
             return nil

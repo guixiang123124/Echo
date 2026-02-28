@@ -62,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         print("🚀 EchoMac starting...")
         NSApp.appearance = NSAppearance(named: .aqua)
 
+        // Seed embedded API keys into Keychain
+        EmbeddedKeyProvider.shared.seedKeychainIfNeeded()
+        settings.normalizeOpenAIModel()
+
         // Initialize services
         voiceInputService = VoiceInputService(settings: settings)
         textInserter = TextInserter()

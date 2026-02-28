@@ -113,12 +113,12 @@ struct EchoHomeView: View {
                 } label: {
                     Text("Add Echo Keyboard")
                         .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color(.systemBackground))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .background(
                             Capsule(style: .continuous)
-                                .fill(.black)
+                                .fill(Color(.label))
                         )
                 }
                 .buttonStyle(.plain)
@@ -133,12 +133,12 @@ struct EchoHomeView: View {
             } label: {
                 Label("Try Voice", systemImage: "mic.fill")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Color(.systemBackground))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .fill(Color.black)
+                            .fill(Color(.label))
                     )
             }
             .buttonStyle(.plain)

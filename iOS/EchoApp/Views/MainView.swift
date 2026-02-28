@@ -17,6 +17,7 @@ struct MainView: View {
    @State private var selectedTab: Tab = .home
    @State private var deepLink: DeepLink?
    @EnvironmentObject var authSession: EchoAuthSession
+   @EnvironmentObject var backgroundDictation: BackgroundDictationService
    @Environment(\.scenePhase) private var scenePhase
    private let keyboardIntentPoll = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
@@ -108,6 +109,9 @@ struct MainView: View {
            guard newValue == .active else { return }
            consumeKeyboardLaunchIntentIfNeeded()
        }
+       .overlay {
+           BackgroundDictationOverlay(service: backgroundDictation)
+       }
        .sheet(item: $deepLink) { link in
            switch link {
            case .voice:
@@ -151,16 +155,36 @@ enum EchoMobileTheme {
    static let pageBackground = Color(.systemGroupedBackground)
    static let cardBackground = Color(.secondarySystemBackground)
    static let cardSurface = Color(.systemBackground)
-   static let border = Color.black.opacity(0.06)
+   static let border = Color(.separator).opacity(0.3)
    static let mutedText = Color(.secondaryLabel)
    static let accent = Color(red: 0.11, green: 0.53, blue: 0.98)
-   static let accentSoft = Color(red: 0.87, green: 0.94, blue: 1.0)
+
+   static let accentSoft = Color(
+       UIColor { traits in
+           traits.userInterfaceStyle == .dark
+               ? UIColor(red: 0.15, green: 0.25, blue: 0.45, alpha: 1.0)
+               : UIColor(red: 0.87, green: 0.94, blue: 1.0, alpha: 1.0)
+       }
+   )
+
+   static let heroGradientStart = Color(
+       UIColor { traits in
+           traits.userInterfaceStyle == .dark
+               ? UIColor(red: 0.12, green: 0.14, blue: 0.22, alpha: 1.0)
+               : UIColor(red: 0.94, green: 0.97, blue: 1.0, alpha: 1.0)
+       }
+   )
+
+   static let heroGradientEnd = Color(
+       UIColor { traits in
+           traits.userInterfaceStyle == .dark
+               ? UIColor(red: 0.10, green: 0.11, blue: 0.20, alpha: 1.0)
+               : UIColor(red: 0.92, green: 0.93, blue: 1.0, alpha: 1.0)
+       }
+   )
 
    static let heroGradient = LinearGradient(
-       colors: [
-           Color(red: 0.94, green: 0.97, blue: 1.0),
-           Color(red: 0.92, green: 0.93, blue: 1.0)
-       ],
+       colors: [heroGradientStart, heroGradientEnd],
        startPoint: .topLeading,
        endPoint: .bottomTrailing
    )

@@ -12,9 +12,8 @@ struct KeyboardView: View {
    var body: some View {
        VStack(spacing: 0) {
            KeyboardTopBar(
-               onOpenSettings: {
-                   openMainAppSettings()
-               },
+               isBackgroundDictationAlive: state.isBackgroundDictationAlive,
+               isVoiceRecording: state.isVoiceRecording,
                onTriggerVoice: {
                    openMainAppVoice()
                },
@@ -225,44 +224,62 @@ struct KeyboardView: View {
 // MARK: - Top Bar
 
 private struct KeyboardTopBar: View {
-   let onOpenSettings: () -> Void
+   let isBackgroundDictationAlive: Bool
+   let isVoiceRecording: Bool
    let onTriggerVoice: () -> Void
    let onCollapse: () -> Void
 
    var body: some View {
        HStack(spacing: 12) {
-           // Settings button - using onTapGesture for keyboard extension compatibility
-           Image(systemName: "gearshape")
-               .font(.system(size: 16, weight: .semibold))
-               .foregroundStyle(Color(.secondaryLabel))
-               .frame(width: 32, height: 32)
-               .background(
-                   Circle().fill(EchoTheme.keySecondaryBackground)
-               )
-               .contentShape(Circle())
-               .onTapGesture {
-                   onOpenSettings()
-               }
-
-           Spacer()
-
-           // Voice button - using onTapGesture for keyboard extension compatibility
-           EchoDictationPill(
-               isRecording: false,
-               isProcessing: false,
-               levels: [],
-               tipText: nil,
-               width: 150,
-               height: 30
-           )
-           .contentShape(Rectangle())
-           .onTapGesture {
-               onTriggerVoice()
+           // Settings button — SwiftUI Link is the most reliable way to open URLs from keyboard extensions on iOS 18+
+           Link(destination: AppGroupBridge.settingsURL) {
+               Image(systemName: "gearshape")
+                   .font(.system(size: 16, weight: .semibold))
+                   .foregroundStyle(Color(.secondaryLabel))
+                   .frame(width: 32, height: 32)
+                   .background(
+                       Circle().fill(EchoTheme.keySecondaryBackground)
+                   )
            }
 
            Spacer()
 
-           // Collapse button - using onTapGesture for keyboard extension compatibility
+           // Voice button — conditional: Darwin notification if engine alive, Link to open app otherwise
+           if isBackgroundDictationAlive {
+               Button {
+                   let darwin = DarwinNotificationCenter.shared
+                   if isVoiceRecording {
+                       darwin.post(.dictationStop)
+                   } else {
+                       darwin.post(.dictationStart)
+                   }
+               } label: {
+                   EchoDictationPill(
+                       isRecording: isVoiceRecording,
+                       isProcessing: false,
+                       levels: [],
+                       tipText: isVoiceRecording ? "Tap to stop" : nil,
+                       width: 150,
+                       height: 30
+                   )
+               }
+               .buttonStyle(.plain)
+           } else {
+               Link(destination: AppGroupBridge.voiceInputURL) {
+                   EchoDictationPill(
+                       isRecording: false,
+                       isProcessing: false,
+                       levels: [],
+                       tipText: nil,
+                       width: 150,
+                       height: 30
+                   )
+               }
+           }
+
+           Spacer()
+
+           // Collapse button
            Image(systemName: "chevron.down")
                .font(.system(size: 14, weight: .semibold))
                .foregroundStyle(Color(.secondaryLabel))

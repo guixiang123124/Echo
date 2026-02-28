@@ -828,12 +828,26 @@ final class VoiceRecordingViewModel: ObservableObject {
 
     private func resolveASRProvider() -> ASRProviderResolutionResult? {
         let selectedId = settings.selectedASRProvider
+        let mode = settings.apiCallMode
 
-        if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
-            return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
-        }
-        if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
-            return ASRProviderResolutionResult(provider: proxyProvider, usedFallback: false, fallbackMessage: "")
+        switch mode {
+        case .clientDirect:
+            // Client-direct first, then proxy fallback
+            if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+                return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
+            }
+            if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                return ASRProviderResolutionResult(provider: proxyProvider, usedFallback: false, fallbackMessage: "")
+            }
+
+        case .backendProxy:
+            // Backend proxy first, then client-direct fallback
+            if let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                return ASRProviderResolutionResult(provider: proxyProvider, usedFallback: false, fallbackMessage: "")
+            }
+            if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+                return ASRProviderResolutionResult(provider: selectedProvider, usedFallback: false, fallbackMessage: "")
+            }
         }
 
         if selectedId == "openai_whisper" {

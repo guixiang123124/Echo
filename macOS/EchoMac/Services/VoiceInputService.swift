@@ -1357,19 +1357,38 @@ public final class VoiceInputService: ObservableObject {
 
     private func resolveASRProvider() -> (any ASRProvider)? {
         let selectedId = settings.selectedASRProvider
+        let mode = settings.apiCallMode
 
-        if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
-            return selectedProvider
-        }
-        if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
-            return proxyProvider
-        }
+        switch mode {
+        case .clientDirect:
+            // Client-direct first, then proxy fallback
+            if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+                return selectedProvider
+            }
+            if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                return proxyProvider
+            }
+            if let fallbackProvider = resolveOpenAIProvider(), fallbackProvider.isAvailable {
+                return fallbackProvider
+            }
+            if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
+                return proxyFallback
+            }
 
-        if let fallbackProvider = resolveOpenAIProvider(), fallbackProvider.isAvailable {
-            return fallbackProvider
-        }
-        if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
-            return proxyFallback
+        case .backendProxy:
+            // Backend proxy first, then client-direct fallback
+            if let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                return proxyProvider
+            }
+            if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+                return selectedProvider
+            }
+            if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
+                return proxyFallback
+            }
+            if let fallbackProvider = resolveOpenAIProvider(), fallbackProvider.isAvailable {
+                return fallbackProvider
+            }
         }
 
         return nil

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1F2B3C4D5E6078901234567 /* BackgroundDictationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F6A7189012345678 /* BackgroundDictationOverlay.swift */; };
 		013489831AC5ED990059711F /* CorrectionProviderResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B87D659AA16F6F85B7B1CA /* CorrectionProviderResolver.swift */; };
 		0AC3F3FEBF51B9BDE9C35B3A /* PinyinKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60E6B8DB8104A64E3D8931F0 /* PinyinKeyboardView.swift */; };
 		0E1CF361506FDBC6977F7FB8 /* EchoMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B5AF036C9D5C75B90413509 /* EchoMacApp.swift */; };
@@ -75,6 +76,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		B2C3D4E5F6A7189012345678 /* BackgroundDictationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundDictationOverlay.swift; sourceTree = "<group>"; };
 		11EDF5E1B0EE147540DC01C6 /* EchoMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1270CDC299E1CD9305A864D7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		12F6289A1FB7905C60DFF09C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -156,6 +158,7 @@
 		3A93B6F98941F7E80C49CDC4 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				B2C3D4E5F6A7189012345678 /* BackgroundDictationOverlay.swift */,
 				2BCB0395E05C1ED9A4EB7D32 /* EchoAccountView.swift */,
 				C6C1E96CE3AFA65E0097698A /* EchoDictionaryView.swift */,
 				B944946A3A7E1647AD02E547 /* EchoHistoryView.swift */,
@@ -431,6 +434,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1F2B3C4D5E6078901234567 /* BackgroundDictationOverlay.swift in Sources */,
 				D69CDA45080B3CF7AF5ED494 /* AppGroupBridge.swift in Sources */,
 				013489831AC5ED990059711F /* CorrectionProviderResolver.swift in Sources */,
 				2A24BB8AE06703073E04009B /* EchoAccountView.swift in Sources */,

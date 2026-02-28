@@ -6,9 +6,12 @@ import EchoCore
 struct EchoApp: App {
    @UIApplicationDelegateAdaptor(AppURLBridge.self) private var appDelegate
    @StateObject private var authSession = EchoAuthSession.shared
+   @StateObject private var backgroundDictation = BackgroundDictationService()
 
    init() {
+       EmbeddedKeyProvider.shared.seedKeychainIfNeeded()
        let settings = AppSettings()
+       settings.normalizeOpenAIModel()
        EchoAuthSession.shared.configureBackend(baseURL: settings.cloudSyncBaseURL)
        EchoAuthSession.shared.start()
        CloudSyncService.shared.configure(
@@ -26,6 +29,10 @@ struct EchoApp: App {
        WindowGroup {
            MainView()
                .environmentObject(authSession)
+               .environmentObject(backgroundDictation)
+               .onAppear {
+                   backgroundDictation.activate(authSession: authSession)
+               }
        }
    }
 }
