@@ -5,11 +5,13 @@ import EchoCore
 /// Since keyboard extensions cannot access the microphone,
 /// we redirect to the main app via URL scheme
 enum VoiceInputTrigger {
-    private static let launchAckTimeout: TimeInterval = 6.0
+    private static let launchAckTimeout: TimeInterval = 2.0
     private static let launchAckPollInterval: TimeInterval = 0.15
-    private static let directStartWaitTimeout: TimeInterval = 1.9
-    private static let directStopWaitTimeout: TimeInterval = 1.1
+    private static let directStartWaitTimeout: TimeInterval = 1.0
+    private static let directStopWaitTimeout: TimeInterval = 0.7
     private static let directCommandHeartbeatWindow: TimeInterval = 2.5
+    private static let dictationStateFreshnessWindow: TimeInterval = 2.6
+    private static let dictationStateRequestSlack: TimeInterval = 0.4
 
     /// Check if the voice engine is ready (running and healthy)
     /// Returns true if we can send Start/Stop commands without jumping
@@ -28,7 +30,11 @@ enum VoiceInputTrigger {
     ) {
         let bridge = AppGroupBridge()
         let priorState = bridge.readDictationState()
-        let isRecordingNow = isDictationRecordingNow(bridge)
+        let requestAt = Date().timeIntervalSince1970
+        var isRecordingNow = isDictationRecordingNow(bridge)
+        if !isRecordingNow && isCurrentlyRecording && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow) {
+            isRecordingNow = true
+        }
         let shouldDirect = shouldUseDirectCommand(bridge: bridge)
         print("[VoiceInputTrigger] triggerVoiceInput: direct=\(shouldDirect), isRecordingNow=\(isRecordingNow), isCurrentlyRecording=\(isCurrentlyRecording), state=\(String(describing: priorState)), heartbeats=\(bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)), engineHealthy=\(bridge.isEngineHealthy)")
 
@@ -38,7 +44,9 @@ enum VoiceInputTrigger {
             if isRecordingNow {
                 darwin.post(.dictationStop)
                 waitForDictationStop(
-                    maxWait: directStopWaitTimeout
+                    maxWait: directStopWaitTimeout,
+                    requestAt: requestAt,
+                    priorSessionId: priorState?.sessionId
                 ) { stopped in
                     if stopped {
                         completion?(true)
@@ -51,7 +59,8 @@ enum VoiceInputTrigger {
                 darwin.post(.dictationStart)
                 waitForDictationStart(
                     maxWait: directStartWaitTimeout,
-                    priorSessionId: priorState?.sessionId
+                    priorSessionId: priorState?.sessionId,
+                    requestAt: requestAt
                 ) { started in
                     if started {
                         completion?(true)
@@ -69,34 +78,38 @@ enum VoiceInputTrigger {
     }
 
     private static func shouldUseDirectCommand(bridge: AppGroupBridge) -> Bool {
-        guard bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow) else {
+        let hasHeartbeat = bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
+        guard hasHeartbeat else {
             return false
         }
 
-        // Require explicit dictation state from the main app. If state is absent,
-        // assume app wake path is needed.
-        guard let dictationState = bridge.readDictationState() else {
+        let isHealthy = bridge.isEngineHealthy
+        guard isHealthy else {
             return false
         }
 
-        // If the dictation state is explicitly an error, force a wakeup flow.
-        if dictationState.state == .error {
+        guard bridge.hasRecentDictationState(maxAge: dictationStateFreshnessWindow) else {
             return false
         }
 
-        // Also require the app to be in a coherent dictation state.
-        return switch dictationState.state {
-        case .recording, .transcribing, .finalizing, .idle:
-            bridge.isEngineHealthy
-        case .error:
-            false
+        if let dictationState = bridge.readDictationState(),
+           dictationState.state == .error {
+            return false
         }
+
+        return true
     }
 
     private static func isDictationRecordingNow(_ bridge: AppGroupBridge) -> Bool {
         guard let dictationState = bridge.readDictationState() else { return false }
-        return isDictationStateRecordingLike(dictationState.state)
-            && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
+        if isDictationStateRecordingLike(dictationState.state)
+            && bridge.hasRecentDictationState(maxAge: dictationStateFreshnessWindow)
+            && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow) {
+            return true
+        }
+
+        // Fallback to explicit recording flag if state is not available yet.
+        return bridge.isRecording && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
     }
 
     private static func isDictationStateRecordingLike(_ state: AppGroupBridge.DictationState?) -> Bool {
@@ -111,16 +124,29 @@ enum VoiceInputTrigger {
     private static func waitForDictationStart(
         maxWait: TimeInterval,
         priorSessionId: String?,
+        requestAt: TimeInterval,
         completion: @escaping (Bool) -> Void
     ) {
         let start = Date()
         let bridge = AppGroupBridge()
 
         func check() {
-            let currentSession = bridge.readDictationState()
-            let started = isDictationRecordingNow(bridge)
-                && currentSession != nil
-                && (priorSessionId == nil || currentSession?.sessionId != priorSessionId)
+            guard let current = bridge.readDictationStateWithTimestamp() else {
+                let elapsed = Date().timeIntervalSince(start)
+                guard elapsed < maxWait else {
+                    completion(false)
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    check()
+                }
+                return
+            }
+
+            let started = isDictationStateRecordingLike(current.state)
+                && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
+                && current.at >= requestAt - dictationStateRequestSlack
+                && (priorSessionId == nil || current.sessionId != priorSessionId)
             if started {
                 completion(true)
                 return
@@ -142,18 +168,33 @@ enum VoiceInputTrigger {
 
     private static func waitForDictationStop(
         maxWait: TimeInterval,
+        requestAt: TimeInterval,
+        priorSessionId: String?,
         completion: @escaping (Bool) -> Void
     ) {
         let start = Date()
         let bridge = AppGroupBridge()
 
         func check() {
-            let currentState = bridge.readDictationState()
-            let isCurrentRecordingLike = isDictationStateRecordingLike(currentState?.state)
+            guard let currentState = bridge.readDictationStateWithTimestamp() else {
+                let elapsed = Date().timeIntervalSince(start)
+                guard elapsed < maxWait else {
+                    completion(false)
+                    return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    check()
+                }
+                return
+            }
+
+            let isCurrentRecordingLike = isDictationStateRecordingLike(currentState.state)
             let hasHeartbeat = bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
-            let stopped = currentState == nil
-                || !isCurrentRecordingLike
-                || !hasHeartbeat
+            let currentSessionId = currentState.sessionId
+            let hasDifferentSession = priorSessionId != nil && currentSessionId != priorSessionId
+
+            let currentStateFreshForRequest = currentState.at >= requestAt - dictationStateRequestSlack
+            let stopped = currentStateFreshForRequest && hasHeartbeat && !isCurrentRecordingLike && (hasDifferentSession || !currentSessionId.isEmpty)
             if stopped {
                 completion(true)
                 return
@@ -189,6 +230,7 @@ enum VoiceInputTrigger {
         AppGroupBridge().setPendingLaunchIntent(.voice)
         let trace = UUID().uuidString.prefix(8)
         let urls = [
+            AppGroupBridge.voiceInputURL,
             URL(string: "echo://voice?trace=\(trace)")!,
             URL(string: "echo:///voice?trace=\(trace)")!,
             URL(string: "echoapp://voice?trace=\(trace)")!,
@@ -235,14 +277,11 @@ enum VoiceInputTrigger {
                 waitForLaunchAcknowledgement(timeout: launchAckTimeout, pollInterval: launchAckPollInterval) { acknowledged in
                     guard !didFinish else { return }
                     print("[VoiceInputTrigger] launch ack for \(candidate.absoluteString): \(acknowledged)")
-                    if acknowledged {
-                        finish(true)
-                        return
+                    if !acknowledged {
+                        print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString)")
                     }
-
-                    print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString), trying next URL")
-                    attempt(at: index + 1)
                 }
+                finish(true)
             }
         }
 

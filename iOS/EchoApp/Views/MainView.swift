@@ -195,9 +195,9 @@ extension MainView.DeepLink: Identifiable {
         return false
     }
 
-   func consumeKeyboardLaunchIntentIfNeeded() {
+    func consumeKeyboardLaunchIntentIfNeeded() {
        let bridge = AppGroupBridge()
-       guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else {
+       guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
            return
        }
