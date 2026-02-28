@@ -33,6 +33,9 @@ public final class BackgroundDictationService: ObservableObject {
     private let settings: AppSettings
     private let keyStore: SecureKeyStore
 
+    // Lifecycle
+    private var isActive = false
+
     // Session state
     private var audioService: AudioCaptureService?
     private var currentProvider: (any ASRProvider)?
@@ -75,6 +78,11 @@ public final class BackgroundDictationService: ObservableObject {
     /// Start listening for Darwin notifications from the keyboard extension.
     /// Call this when the app launches or becomes active.
     public func activate(authSession: EchoAuthSession) {
+        if isActive {
+            self.authSession = authSession
+            return
+        }
+
         self.authSession = authSession
 
         startToken = darwin.observe(.dictationStart) { [weak self] in
@@ -96,10 +104,12 @@ public final class BackgroundDictationService: ObservableObject {
         bridge.clearStreamingData()
         startHeartbeat()
         startCommandPolling()
+        isActive = true
     }
 
     /// Stop listening and clean up. Call when app is about to terminate.
     public func deactivate() {
+        isActive = false
         if let startToken { darwin.removeObservation(startToken) }
         if let stopToken { darwin.removeObservation(stopToken) }
         startToken = nil

@@ -99,7 +99,7 @@ struct MainView: View {
            guard newValue == .active else { return }
            consumeKeyboardLaunchIntentIfNeeded()
        }
-       .overlay {
+       .overlay(alignment: .top) {
            BackgroundDictationOverlay(service: backgroundDictation)
        }
        .sheet(item: $deepLink) { link in
@@ -142,11 +142,11 @@ extension MainView.DeepLink: Identifiable {
             }
 
             await backgroundDictation.startDictationForKeyboardIntent()
-            var started = await waitForRecordingState(timeout: 1.2)
+            var started = await waitForRecordingState(timeout: 0.8)
 
             if !started {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                started = await waitForRecordingState(timeout: 1.2)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                started = await waitForRecordingState(timeout: 0.5)
             }
 
             let shouldReturn: Bool = await MainActor.run {
@@ -219,7 +219,7 @@ extension MainView.DeepLink: Identifiable {
         guard UIApplication.shared.responds(to: selector) else {
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             UIApplication.shared.perform(selector)
         }
     }
