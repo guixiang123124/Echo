@@ -141,6 +141,30 @@ extension MainView.DeepLink: Identifiable {
                 backgroundDictation.activate(authSession: authSession)
             }
 
+            // Toggle: if already recording, stop instead of starting a new session.
+            let currentState = await MainActor.run { backgroundDictation.state }
+            switch currentState {
+            case .recording, .transcribing:
+                print("[EchoApp] handleVoiceDeepLink: already recording, toggling to stop")
+                await backgroundDictation.stopDictation()
+                await MainActor.run {
+                    bridge.clearPendingLaunchIntent()
+                    autoReturnToHostAppIfNeeded()
+                }
+                return
+
+            case .finalizing:
+                print("[EchoApp] handleVoiceDeepLink: finalizing, returning immediately")
+                await MainActor.run {
+                    bridge.clearPendingLaunchIntent()
+                    autoReturnToHostAppIfNeeded()
+                }
+                return
+
+            case .idle, .error:
+                break // Proceed to start
+            }
+
             await backgroundDictation.startDictationForKeyboardIntent()
             var started = await waitForRecordingState(timeout: 0.8)
 

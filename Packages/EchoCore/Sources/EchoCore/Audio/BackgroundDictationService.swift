@@ -524,6 +524,18 @@ public final class BackgroundDictationService: ObservableObject {
                 guard let self else { break }
                 await MainActor.run {
                     self.bridge.writeHeartbeat()
+                    // Refresh dictation state timestamp so the keyboard's
+                    // hasRecentDictationState() check stays fresh during long
+                    // recording sessions. Without this, the state goes stale after
+                    // 2.6s and shouldUseDirectCommand() returns false.
+                    let bridgeState: AppGroupBridge.DictationState = switch self.state {
+                    case .idle: .idle
+                    case .recording: .recording
+                    case .transcribing: .transcribing
+                    case .finalizing: .finalizing
+                    case .error: .error
+                    }
+                    self.bridge.setDictationState(bridgeState, sessionId: self.sessionId)
                 }
                 self.darwin.post(.heartbeat)
                 try? await Task.sleep(nanoseconds: 2_000_000_000) // 2 seconds

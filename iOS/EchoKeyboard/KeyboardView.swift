@@ -229,8 +229,10 @@ private struct KeyboardTopBar: View {
 
    var body: some View {
        HStack(spacing: 12) {
-           // Settings button — SwiftUI Link is the most reliable way to open URLs from keyboard extensions on iOS 18+
-           Link(destination: AppGroupBridge.settingsURL) {
+           // Settings button
+           Button {
+               VoiceInputTrigger.openURLFromExtension(AppGroupBridge.settingsURL)
+           } label: {
                Image(systemName: "gearshape")
                    .font(.system(size: 16, weight: .semibold))
                    .foregroundStyle(Color(.secondaryLabel))
@@ -239,10 +241,13 @@ private struct KeyboardTopBar: View {
                        Circle().fill(EchoTheme.keySecondaryBackground)
                    )
            }
+           .buttonStyle(.plain)
 
-        Spacer()
+           Spacer()
 
-           // Voice button — unified trigger path with Start/Stop fallback handling.
+           // Voice button — uses Button for all cases.
+           // Cold start: opens main app via UIApplication runtime access (reliable on iOS 18+)
+           // Warm path: sends Darwin notification for direct Start/Stop
            Button {
                onTriggerVoice()
            } label: {

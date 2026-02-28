@@ -114,9 +114,12 @@ enum VoiceInputTrigger {
 
     private static func isDictationStateRecordingLike(_ state: AppGroupBridge.DictationState?) -> Bool {
         switch state {
-        case .recording, .transcribing, .finalizing:
+        case .recording, .transcribing:
             return true
-        case .idle, .error, nil:
+        case .idle, .error, .finalizing, nil:
+            // .finalizing means recording already stopped and ASR is processing.
+            // Treat it as "not recording" so waitForDictationStop can confirm
+            // the stop quickly instead of timing out during finalization.
             return false
         }
     }
@@ -224,6 +227,53 @@ enum VoiceInputTrigger {
         AppGroupBridge().sendVoiceCommand(.stop)
     }
 
+    // MARK: - UIApplication Runtime URL Opening (iOS 18+ keyboard extension workaround)
+
+    /// Open a URL from a keyboard extension using UIApplication.shared via runtime access.
+    /// On iOS 18+, extensionContext.open(), responder chain, and SwiftUI Link all fail
+    /// for keyboard extensions. This runtime approach is used by virtually all production
+    /// third-party keyboards (Gboard, SwiftKey, Fleksy, etc.).
+    ///
+    /// Uses the modern `open(_:options:completionHandler:)` API which properly handles
+    /// cold launches (app completely killed), unlike the deprecated `openURL:`.
+    @discardableResult
+    static func openURLFromExtension(_ url: URL) -> Bool {
+        let sharedSel = NSSelectorFromString("sharedApplication")
+        guard UIApplication.responds(to: sharedSel) else {
+            print("[VoiceInputTrigger] UIApplication does not respond to sharedApplication")
+            return false
+        }
+        guard let result = UIApplication.perform(sharedSel) else {
+            print("[VoiceInputTrigger] UIApplication.perform(sharedApplication) returned nil")
+            return false
+        }
+        let app = result.takeUnretainedValue()
+
+        // Use the modern open(_:options:completionHandler:) API for reliable cold launches.
+        let openSel = NSSelectorFromString("openURL:options:completionHandler:")
+        if app.responds(to: openSel) {
+            print("[VoiceInputTrigger] Opening URL via UIApplication.open (modern API): \(url.absoluteString)")
+            typealias OpenFunc = @convention(c) (AnyObject, Selector, URL, [String: Any], ((Bool) -> Void)?) -> Void
+            let imp = app.method(for: openSel)
+            let open = unsafeBitCast(imp, to: OpenFunc.self)
+            open(app, openSel, url, [:], { success in
+                print("[VoiceInputTrigger] UIApplication.open completion: \(success)")
+            })
+            return true
+        }
+
+        // Fallback to deprecated openURL: for older iOS
+        let legacySel = NSSelectorFromString("openURL:")
+        if app.responds(to: legacySel) {
+            print("[VoiceInputTrigger] Opening URL via UIApplication.openURL (legacy): \(url.absoluteString)")
+            app.perform(legacySel, with: url)
+            return true
+        }
+
+        print("[VoiceInputTrigger] UIApplication does not respond to any openURL selector")
+        return false
+    }
+
     /// Open the main Echo app for voice recording.
     /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
@@ -289,12 +339,6 @@ enum VoiceInputTrigger {
     }
 
     private static func open(url: URL, from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
-        guard let viewController else {
-            completion?(false)
-            return
-        }
-
-        let resolvedViewController = viewController
         let urlString = url.absoluteString
         var didFinish = false
 
@@ -303,6 +347,20 @@ enum VoiceInputTrigger {
             didFinish = true
             completion?(success)
         }
+
+        // Primary path: UIApplication runtime access (most reliable on iOS 18+)
+        if openURLFromExtension(url) {
+            print("[VoiceInputTrigger] open via UIApplication runtime succeeded for \(urlString)")
+            finish(true)
+            return
+        }
+
+        guard let viewController else {
+            completion?(false)
+            return
+        }
+
+        let resolvedViewController = viewController
 
         let reportOpenAttempt: (_ path: String, _ success: Bool) -> Void = { path, success in
             print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
@@ -321,7 +379,7 @@ enum VoiceInputTrigger {
             return false
         }
 
-        // Primary path for app extension -> host app open.
+        // Fallback: extensionContext.open (unreliable on iOS 18+ but still worth trying)
         if let extensionContext = resolvedViewController.extensionContext {
             reportOpenAttempt("extensionContext.open", true)
 
@@ -329,8 +387,6 @@ enum VoiceInputTrigger {
                 guard !didFinish else { return }
                 print("[VoiceInputTrigger] extensionContext.open timeout, trying fallback")
                 _ = tryFallbackOpen()
-                // Even if callback timing is delayed, treat launch request as issued.
-                // The subsequent launch-ack check will tell us if the app woke up.
                 finish(true)
             }
 
@@ -346,7 +402,6 @@ enum VoiceInputTrigger {
                     _ = tryFallbackOpen()
                 }
 
-                // If opening was requested, we wait for launch acknowledgement on the next stage.
                 finish(true)
             }
             return
