@@ -348,66 +348,39 @@ enum VoiceInputTrigger {
             completion?(success)
         }
 
-        // Primary path: UIApplication runtime access (most reliable on iOS 18+)
+        // Step 1: Fire extensionContext.open() to register the "Back to [host app]"
+        // navigation context with iOS. On iOS 18+ this may not actually open the URL,
+        // but it tells the system that the host app is the return target when our app
+        // calls suspend(). Without this, suspend() returns to the Home screen instead
+        // of the host app for third-party apps.
+        if let extensionContext = viewController?.extensionContext {
+            print("[VoiceInputTrigger] extensionContext.open (for back-navigation context): \(urlString)")
+            extensionContext.open(url, completionHandler: nil)
+        }
+
+        // Step 2: Actually open the URL via UIApplication runtime access.
+        // This is the reliable path on iOS 18+ for keyboard extensions.
         if openURLFromExtension(url) {
             print("[VoiceInputTrigger] open via UIApplication runtime succeeded for \(urlString)")
             finish(true)
             return
         }
 
+        // Step 3: Fallbacks for older iOS versions
         guard let viewController else {
             completion?(false)
             return
         }
 
-        let resolvedViewController = viewController
-
-        let reportOpenAttempt: (_ path: String, _ success: Bool) -> Void = { path, success in
-            print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
-        }
-
-        let tryFallbackOpen: () -> Bool = {
-            if let inputViewController = resolvedViewController as? UIInputViewController,
-               openViaInputViewController(url, from: inputViewController) {
-                reportOpenAttempt("UIInputViewController.openURL", true)
-                return true
-            }
-            if openViaResponderChain(url: url, from: resolvedViewController) {
-                reportOpenAttempt("Responder chain", true)
-                return true
-            }
-            return false
-        }
-
-        // Fallback: extensionContext.open (unreliable on iOS 18+ but still worth trying)
-        if let extensionContext = resolvedViewController.extensionContext {
-            reportOpenAttempt("extensionContext.open", true)
-
-            let timeout = DispatchWorkItem {
-                guard !didFinish else { return }
-                print("[VoiceInputTrigger] extensionContext.open timeout, trying fallback")
-                _ = tryFallbackOpen()
-                finish(true)
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: timeout)
-
-            extensionContext.open(url) { success in
-                timeout.cancel()
-                reportOpenAttempt("extensionContext.open completion", success)
-                guard !didFinish else { return }
-
-                if !success {
-                    print("[VoiceInputTrigger] extensionContext.open reported failure, trying fallback")
-                    _ = tryFallbackOpen()
-                }
-
-                finish(true)
-            }
+        if let inputViewController = viewController as? UIInputViewController,
+           openViaInputViewController(url, from: inputViewController) {
+            print("[VoiceInputTrigger] open via UIInputViewController.openURL for \(urlString)")
+            finish(true)
             return
         }
 
-        if tryFallbackOpen() {
+        if openViaResponderChain(url: url, from: viewController) {
+            print("[VoiceInputTrigger] open via responder chain for \(urlString)")
             finish(true)
             return
         }
