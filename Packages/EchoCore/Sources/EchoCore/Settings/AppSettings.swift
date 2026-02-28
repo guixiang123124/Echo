@@ -165,6 +165,20 @@ public final class AppSettings: @unchecked Sendable {
         }
     }
 
+    /// How ASR/LLM API calls are routed (client-direct vs backend proxy)
+    public var apiCallMode: APICallMode {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.apiCallMode),
+                  let mode = APICallMode(rawValue: rawValue) else {
+                return .clientDirect
+            }
+            return mode
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.apiCallMode)
+        }
+    }
+
     public var deepgramModel: String {
         get {
             let rawValue = defaults.string(forKey: Keys.deepgramModel) ?? "nova-3"
@@ -361,6 +375,7 @@ public final class AppSettings: @unchecked Sendable {
         static let autoCapitalization = "echo.keyboard.autocap"
         static let pendingTranscription = "echo.ipc.pending_transcription"
         static let deepgramModel = "echo.asr.deepgramModel"
+        static let apiCallMode = "echo.api.callMode"
         static let cloudSyncEnabled = "echo.cloud.sync.enabled"
         static let cloudSyncBaseURL = "echo.cloud.sync.baseURL"
         static let cloudUploadAudio = "echo.cloud.sync.uploadAudio"

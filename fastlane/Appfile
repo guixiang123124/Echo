@@ -1,0 +1,9 @@
+# App Store Connect 配置
+app_identifier("com.xianggui.echo.app")
+username("guixiang123123@gmail.com")
+team_id("J5Y8R5W53N")
+
+# iOS 配置
+for_platform :ios do
+  apple_id("guixiang123123@gmail.com")
+end

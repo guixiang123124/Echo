@@ -8,16 +8,64 @@ enum VoiceInputTrigger {
     private static let launchAckTimeout: TimeInterval = 2.2
     private static let launchAckPollInterval: TimeInterval = 0.15
 
-    /// Open the main Echo app for voice recording
-    /// This method uses the responder chain to find an object that can open URLs
-    /// since UIApplication.shared is not available in keyboard extensions
+    /// Check if the voice engine is ready (running and healthy)
+    /// Returns true if we can send Start/Stop commands without jumping
+    static var isEngineReady: Bool {
+        let bridge = AppGroupBridge()
+        return bridge.isEngineHealthy
+    }
+
+    /// Smart voice trigger: if background dictation alive, use Darwin notification;
+    /// if engine healthy (old path), send voice command;
+    /// otherwise, jump to main app to start engine.
+    static func triggerVoiceInput(
+        isCurrentlyRecording: Bool,
+        from viewController: UIViewController?,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        let bridge = AppGroupBridge()
+
+        // Prefer Darwin notification path if background dictation is alive
+        if bridge.hasRecentHeartbeat(maxAge: 6) {
+            let darwin = DarwinNotificationCenter.shared
+            if isCurrentlyRecording {
+                darwin.post(.dictationStop)
+            } else {
+                darwin.post(.dictationStart)
+            }
+            completion?(true)
+            return
+        }
+
+        if bridge.isEngineHealthy {
+            let command: AppGroupBridge.VoiceCommand = isCurrentlyRecording ? .stop : .start
+            bridge.sendVoiceCommand(command)
+            completion?(true)
+        } else {
+            openMainAppForVoice(from: viewController, completion: completion)
+        }
+    }
+
+    /// Send Start command directly (when engine is already running)
+    static func sendStartCommand() {
+        AppGroupBridge().sendVoiceCommand(.start)
+    }
+
+    /// Send Stop command directly (when engine is already running)
+    static func sendStopCommand() {
+        AppGroupBridge().sendVoiceCommand(.stop)
+    }
+
+    /// Open the main Echo app for voice recording.
+    /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
         AppGroupBridge().setPendingLaunchIntent(.voice)
+        let trace = UUID().uuidString.prefix(8)
         let urls = [
-            AppGroupBridge.voiceInputURL,
-            URL(string: "echo:///voice")!,
-            URL(string: "echoapp://voice")!,
-            URL(string: "echoapp:///voice")!
+            URL(string: "echo://voice?trace=\(trace)")!,
+            URL(string: "echo:///voice?trace=\(trace)")!,
+            URL(string: "echoapp://voice?trace=\(trace)")!,
+            URL(string: "echoapp:///voice?trace=\(trace)")!
         ]
         open(urls: urls, from: viewController, completion: completion)
     }

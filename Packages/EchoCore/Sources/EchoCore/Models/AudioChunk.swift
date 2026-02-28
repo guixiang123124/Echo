@@ -28,6 +28,16 @@ public struct AudioChunk: Sendable {
     }
 }
 
+extension AudioChunk {
+    /// Combine multiple audio chunks into a single chunk for batch transcription.
+    public static func combine(_ chunks: [AudioChunk]) -> AudioChunk {
+        let combinedData = chunks.reduce(Data()) { $0 + $1.data }
+        let totalDuration = chunks.reduce(0.0) { $0 + $1.duration }
+        let format = chunks.first?.format ?? .default
+        return AudioChunk(data: combinedData, format: format, duration: totalDuration)
+    }
+}
+
 /// Audio format specification for ASR
 public struct AudioStreamFormat: Sendable, Equatable {
     public let sampleRate: Double

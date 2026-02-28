@@ -279,6 +279,20 @@ struct SettingsView: View {
                         Text("English").tag("english")
                         Text("Chinese (Pinyin)").tag("pinyin")
                     }
+
+                    // Residence setting for continuous voice
+                    Picker("Voice Engine Residence", selection: .init(
+                        get: { AppGroupBridge().residenceMode },
+                        set: { newValue in
+                            var bridge = AppGroupBridge()
+                            bridge.residenceMode = newValue
+                        }
+                    )) {
+                        ForEach(AppGroupBridge.ResidenceMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
                 }
 
                 // Setup Guide

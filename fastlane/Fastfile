@@ -1,0 +1,55 @@
+# Fastlane 配置 for Echo
+# 使用方法: fastlane beta
+
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and upload to TestFlight"
+  lane :beta do
+    # 获取版本号
+    version = get_version_number(target: "EchoApp")
+    build = get_build_number(target: "EchoApp")
+    
+    # 构建 iOS
+    build_app(
+      project: "Echo.xcodeproj",
+      scheme: "Echo",
+      configuration: "Release",
+      export_method: "app-store",
+      destination: "generic/platform=iOS"
+    )
+    
+    # 上传到 TestFlight
+    pilot(
+      username: "guixiang123123@gmail.com",
+      app_identifier: "com.xianggui.echo.app",
+      skip_waiting_for_build_processing: true,
+      skip_submission: false,
+      distribute_external: false
+    )
+    
+    puts "🎉 已上传到 TestFlight! 版本: #{version} (#{build})"
+  end
+
+  desc "Build for simulator (测试用)"
+  lane :sim do
+    build_app(
+      project: "Echo.xcodeproj",
+      scheme: "Echo",
+      configuration: "Debug",
+      destination: "generic/platform=iOS Simulator",
+      export_method: "simulator"
+    )
+    
+    puts "✅ Simulator 构建完成!"
+  end
+  
+  desc "同步证书和描述文件"
+  lane :certs do
+    match(
+      type: "appstore",
+      app_identifier: "com.xianggui.echo.app",
+      readonly: false
+    )
+  end
+end

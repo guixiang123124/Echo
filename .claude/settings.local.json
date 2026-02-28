@@ -42,7 +42,11 @@
       "Bash(# 在前台运行应用查看输出 pkill -f EchoMac sleep 1 /Applications/EchoMac.app/Contents/MacOS/EchoMac 2>&1)",
       "Bash(# 关闭应用 pkill -f EchoMac || true # 重新构建 xcodebuild -project Echo.xcodeproj -scheme EchoMac -destination ''platform=macOS'' build 2>&1)",
       "Bash(# 在后台运行并捕获日志 pkill -f EchoMac || true sleep 1 /Applications/EchoMac.app/Contents/MacOS/EchoMac 2>&1 & APP_PID=$! sleep 3 # 查看日志 echo \"\"=== 应用启动日志 ===\"\" cat /tmp/echo_log.txt echo \"\"\"\" echo \"\"=== 检查进程 ===\"\" ps aux)",
-      "Bash(# 关闭应用 pkill -f EchoMac || true sleep 1 # 重新构建 xcodebuild -project Echo.xcodeproj -scheme EchoMac -destination ''platform=macOS'' build 2>&1)"
+      "Bash(# 关闭应用 pkill -f EchoMac || true sleep 1 # 重新构建 xcodebuild -project Echo.xcodeproj -scheme EchoMac -destination ''platform=macOS'' build 2>&1)",
+      "Bash(xcrun devicectl:*)",
+      "Bash(grep:*)",
+      "Bash(do echo:*)",
+      "Bash(echo $firstline:*)"
     ]
   }
 }
