@@ -5,6 +5,8 @@ import EchoUI
 
 struct VoiceRecordingView: View {
     let startForKeyboard: Bool
+    /// If true, engine starts and view auto-dcloses quickly (for first wake)
+    let quickStartMode: Bool
 
     @StateObject private var viewModel = VoiceRecordingViewModel()
     @State private var textInput: String = ""
@@ -14,8 +16,9 @@ struct VoiceRecordingView: View {
     @FocusState private var isFocused: Bool
     @Environment(\.dismiss) private var dismiss
 
-    init(startForKeyboard: Bool = false) {
+    init(startForKeyboard: Bool = false, quickStartMode: Bool = false) {
         self.startForKeyboard = startForKeyboard
+        self.quickStartMode = quickStartMode
     }
 
     var body: some View {
@@ -117,6 +120,16 @@ struct VoiceRecordingView: View {
         .background(EchoTheme.keyboardBackground)
         .ignoresSafeArea()
         .task {
+            if quickStartMode {
+                // Quick start mode: start engine and return quickly
+                await viewModel.setupEngineForKeyboard()
+                // Brief delay for engine initialization
+                try? await Task.sleep(for: .milliseconds(500))
+                // Dismiss and return to original app
+                dismiss()
+                return
+            }
+
             guard startForKeyboard else { return }
             await viewModel.startRecordingForKeyboard()
         }
@@ -232,6 +245,12 @@ final class VoiceRecordingViewModel: ObservableObject {
     @Published var pendingAutoEditOriginal = ""
     @Published var pendingAutoEditSuggested = ""
     @Published var canUndoAutoEdit = false
+
+    // Engine state management for continuous voice
+    private let appGroupBridge = AppGroupBridge()
+    private var heartbeatTimer: Timer?
+    private var commandPollTimer: Timer?
+
     private struct StreamingMetrics {
         let providerId: String
         let providerName: String
@@ -266,6 +285,109 @@ final class VoiceRecordingViewModel: ObservableObject {
         } else {
             await startRecording()
         }
+    }
+
+    // MARK: - Engine Lifecycle for Continuous Voice
+
+    /// Start the voice engine for background residence (no actual recording yet)
+    func startEngineForResidence() async {
+        guard !isRecording else { return }
+
+        // Mark engine as running
+        appGroupBridge.setEngineRunning(true)
+        appGroupBridge.updateEngineHeartbeat()
+
+        // Start heartbeat timer
+        startHeartbeatTimer()
+
+        // Start polling for commands from keyboard
+        startCommandPolling()
+
+        statusText = "Engine ready"
+    }
+
+    /// Stop the voice engine completely
+    func stopEngine() async {
+        if isRecording {
+            await stopRecording()
+        }
+
+        stopHeartbeatTimer()
+        stopCommandPolling()
+
+        appGroupBridge.setEngineRunning(false)
+        appGroupBridge.setRecording(false)
+
+        statusText = "Ready"
+    }
+
+    private func startHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.appGroupBridge.updateEngineHeartbeat()
+            }
+        }
+    }
+
+    private func stopHeartbeatTimer() {
+        heartbeatTimer?.invalidate()
+        heartbeatTimer = nil
+    }
+
+    private func startCommandPolling() {
+        commandPollTimer?.invalidate()
+        commandPollTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.pollVoiceCommands()
+            }
+        }
+    }
+
+    private func stopCommandPolling() {
+        commandPollTimer?.invalidate()
+        commandPollTimer = nil
+    }
+
+    private func pollVoiceCommands() {
+        guard let command = appGroupBridge.consumeVoiceCommand() else { return }
+
+        Task {
+            switch command {
+            case .start:
+                if !isRecording {
+                    await startRecording()
+                }
+            case .stop:
+                if isRecording {
+                    await stopRecording()
+                }
+            }
+        }
+    }
+
+    /// Called when view appears to setup engine state
+    func setupEngineForKeyboard() async {
+        // Mark engine as running
+        appGroupBridge.setEngineRunning(true)
+        appGroupBridge.updateEngineHeartbeat()
+
+        // Start heartbeat and command polling
+        startHeartbeatTimer()
+        startCommandPolling()
+    }
+
+    /// Called when view disappears to cleanup
+    func cleanupEngine() {
+        // For residence mode, keep engine running
+        let residenceMode = appGroupBridge.residenceMode
+        if residenceMode == .never {
+            // Don't stop - keep running for "Never" (permanent) residence
+            // The engine will keep running in background
+        }
+
+        // Always update heartbeat
+        appGroupBridge.updateEngineHeartbeat()
     }
 
     func startRecording() async {
@@ -340,6 +462,8 @@ final class VoiceRecordingViewModel: ObservableObject {
 
         isRecording = true
         isProcessing = false
+        // Sync recording state to keyboard
+        appGroupBridge.setRecording(true)
         statusText = isStreamingSession ? "Streaming..." : "Listening..."
         transcribedText = ""
         tipText = EchoTaglines.random()
@@ -398,6 +522,8 @@ final class VoiceRecordingViewModel: ObservableObject {
         recordingTask?.cancel()
         recordingTask = nil
         isRecording = false
+        // Sync recording state to keyboard
+        appGroupBridge.setRecording(false)
         audioLevels = Array(repeating: 0, count: 30)
 
         // Give the tap a moment to flush in-flight buffers.
@@ -767,6 +893,11 @@ final class VoiceRecordingViewModel: ObservableObject {
 
     func startRecordingForKeyboard() async {
         isKeyboardMode = true
+
+        // Setup engine state for continuous voice
+        await setupEngineForKeyboard()
+
+        // Start recording
         await startRecording()
     }
 

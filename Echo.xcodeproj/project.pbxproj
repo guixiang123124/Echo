@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		013489831AC5ED990059711F /* CorrectionProviderResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B87D659AA16F6F85B7B1CA /* CorrectionProviderResolver.swift */; };
+		A1B2C3D4E5F60718 /* BackgroundDictationOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60719 /* BackgroundDictationOverlay.swift */; };
 		0AC3F3FEBF51B9BDE9C35B3A /* PinyinKeyboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60E6B8DB8104A64E3D8931F0 /* PinyinKeyboardView.swift */; };
 		0E1CF361506FDBC6977F7FB8 /* EchoMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B5AF036C9D5C75B90413509 /* EchoMacApp.swift */; };
 		10F8176AAF7DB637CA4A03BE /* VoiceInputTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E4E62FF3DB13310FFFADD70 /* VoiceInputTrigger.swift */; };
@@ -117,7 +117,7 @@
 		E6A9B9B8D8BBF478A2EF5652 /* GlobalHotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyMonitor.swift; sourceTree = "<group>"; };
 		EECDB2C139B1C9F65F8A8489 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		EF814301D92D0CD87305E815 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
-		F9B87D659AA16F6F85B7B1CA /* CorrectionProviderResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionProviderResolver.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60719 /* BackgroundDictationOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundDictationOverlay.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -156,6 +156,7 @@
 		3A93B6F98941F7E80C49CDC4 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60719 /* BackgroundDictationOverlay.swift */,
 				2BCB0395E05C1ED9A4EB7D32 /* EchoAccountView.swift */,
 				C6C1E96CE3AFA65E0097698A /* EchoDictionaryView.swift */,
 				B944946A3A7E1647AD02E547 /* EchoHistoryView.swift */,
@@ -196,7 +197,6 @@
 			isa = PBXGroup;
 			children = (
 				2BCD9DEAE8F92647CA0ACC0F /* AppGroupBridge.swift */,
-				F9B87D659AA16F6F85B7B1CA /* CorrectionProviderResolver.swift */,
 				89AEAA0B529E1924DF7C4F2A /* VoiceInputCoordinator.swift */,
 			);
 			path = Services;
@@ -431,8 +431,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F60718 /* BackgroundDictationOverlay.swift in Sources */,
 				D69CDA45080B3CF7AF5ED494 /* AppGroupBridge.swift in Sources */,
-				013489831AC5ED990059711F /* CorrectionProviderResolver.swift in Sources */,
 				2A24BB8AE06703073E04009B /* EchoAccountView.swift in Sources */,
 				8A95A44A8CDC9810DECF026E /* EchoApp.swift in Sources */,
 				F1D3C45064947FCFD6630223 /* EchoDictionaryView.swift in Sources */,

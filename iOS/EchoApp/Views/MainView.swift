@@ -10,12 +10,12 @@ struct MainView: View {
     }
 
     fileprivate enum DeepLink {
-        case voice
         case settings
     }
 
     @State private var selectedTab: Tab = .home
     @State private var deepLink: DeepLink?
+    @StateObject private var backgroundDictation = BackgroundDictationService()
     @EnvironmentObject var authSession: EchoAuthSession
     @Environment(\.scenePhase) private var scenePhase
     private let keyboardIntentPoll = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
@@ -47,22 +47,24 @@ struct MainView: View {
                 .tag(Tab.account)
         }
         .tint(.primary)
+        .overlay(alignment: .top) {
+            if !backgroundDictation.state.isIdle {
+                BackgroundDictationOverlay(service: backgroundDictation)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .onReceive(authSession.$user) { user in
             CloudSyncService.shared.updateAuthState(user: user)
             BillingService.shared.updateAuthState(user: user)
             Task { await BillingService.shared.refresh() }
         }
         .onOpenURL { url in
-            print("[EchoApp] onOpenURL received: \(url.absoluteString)")
-            guard url.scheme == "echo" || url.scheme == "echoapp" else {
-                print("[EchoApp] onOpenURL ignored due unsupported scheme: \(url.scheme ?? "<none>")")
-                return
-            }
+            guard url.scheme == "echo" || url.scheme == "echoapp" else { return }
             let route = (url.host?.isEmpty == false ? url.host : nil)
                 ?? url.pathComponents.dropFirst().first
                 .map { $0.lowercased() }
             guard let route else { return }
-            print("[EchoApp] onOpenURL parsed route: \(route)")
+
             switch route {
             case "home":
                 selectedTab = .home
@@ -77,35 +79,63 @@ struct MainView: View {
                 selectedTab = .account
                 deepLink = nil
             case "voice":
-                deepLink = .voice
-                AppGroupBridge().markLaunchAcknowledged()
-                AppGroupBridge().clearPendingLaunchIntent()
+                handleVoiceDeepLink()
             case "settings":
                 deepLink = .settings
                 AppGroupBridge().markLaunchAcknowledged()
                 AppGroupBridge().clearPendingLaunchIntent()
             default:
-                print("[EchoApp] onOpenURL unsupported route: \(route)")
                 break
             }
         }
         .onAppear {
+            backgroundDictation.activate(authSession: authSession)
             consumeKeyboardLaunchIntentIfNeeded()
         }
         .onReceive(keyboardIntentPoll) { _ in
             consumeKeyboardLaunchIntentIfNeeded()
         }
         .onChange(of: scenePhase) { _, newValue in
-            guard newValue == .active else { return }
-            consumeKeyboardLaunchIntentIfNeeded()
+            switch newValue {
+            case .active:
+                consumeKeyboardLaunchIntentIfNeeded()
+            case .background:
+                backgroundDictation.deactivate()
+            default:
+                break
+            }
         }
         .sheet(item: $deepLink) { link in
             switch link {
-            case .voice:
-                VoiceRecordingView(startForKeyboard: true)
             case .settings:
                 SettingsView()
             }
+        }
+    }
+
+    // MARK: - Voice Deep Link
+
+    /// Handle voice deep link: activate background dictation and auto-return.
+    /// No longer opens a VoiceRecordingView sheet.
+    private func handleVoiceDeepLink() {
+        let bridge = AppGroupBridge()
+        bridge.markLaunchAcknowledged()
+        bridge.clearPendingLaunchIntent()
+
+        if backgroundDictation.state.isIdle {
+            // Engine will start recording when it receives the Darwin notification.
+            // Activate if not already active.
+            backgroundDictation.activate(authSession: authSession)
+        }
+
+        // Auto-return to the previous app after a brief delay
+        autoReturn()
+    }
+
+    /// Suspend the app to return to the previous app (keyboard host).
+    private func autoReturn() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            UIApplication.shared.perform(Selector(("suspend")))
         }
     }
 }
@@ -113,7 +143,6 @@ struct MainView: View {
 extension MainView.DeepLink: Identifiable {
     var id: String {
         switch self {
-        case .voice: return "voice"
         case .settings: return "settings"
         }
     }
@@ -123,18 +152,25 @@ private extension MainView {
     func consumeKeyboardLaunchIntentIfNeeded() {
         let bridge = AppGroupBridge()
         guard let intent = bridge.consumePendingLaunchIntent(maxAge: 45) else {
-            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
             return
         }
-        print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
         switch intent {
-        case .voice:
-            deepLink = .voice
-            bridge.markLaunchAcknowledged()
+        case .voice, .voiceControl:
+            // Activate background dictation instead of opening sheet
+            handleVoiceDeepLink()
         case .settings:
             deepLink = .settings
             bridge.markLaunchAcknowledged()
         }
+    }
+}
+
+// MARK: - SessionState Helper
+
+extension BackgroundDictationService.SessionState {
+    var isIdle: Bool {
+        if case .idle = self { return true }
+        return false
     }
 }
 

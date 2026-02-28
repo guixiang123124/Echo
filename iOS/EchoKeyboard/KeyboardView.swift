@@ -12,11 +12,12 @@ struct KeyboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             KeyboardTopBar(
+                state: state,
                 onOpenSettings: {
                     openMainAppSettings()
                 },
                 onTriggerVoice: {
-                    openMainAppVoice()
+                    handleVoiceTap()
                 },
                 onCollapse: {
                     (state.viewController as? UIInputViewController)?.dismissKeyboard()
@@ -77,6 +78,25 @@ struct KeyboardView: View {
         return base + 44
     }
 
+    // MARK: - Voice Tap Handling
+
+    /// Conditional voice routing: if background dictation is alive, toggle via Darwin;
+    /// otherwise fall back to opening the main app.
+    private func handleVoiceTap() {
+        if state.isBackgroundDictationAlive {
+            // Engine alive -- toggle directly via Darwin notification (no app jump)
+            let darwin = DarwinNotificationCenter.shared
+            if state.isRemoteRecording {
+                darwin.post(.dictationStop)
+            } else {
+                darwin.post(.dictationStart)
+            }
+        } else {
+            // Engine not alive -- need to wake the main app first
+            openMainAppVoice()
+        }
+    }
+
     private func handleKeyAction(_ action: KeyboardAction) {
         let operation = state.actionHandler.handle(
             action: action,
@@ -121,7 +141,7 @@ struct KeyboardView: View {
 
         case .triggerVoiceInput:
             if hapticEnabled { state.haptic.specialKeyTap() }
-            openMainAppVoice()
+            handleVoiceTap()
 
         case .triggerEmoji:
             if hapticEnabled { state.haptic.specialKeyTap() }
@@ -135,12 +155,10 @@ struct KeyboardView: View {
     }
 
     private func openMainAppVoice() {
-        print("[EchoKeyboard] openMainAppVoice called")
-        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
-
-        state.showToast("Opening Echo…")
-        VoiceInputTrigger.openMainAppForVoice(from: state.viewController) { success in
-            print("[EchoKeyboard] openMainAppVoice result: \(success)")
+        VoiceInputTrigger.triggerVoiceInput(
+            isCurrentlyRecording: state.isVoiceRecording,
+            from: state.viewController
+        ) { success in
             if !success {
                 if !state.hasOperationalFullAccess {
                     state.showToast(state.fullAccessGuidance)
@@ -152,12 +170,8 @@ struct KeyboardView: View {
     }
 
     private func openMainAppSettings() {
-        print("[EchoKeyboard] openMainAppSettings called")
-        print("[EchoKeyboard] hasFullAccess: \(state.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
-
-        state.showToast("Opening Echo settings…")
+        state.showToast("Opening Echo settings...")
         VoiceInputTrigger.openMainAppForSettings(from: state.viewController) { success in
-            print("[EchoKeyboard] openMainAppSettings result: \(success)")
             if !success {
                 if !state.hasOperationalFullAccess {
                     state.showToast(state.fullAccessGuidance)
@@ -221,13 +235,14 @@ struct KeyboardView: View {
 // MARK: - Top Bar
 
 private struct KeyboardTopBar: View {
+    @ObservedObject var state: KeyboardState
     let onOpenSettings: () -> Void
     let onTriggerVoice: () -> Void
     let onCollapse: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
-            // Settings button - using onTapGesture for keyboard extension compatibility
+            // Settings button
             Image(systemName: "gearshape")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))
@@ -242,12 +257,12 @@ private struct KeyboardTopBar: View {
 
             Spacer()
 
-            // Voice button - using onTapGesture for keyboard extension compatibility
+            // Voice button with dynamic state from background dictation
             EchoDictationPill(
-                isRecording: false,
-                isProcessing: false,
+                isRecording: state.isRemoteRecording,
+                isProcessing: state.isRemoteTranscribing,
                 levels: [],
-                tipText: nil,
+                tipText: state.remotePartialText.isEmpty ? nil : state.remotePartialText,
                 width: 150,
                 height: 30
             )
@@ -258,7 +273,7 @@ private struct KeyboardTopBar: View {
 
             Spacer()
 
-            // Collapse button - using onTapGesture for keyboard extension compatibility
+            // Collapse button
             Image(systemName: "chevron.down")
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color(.secondaryLabel))

@@ -32,16 +32,21 @@ struct EchoApp: App {
 
 private final class AppURLBridge: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        print("[EchoApp] application(_:open:options:) received \(url.absoluteString)")
-
         guard let intent = url.keyboardLaunchIntent else {
             return false
         }
 
-        print("[EchoApp] application open URL parsed intent: \(intent.rawValue)")
         let bridge = AppGroupBridge()
         bridge.setPendingLaunchIntent(intent)
         bridge.markLaunchAcknowledged()
+
+        // For voice intents, auto-return to the calling app after acknowledging
+        if intent == .voice || intent == .voiceControl {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                application.perform(Selector(("suspend")))
+            }
+        }
+
         return true
     }
 }
