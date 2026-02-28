@@ -48,6 +48,7 @@ public final class BackgroundDictationService: ObservableObject {
    // Darwin observation tokens
    private var startToken: DarwinNotificationCenter.ObservationToken?
    private var stopToken: DarwinNotificationCenter.ObservationToken?
+   private var isActive = false
 
    // Auth session reference for provider resolution
    private weak var authSession: EchoAuthSession?
@@ -73,6 +74,11 @@ public final class BackgroundDictationService: ObservableObject {
    /// Start listening for Darwin notifications from the keyboard extension.
    /// Call this when the app launches or becomes active.
    public func activate(authSession: EchoAuthSession) {
+       if isActive {
+           self.authSession = authSession
+           return
+       }
+
        self.authSession = authSession
 
        startToken = darwin.observe(.dictationStart) { [weak self] in
@@ -88,13 +94,16 @@ public final class BackgroundDictationService: ObservableObject {
        }
 
        // Write initial idle state
+       bridge.setEngineRunning(true)
        bridge.setDictationState(.idle, sessionId: "")
        bridge.writeHeartbeat()
        startHeartbeat()
+       isActive = true
    }
 
    /// Stop listening and clean up. Call when app is about to terminate.
    public func deactivate() {
+       isActive = false
        if let startToken { darwin.removeObservation(startToken) }
        if let stopToken { darwin.removeObservation(stopToken) }
        startToken = nil
@@ -102,21 +111,47 @@ public final class BackgroundDictationService: ObservableObject {
 
        cancelAllTasks()
        bridge.clearStreamingData()
+       bridge.setEngineRunning(false)
+       bridge.setRecording(false)
        bridge.setDictationState(.idle, sessionId: "")
        state = .idle
    }
 
    // MARK: - Public API
 
-   /// Start a dictation session programmatically (e.g. from the voice recording view).
-   public func startDictation() async {
-       await performStartDictation()
-   }
+    /// Start a dictation session programmatically (e.g. from the voice recording view).
+    public func startDictation() async {
+        await performStartDictation()
+    }
 
-   /// Stop the current dictation session.
-   public func stopDictation() async {
-       await performStopDictation()
-   }
+    /// Start/ensure dictation when triggered from keyboard voice intent.
+    /// - This keeps existing live recording sessions intact, but recovers stale
+    ///   non-functional recording states for background/foreground transitions.
+    public func startDictationForKeyboardIntent() async {
+        switch state {
+        case .idle, .error:
+            await performStartDictation()
+
+        case .recording, .transcribing:
+            if hasActiveRecordingPipeline() {
+                return
+            }
+            await recoverAndRestartDictationSession()
+
+        case .finalizing:
+            let becameIdle = await waitForStateToBecomeIdle(timeout: 1.0)
+            if becameIdle {
+                await performStartDictation()
+            } else {
+                await recoverAndRestartDictationSession()
+            }
+        }
+    }
+
+    /// Stop the current dictation session.
+    public func stopDictation() async {
+        await performStopDictation()
+    }
 
    /// Toggle dictation (start if idle, stop if recording/transcribing).
    public func toggleDictation() async {
@@ -160,14 +195,26 @@ public final class BackgroundDictationService: ObservableObject {
    // MARK: - Core Logic
 
    private func performStartDictation() async {
-       // Cancel idle timeout if we're restarting
-       idleTimeoutTask?.cancel()
-       idleTimeoutTask = nil
+       let canStart: Bool = switch state {
+           case .idle, .error:
+               true
+           default:
+               false
+       }
+       guard canStart else {
+           print("[BackgroundDictation] start ignored; non-idle state=\(state)")
+           return
+       }
+
+        // Cancel idle timeout if we're restarting
+        idleTimeoutTask?.cancel()
+        idleTimeoutTask = nil
 
        let newSessionId = UUID().uuidString
        sessionId = newSessionId
        sequenceCounter = 0
        latestPartialText = ""
+       bridge.clearStreamingData()
 
        // Resolve ASR provider
        guard let authSession else {
@@ -252,6 +299,7 @@ public final class BackgroundDictationService: ObservableObject {
        }
 
        state = .recording
+       bridge.setRecording(true)
        bridge.setDictationState(.recording, sessionId: newSessionId)
        darwin.post(.stateChanged)
 
@@ -298,10 +346,11 @@ public final class BackgroundDictationService: ObservableObject {
        }
    }
 
-   private func performStopDictation() async {
-       guard state == .recording || state == .transcribing else { return }
+    private func performStopDictation() async {
+        guard state == .recording || state == .transcribing else { return }
 
        state = .finalizing
+       bridge.setRecording(false)
        bridge.setDictationState(.finalizing, sessionId: sessionId)
        darwin.post(.stateChanged)
 
@@ -340,6 +389,7 @@ public final class BackgroundDictationService: ObservableObject {
        streamingResultTask = nil
 
        state = .idle
+       bridge.setRecording(false)
        bridge.setDictationState(.idle, sessionId: sessionId)
        darwin.post(.stateChanged)
 
@@ -348,10 +398,52 @@ public final class BackgroundDictationService: ObservableObject {
 
        // Start idle timeout to eventually release audio engine & session
        startIdleTimeout()
-   }
+    }
 
-   private func transitionToError(_ message: String) {
+    private func recoverAndRestartDictationSession() async {
+        if state == .recording || state == .transcribing {
+            await performStopDictation()
+        } else {
+            recordingTask?.cancel()
+            streamingResultTask?.cancel()
+            recordingTask = nil
+            streamingResultTask = nil
+        }
+
+        state = .idle
+        bridge.setRecording(false)
+        bridge.setDictationState(.idle, sessionId: sessionId)
+        darwin.post(.stateChanged)
+        currentProvider = nil
+        await performStartDictation()
+    }
+
+    private func hasActiveRecordingPipeline() -> Bool {
+        guard state == .recording || state == .transcribing else { return false }
+
+        if let recordingTask, !recordingTask.isCancelled {
+            return true
+        }
+        if let streamingResultTask, !streamingResultTask.isCancelled {
+            return true
+        }
+        return audioService?.isEngineRunning ?? false
+    }
+
+    private func waitForStateToBecomeIdle(timeout: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if case .idle = state {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 60_000_000)
+        }
+        return false
+    }
+
+    private func transitionToError(_ message: String) {
        state = .error(message)
+       bridge.setRecording(false)
        bridge.setDictationState(.error, sessionId: sessionId)
        darwin.post(.stateChanged)
        print("[BackgroundDictation] Error: \(message)")

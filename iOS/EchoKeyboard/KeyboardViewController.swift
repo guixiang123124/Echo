@@ -7,6 +7,12 @@ class KeyboardViewController: UIInputViewController {
    private var hostingController: UIHostingController<KeyboardView>?
    private let keyboardState = KeyboardState()
    private var transcriptionPollTimer: Timer?
+   private var dictationNotificationTokens: [DarwinNotificationCenter.ObservationToken] = []
+   private var lastStreamingSequence: Int = 0
+   private var activeStreamingSessionId: String = ""
+   private var lastStreamingText: String = ""
+   private var lastFinalStreamingText: String = ""
+   private var lastFinalStreamingAt: Date = .distantPast
 
    override func viewDidLoad() {
        super.viewDidLoad()
@@ -47,11 +53,13 @@ class KeyboardViewController: UIInputViewController {
        print("[EchoKeyboard] viewWillAppear, hasFullAccess: \(keyboardState.hasFullAccess), hasSharedContainer: \(AppGroupBridge.hasSharedContainerAccess)")
        checkForPendingTranscription()
        startTranscriptionPolling()
+       startDictationObservers()
    }
 
    override func viewWillDisappear(_ animated: Bool) {
        super.viewWillDisappear(animated)
        stopTranscriptionPolling()
+       stopDictationObservers()
    }
 
    override func textDidChange(_ textInput: UITextInput?) {
@@ -62,9 +70,21 @@ class KeyboardViewController: UIInputViewController {
    /// Check if the main app has returned a voice transcription
    private func checkForPendingTranscription() {
        let bridge = AppGroupBridge()
+
+       if consumeStreamingPartial(from: bridge) {
+           return
+       }
+
        if let transcription = bridge.receivePendingTranscription() {
            let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
            guard !trimmed.isEmpty else { return }
+
+           // Avoid duplicate insertion when stream final also writes legacy pending text.
+           if Date().timeIntervalSince(lastFinalStreamingAt) <= 3,
+              !lastFinalStreamingText.isEmpty,
+              trimmed == lastFinalStreamingText {
+               return
+           }
            textDocumentProxy.insertText(trimmed)
        }
    }
@@ -81,8 +101,96 @@ class KeyboardViewController: UIInputViewController {
        transcriptionPollTimer = nil
    }
 
+   private func startDictationObservers() {
+       stopDictationObservers()
+       let darwin = DarwinNotificationCenter.shared
+
+       dictationNotificationTokens.append(
+           darwin.observe(.transcriptionReady) { [weak self] in
+               DispatchQueue.main.async { [weak self] in
+                   self?.checkForPendingTranscription()
+               }
+           }
+       )
+
+       dictationNotificationTokens.append(
+           darwin.observe(.stateChanged) { [weak self] in
+               DispatchQueue.main.async { [weak self] in
+                   self?.keyboardState.syncVoiceState()
+               }
+           }
+       )
+
+       dictationNotificationTokens.append(
+           darwin.observe(.heartbeat) { [weak self] in
+               DispatchQueue.main.async { [weak self] in
+                   self?.keyboardState.syncVoiceState()
+               }
+           }
+       )
+   }
+
+   private func stopDictationObservers() {
+       dictationNotificationTokens.forEach { token in
+           DarwinNotificationCenter.shared.removeObservation(token)
+       }
+       dictationNotificationTokens.removeAll()
+   }
+
+   private func consumeStreamingPartial(from bridge: AppGroupBridge) -> Bool {
+       guard let partial = bridge.readStreamingPartial() else {
+           return false
+       }
+
+       guard !partial.sessionId.isEmpty else {
+           return false
+       }
+
+       if partial.sessionId != activeStreamingSessionId {
+           activeStreamingSessionId = partial.sessionId
+           lastStreamingSequence = 0
+           lastStreamingText = ""
+       }
+
+       if partial.sequence <= lastStreamingSequence {
+           return false
+       }
+       lastStreamingSequence = partial.sequence
+
+       let trimmed = partial.text.trimmingCharacters(in: .whitespacesAndNewlines)
+       guard !trimmed.isEmpty else {
+           if partial.isFinal {
+               lastFinalStreamingText = ""
+               lastFinalStreamingAt = Date()
+               bridge.clearStreamingData()
+           }
+           return false
+       }
+
+       replaceTextInInput(trimmed)
+
+       if partial.isFinal {
+           lastFinalStreamingText = trimmed
+           lastFinalStreamingAt = Date()
+           bridge.clearStreamingData()
+       }
+
+       return true
+   }
+
+   private func replaceTextInInput(_ text: String) {
+       if !lastStreamingText.isEmpty {
+           for _ in 0..<lastStreamingText.count {
+               textDocumentProxy.deleteBackward()
+           }
+       }
+       textDocumentProxy.insertText(text)
+       lastStreamingText = text
+   }
+
    deinit {
        stopTranscriptionPolling()
+       stopDictationObservers()
    }
 }
 
@@ -126,9 +234,18 @@ class KeyboardState: ObservableObject {
    }
 
    /// Sync voice recording state from AppGroupBridge
-   private func syncVoiceState() {
+   func syncVoiceState() {
        let bridge = AppGroupBridge()
-       isVoiceRecording = bridge.isRecording
+       if let dictationState = bridge.readDictationState() {
+           isVoiceRecording = switch dictationState.state {
+           case .recording, .transcribing, .finalizing:
+               true
+           case .idle, .error:
+               false
+           }
+       } else {
+           isVoiceRecording = bridge.isRecording
+       }
        isBackgroundDictationAlive = bridge.hasRecentHeartbeat(maxAge: 6)
    }
 
