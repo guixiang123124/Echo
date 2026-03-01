@@ -47,6 +47,24 @@ private final class AppURLBridge: NSObject, UIApplicationDelegate {
 
        print("[EchoApp] application open URL parsed intent: \(intent.rawValue)")
        let bridge = AppGroupBridge()
+
+       // Capture source application from Open URL options for return-to-host flow.
+       // In some launch paths, this can provide a direct and more reliable host app
+       // bundle ID than keyboard-extension-only PID detection.
+       if let sourceApp = options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String,
+          !sourceApp.isEmpty,
+          sourceApp != Bundle.main.bundleIdentifier,
+          !sourceApp.hasPrefix("com.apple."),
+          !sourceApp.hasSuffix(".keyboard") {
+           print("[EchoApp] captured sourceApplication for return flow: \(sourceApp)")
+           bridge.setReturnAppBundleID(sourceApp)
+           bridge.clearReturnAppPID()
+           bridge.appendDebugEvent("sourceApplication captured for return: \(sourceApp)", source: "mainapp", category: "MainView.Return")
+       } else if let sourceApp = options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String, !sourceApp.isEmpty {
+           print("[EchoApp] sourceApplication ignored for return flow: \(sourceApp)")
+           bridge.appendDebugEvent("sourceApplication ignored for return: \(sourceApp)", source: "mainapp", category: "MainView.Return")
+       }
+
        bridge.setPendingLaunchIntent(intent)
        bridge.markLaunchAcknowledged()
        return true
