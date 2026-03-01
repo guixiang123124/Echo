@@ -1,5 +1,15 @@
 import Foundation
+import os.log
 import EchoCore
+
+private let asrLog = OSLog(subsystem: "com.xianggui.echo.mac", category: "ASR")
+
+private func asrDiag(_ message: String) {
+    let line = "[\(Date())] \(message)"
+    let existing = UserDefaults.standard.string(forKey: "echo.debug.asrDiag") ?? ""
+    let updated = existing.isEmpty ? line : existing + "\n" + line
+    UserDefaults.standard.set(updated, forKey: "echo.debug.asrDiag")
+}
 
 /// Service that manages voice input using EchoCore
 /// Coordinates audio capture, speech recognition, and LLM correction
@@ -101,6 +111,7 @@ public final class VoiceInputService: ObservableObject {
             isStreamingSession = settings.asrMode == .stream && provider.supportsStreaming
             isStreamingSessionActive = isStreamingSession
             streamMode = isStreamingSession ? "stream" : "batch"
+            asrDiag("startRecording: provider=\(provider.id) isStreaming=\(isStreamingSession) asrMode=\(settings.asrMode) supportsStreaming=\(provider.supportsStreaming)")
             streamingStartDate = Date()
             streamingFirstPartialMs = nil
             streamingFirstFinalMs = nil
@@ -1358,29 +1369,47 @@ public final class VoiceInputService: ObservableObject {
     private func resolveASRProvider() -> (any ASRProvider)? {
         let selectedId = settings.selectedASRProvider
         let mode = settings.apiCallMode
+        let asrMode = settings.asrMode
+
+        os_log(.info, log: asrLog, "resolveASRProvider: selectedId=%{public}@ apiCallMode=%{public}@ asrMode=%{public}@", selectedId, "\(mode)", "\(asrMode)")
+        asrDiag("resolveASRProvider: selectedId=\(selectedId) apiCallMode=\(mode) asrMode=\(asrMode)")
 
         switch mode {
         case .clientDirect:
             // Client-direct first, then proxy fallback
-            if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
-                return selectedProvider
+            if selectedId != "openai_whisper" {
+                if let selectedProvider = asrProvider(for: selectedId) {
+                    if selectedProvider.isAvailable {
+                        os_log(.info, log: asrLog, "using client-direct provider: %{public}@ streaming=%{public}d", selectedProvider.id, selectedProvider.supportsStreaming ? 1 : 0)
+                        return selectedProvider
+                    } else {
+                        os_log(.error, log: asrLog, "client-direct %{public}@ isAvailable=false (missing credentials?)", selectedId)
+                    }
+                } else {
+                    os_log(.error, log: asrLog, "asrProvider(for: %{public}@) returned nil", selectedId)
+                }
             }
             if selectedId != "openai_whisper", let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                os_log(.error, log: asrLog, "FALLBACK to backend proxy for %{public}@ — polling-based, not WebSocket!", selectedId)
                 return proxyProvider
             }
             if let fallbackProvider = resolveOpenAIProvider(), fallbackProvider.isAvailable {
+                os_log(.error, log: asrLog, "FALLBACK to OpenAI Whisper (no streaming)")
                 return fallbackProvider
             }
             if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
+                os_log(.error, log: asrLog, "FALLBACK to proxy OpenAI")
                 return proxyFallback
             }
 
         case .backendProxy:
             // Backend proxy first, then client-direct fallback
             if let proxyProvider = resolveCloudProxyProvider(for: selectedId) {
+                os_log(.info, log: asrLog, "using backend proxy for %{public}@ (polling-based streaming)", selectedId)
                 return proxyProvider
             }
             if selectedId != "openai_whisper", let selectedProvider = asrProvider(for: selectedId), selectedProvider.isAvailable {
+                os_log(.info, log: asrLog, "backend proxy unavailable, using client-direct: %{public}@", selectedProvider.id)
                 return selectedProvider
             }
             if let proxyFallback = resolveCloudProxyProvider(for: "openai_whisper") {
@@ -1391,6 +1420,7 @@ public final class VoiceInputService: ObservableObject {
             }
         }
 
+        os_log(.error, log: asrLog, "no provider resolved!")
         return nil
     }
 
@@ -1398,11 +1428,18 @@ public final class VoiceInputService: ObservableObject {
         switch providerId {
         case "volcano":
             let volcanoOverrides = resolveVolcanoOverrides()
+            os_log(.info, log: asrLog, "volcano overrides: appId=%{public}@ accessKey=%{public}@",
+                   volcanoOverrides.appId.map { String($0.prefix(4)) + "..." } ?? "nil",
+                   volcanoOverrides.accessKey.map { String($0.prefix(4)) + "..." } ?? "nil")
+            asrDiag("volcano overrides: appId=\(volcanoOverrides.appId?.prefix(4) ?? "nil")... accessKey=\(volcanoOverrides.accessKey?.prefix(4) ?? "nil")...")
             let provider = VolcanoASRProvider(
                 keyStore: keyStore,
                 appId: volcanoOverrides.appId,
                 accessKey: volcanoOverrides.accessKey
             )
+            os_log(.info, log: asrLog, "volcano provider.isAvailable=%{public}d supportsStreaming=%{public}d",
+                   provider.isAvailable ? 1 : 0, provider.supportsStreaming ? 1 : 0)
+            asrDiag("volcano provider.isAvailable=\(provider.isAvailable) supportsStreaming=\(provider.supportsStreaming)")
             return provider.isAvailable ? provider : nil
         case "deepgram":
             let selectedModel = settings.deepgramModel

@@ -66,6 +66,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         EmbeddedKeyProvider.shared.seedKeychainIfNeeded()
         settings.normalizeOpenAIModel()
 
+        // Write startup diagnostics to UserDefaults for CLI debugging
+        let ks = SecureKeyStore()
+        let volcAppId = (try? ks.retrieve(for: "volcano_app_id")) ?? "<missing>"
+        let volcKey = (try? ks.retrieve(for: "volcano_access_key")) ?? "<missing>"
+        UserDefaults.standard.set(
+            "[\(Date())] provider=\(settings.selectedASRProvider) mode=\(settings.asrMode) apiCall=\(settings.apiCallMode) volcAppId=\(String(volcAppId.prefix(6)))... volcKey=\(String(volcKey.prefix(4)))...",
+            forKey: "echo.debug.startupDiag"
+        )
+
         // Initialize services
         voiceInputService = VoiceInputService(settings: settings)
         textInserter = TextInserter()

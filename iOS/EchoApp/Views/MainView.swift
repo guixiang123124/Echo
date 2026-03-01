@@ -2,6 +2,12 @@ import SwiftUI
 import EchoCore
 import UIKit
 
+// proc_pidpath is in libproc — used to resolve host app PID to bundle path.
+// The main app has fewer sandbox restrictions than the keyboard extension,
+// so PID resolution is done here instead of in the extension.
+@_silgen_name("proc_pidpath")
+private func proc_pidpath(_ pid: Int32, _ buffer: UnsafeMutablePointer<CChar>, _ buffersize: UInt32) -> Int32
+
 struct MainView: View {
    private enum Tab: Int {
        case home = 0
@@ -232,6 +238,7 @@ extension MainView.DeepLink: Identifiable {
         // instead of back to the host app.
         if let hostBundleID = bridge.returnAppBundleID, !hostBundleID.isEmpty {
             bridge.clearReturnAppBundleID()
+            bridge.clearReturnAppPID()
             rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace in 0.4s")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 if openAppByBundleID(hostBundleID) {
@@ -244,11 +251,161 @@ extension MainView.DeepLink: Identifiable {
             return
         }
 
+        // Fallback: resolve host app PID to bundle ID.
+        // The keyboard extension saves the PID when it cannot call proc_pidpath
+        // due to sandbox restrictions. The main app resolves it here instead.
+        if let hostPID = bridge.returnAppPID {
+            bridge.clearReturnAppPID()
+            rlog("[EchoApp] autoReturnToHostApp: got host PID = \(hostPID), resolving bundle ID via proc_pidpath")
+            if let resolvedBundleID = resolveBundleIDFromPID(hostPID) {
+                rlog("[EchoApp] autoReturnToHostApp: resolved PID \(hostPID) -> \(resolvedBundleID), trying LSApplicationWorkspace in 0.4s")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    if openAppByBundleID(resolvedBundleID) {
+                        rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(resolvedBundleID) (from PID \(hostPID))")
+                        return
+                    }
+                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(resolvedBundleID), falling back to suspend")
+                    suspendApp()
+                }
+                return
+            }
+            rlog("[EchoApp] autoReturnToHostApp: proc_pidpath failed for PID \(hostPID), falling back to suspend")
+        }
+
         // Fallback: suspend (works for system apps)
-        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID saved, scheduling suspend in 0.4s")
+        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID or PID available, scheduling suspend in 0.4s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             suspendApp()
         }
+    }
+
+    /// Resolve a PID to a bundle ID using multiple strategies.
+    /// Strategy 1: proc_pidpath (fails on iOS sandbox but kept for diagnostics).
+    /// Strategy 2: sysctl KERN_PROC_PID → process name → match installed apps.
+    func resolveBundleIDFromPID(_ pid: Int32) -> String? {
+        // Strategy 1: proc_pidpath
+        var pathBuffer = [CChar](repeating: 0, count: 4096)
+        let pathLen = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
+        if pathLen > 0 {
+            let execPath = String(cString: pathBuffer)
+            rlog("[EchoApp] resolveBundleIDFromPID: proc_pidpath OK: \(execPath)")
+            let appBundlePath = (execPath as NSString).deletingLastPathComponent
+            let infoPlistPath = appBundlePath + "/Info.plist"
+            if let dict = NSDictionary(contentsOfFile: infoPlistPath),
+               let bundleID = dict["CFBundleIdentifier"] as? String,
+               !bundleID.isEmpty {
+                rlog("[EchoApp] resolveBundleIDFromPID: resolved PID \(pid) -> \(bundleID) via proc_pidpath")
+                return bundleID
+            }
+        } else {
+            rlog("[EchoApp] resolveBundleIDFromPID: proc_pidpath(\(pid)) failed (returned \(pathLen))")
+        }
+
+        // Strategy 2: sysctl → process name → match installed apps via LSApplicationWorkspace
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else {
+            rlog("[EchoApp] resolveBundleIDFromPID: sysctl KERN_PROC_PID failed for PID \(pid)")
+            return nil
+        }
+
+        let processName = withUnsafePointer(to: info.kp_proc.p_comm) { ptr in
+            ptr.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN) + 1) {
+                String(cString: $0)
+            }
+        }
+        guard !processName.isEmpty else {
+            rlog("[EchoApp] resolveBundleIDFromPID: empty process name for PID \(pid)")
+            return nil
+        }
+        rlog("[EchoApp] resolveBundleIDFromPID: PID \(pid) process name = '\(processName)'")
+
+        if let bundleID = matchBundleIDByProcessName(processName) {
+            return bundleID
+        }
+
+        rlog("[EchoApp] resolveBundleIDFromPID: all strategies failed for PID \(pid)")
+        return nil
+    }
+
+    /// Match a process name against installed apps using LSApplicationWorkspace.
+    func matchBundleIDByProcessName(_ processName: String) -> String? {
+        guard let wsClass = NSClassFromString("LSApplicationWorkspace") else {
+            rlog("[EchoApp] matchBundleIDByProcessName: LSApplicationWorkspace not available")
+            return nil
+        }
+        let defaultWsSel = NSSelectorFromString("defaultWorkspace")
+        guard wsClass.responds(to: defaultWsSel),
+              let wsResult = (wsClass as AnyObject).perform(defaultWsSel) else {
+            return nil
+        }
+        let workspace = wsResult.takeUnretainedValue()
+
+        let allAppsSel = NSSelectorFromString("allApplications")
+        guard (workspace as AnyObject).responds(to: allAppsSel),
+              let appsResult = (workspace as AnyObject).perform(allAppsSel),
+              let apps = appsResult.takeUnretainedValue() as? [AnyObject] else {
+            rlog("[EchoApp] matchBundleIDByProcessName: could not enumerate installed apps")
+            return nil
+        }
+
+        let bundleIDSel = NSSelectorFromString("applicationIdentifier")
+        let bundleURLSel = NSSelectorFromString("bundleURL")
+        rlog("[EchoApp] matchBundleIDByProcessName: searching \(apps.count) apps for '\(processName)'")
+
+        // Pass 1: exact match against .app directory name (fast)
+        for app in apps {
+            guard let urlResult = app.perform?(bundleURLSel),
+                  let url = urlResult.takeUnretainedValue() as? URL,
+                  url.lastPathComponent.hasSuffix(".app") else { continue }
+            let execName = String(url.lastPathComponent.dropLast(4))
+            if execName == processName {
+                if let idResult = app.perform?(bundleIDSel),
+                   let bundleID = idResult.takeUnretainedValue() as? String {
+                    rlog("[EchoApp] matchBundleIDByProcessName: exact match '\(processName)' → \(bundleID)")
+                    return bundleID
+                }
+            }
+        }
+
+        // Pass 2: prefix match for truncated names (MAXCOMLEN = 16 chars)
+        if processName.count >= 15 {
+            for app in apps {
+                guard let urlResult = app.perform?(bundleURLSel),
+                      let url = urlResult.takeUnretainedValue() as? URL,
+                      url.lastPathComponent.hasSuffix(".app") else { continue }
+                let execName = String(url.lastPathComponent.dropLast(4))
+                if execName.hasPrefix(processName) {
+                    if let idResult = app.perform?(bundleIDSel),
+                       let bundleID = idResult.takeUnretainedValue() as? String {
+                        rlog("[EchoApp] matchBundleIDByProcessName: prefix match '\(processName)' → \(bundleID) (full: \(execName))")
+                        return bundleID
+                    }
+                }
+            }
+        }
+
+        // Pass 3: match against CFBundleExecutable from Info.plist (slower but handles
+        // apps where directory name differs from executable name)
+        for app in apps {
+            guard let urlResult = app.perform?(bundleURLSel),
+                  let url = urlResult.takeUnretainedValue() as? URL else { continue }
+            let infoPlistURL = url.appendingPathComponent("Info.plist")
+            guard let dict = NSDictionary(contentsOf: infoPlistURL),
+                  let cfExec = dict["CFBundleExecutable"] as? String else { continue }
+            let matches = cfExec == processName || (processName.count >= 15 && cfExec.hasPrefix(processName))
+            if matches {
+                if let idResult = app.perform?(bundleIDSel),
+                   let bundleID = idResult.takeUnretainedValue() as? String {
+                    rlog("[EchoApp] matchBundleIDByProcessName: Info.plist match '\(processName)' → \(bundleID) (exec: \(cfExec))")
+                    return bundleID
+                }
+            }
+        }
+
+        rlog("[EchoApp] matchBundleIDByProcessName: no match for '\(processName)' in \(apps.count) apps")
+        return nil
     }
 
     func suspendApp() {

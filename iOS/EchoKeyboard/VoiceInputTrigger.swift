@@ -2,10 +2,6 @@ import UIKit
 import EchoCore
 import ObjectiveC
 
-// proc_pidpath is in libproc
-@_silgen_name("proc_pidpath")
-func proc_pidpath(_ pid: Int32, _ buffer: UnsafeMutablePointer<CChar>, _ buffersize: UInt32) -> Int32
-
 /// Handles triggering voice input from the keyboard extension
 /// Since keyboard extensions cannot access the microphone,
 /// we redirect to the main app via URL scheme
@@ -275,23 +271,40 @@ enum VoiceInputTrigger {
         return false
     }
 
-    /// Save host app bundle ID so main app can return directly after recording.
+    /// Save the host app's bundle ID (or PID as fallback) before opening the main app,
+    /// so the main app can return to the host app directly.
+    /// This is needed for third-party apps where suspend() goes to Home screen.
     static func saveHostAppBundleID(from viewController: UIViewController?) {
         guard let vc = viewController else {
             print("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
             return
         }
-        guard let bundleID = detectHostBundleID(from: vc) else {
-            print("[VoiceInputTrigger] saveHostAppBundleID: no host bundle ID detected")
+        let bridge = AppGroupBridge()
+
+        // Primary: try to detect bundle ID directly
+        if let bundleID = detectHostBundleID(from: vc) {
+            rlog("[VoiceInputTrigger] saving host app bundle ID: \(bundleID)")
+            bridge.setReturnAppBundleID(bundleID)
             return
         }
-        print("[VoiceInputTrigger] saveHostAppBundleID: \(bundleID)")
-        AppGroupBridge().setReturnAppBundleID(bundleID)
+
+        // Fallback: save the host app PID so the main app can resolve it
+        // (proc_pidpath is blocked by the extension sandbox, but the main app can use it)
+        if let hostPID = detectHostPID(from: vc) {
+            rlog("[VoiceInputTrigger] bundle ID detection failed, saving host PID: \(hostPID)")
+            bridge.setReturnAppPID(hostPID)
+            return
+        }
+
+        rlog("[VoiceInputTrigger] could not detect host app bundle ID or PID from any source")
     }
 
     private static func detectHostBundleID(from viewController: UIViewController) -> String? {
-        let allSelNames = ["_hostApplicationBundleIdentifier", "_hostBundleID", "hostBundleID"]
         let targets = [viewController, viewController.parent].compactMap { $0 }
+        let allSelNames = ["_hostApplicationBundleIdentifier", "_hostBundleID", "hostBundleID"]
+
+        // _hostApplicationBundleIdentifier exists on UIViewController but returns <null> on iOS 18.
+        // Try it anyway in case Apple fixes it in future versions.
         print("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
 
         for target in targets {
@@ -313,15 +326,18 @@ enum VoiceInputTrigger {
             }
         }
 
-        if let bundleID = resolveHostBundleIDViaPID(from: viewController) {
-            return bundleID
-        }
+        // Note: proc_pidpath approach is not attempted here because it is blocked
+        // by the keyboard extension sandbox. Instead, the PID is saved via
+        // detectHostPID() and resolved by the main app which has fewer restrictions.
 
-        print("[VoiceInputTrigger] detectHostBundleID: all methods failed")
+        rlog("[VoiceInputTrigger] all host bundle ID detection methods failed")
         return nil
     }
 
-    private static func resolveHostBundleIDViaPID(from viewController: UIViewController) -> String? {
+    /// Extract the host app PID from the view controller hierarchy.
+    /// The PID is passed to the main app via AppGroupBridge for resolution,
+    /// since proc_pidpath is blocked by the keyboard extension sandbox.
+    private static func detectHostPID(from viewController: UIViewController) -> Int32? {
         let targets = [viewController, viewController.parent].compactMap { $0 }
         let pidSelName = "_hostProcessIdentifier"
         let pidSel = NSSelectorFromString(pidSelName)
@@ -337,33 +353,13 @@ enum VoiceInputTrigger {
             let imp = target.method(for: pidSel)
             let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
             let hostPid = getHostPid(target, pidSel)
-            print("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
+            rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
 
-            guard hostPid > 0 else {
-                continue
-            }
-
-            var pathBuffer = [CChar](repeating: 0, count: 4096)
-            let pathLen = proc_pidpath(hostPid, &pathBuffer, UInt32(pathBuffer.count))
-            guard pathLen > 0 else {
-                print("[VoiceInputTrigger] proc_pidpath(\(hostPid)) failed")
-                continue
-            }
-
-            let execPath = String(cString: pathBuffer)
-            print("[VoiceInputTrigger] host exec path: \(execPath)")
-            let appBundlePath = (execPath as NSString).deletingLastPathComponent
-            let infoPlistPath = appBundlePath + "/Info.plist"
-            if let dict = NSDictionary(contentsOfFile: infoPlistPath),
-               let bundleID = dict["CFBundleIdentifier"] as? String,
-               !bundleID.isEmpty {
-                print("[VoiceInputTrigger] resolved host bundle ID via PID \(hostPid): \(bundleID)")
-                return bundleID
-            } else {
-                print("[VoiceInputTrigger] could not read bundle ID from \(infoPlistPath)")
-            }
+            guard hostPid > 0 else { continue }
+            return hostPid
         }
 
+        rlog("[VoiceInputTrigger] no valid host PID found")
         return nil
     }
 
