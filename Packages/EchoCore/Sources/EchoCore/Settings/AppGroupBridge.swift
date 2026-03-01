@@ -69,6 +69,8 @@ public struct AppGroupBridge: Sendable {
         static let dictationStateAt = "echo.dictation.stateAt"
         // Return-to app (host app bundle ID saved by keyboard extension)
         static let returnAppBundleID = "echo.keyboard.returnAppBundleID"
+        // Return-to app (host app PID fallback when bundle ID detection fails)
+        static let returnAppPID = "echo.keyboard.returnAppPID"
         // Streaming partial
         static let streamingText = "echo.streaming.text"
         static let streamingSequence = "echo.streaming.sequence"
@@ -366,6 +368,28 @@ public struct AppGroupBridge: Sendable {
     /// Clear the saved return app bundle ID.
     public func clearReturnAppBundleID() {
         bridgeDefaults.removeObject(forKey: Keys.returnAppBundleID)
+        bridgeDefaults.synchronize()
+    }
+
+    // MARK: - Return App PID (fallback when bundle ID detection fails in extension sandbox)
+
+    /// Save the host app PID so the main app can resolve it to a bundle ID.
+    /// Used when the keyboard extension cannot call proc_pidpath due to sandbox restrictions.
+    public func setReturnAppPID(_ pid: Int32) {
+        bridgeDefaults.set(Int(pid), forKey: Keys.returnAppPID)
+        bridgeDefaults.synchronize()
+    }
+
+    /// Read the saved return app PID.
+    public var returnAppPID: Int32? {
+        let value = bridgeDefaults.integer(forKey: Keys.returnAppPID)
+        guard value > 0 else { return nil }
+        return Int32(value)
+    }
+
+    /// Clear the saved return app PID.
+    public func clearReturnAppPID() {
+        bridgeDefaults.removeObject(forKey: Keys.returnAppPID)
         bridgeDefaults.synchronize()
     }
 
