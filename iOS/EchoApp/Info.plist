@@ -39,7 +39,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>GOOGLE_CLIENT_ID_IOS</key>
 	<string>852034251160-krk9p201kbmfvbi40hpspvuiqji8fbau.apps.googleusercontent.com</string>
 	<key>CLOUD_API_BASE_URL</key>

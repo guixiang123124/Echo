@@ -99,7 +99,7 @@ struct MainView: View {
            guard newValue == .active else { return }
            consumeKeyboardLaunchIntentIfNeeded()
        }
-       .overlay {
+       .overlay(alignment: .top) {
            BackgroundDictationOverlay(service: backgroundDictation)
        }
        .sheet(item: $deepLink) { link in
@@ -141,36 +141,49 @@ extension MainView.DeepLink: Identifiable {
                 backgroundDictation.activate(authSession: authSession)
             }
 
-            await backgroundDictation.startDictationForKeyboardIntent()
-            var started = await waitForRecordingState(timeout: 1.2)
-
-            if !started {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                started = await waitForRecordingState(timeout: 1.2)
-            }
-
-            let shouldReturn: Bool = await MainActor.run {
-                switch backgroundDictation.state {
-                case .recording, .transcribing, .finalizing:
-                    return true
-                case .error, .idle:
-                    return false
+            // Toggle: if already recording, stop instead of starting a new session.
+            let currentState = await MainActor.run { backgroundDictation.state }
+            switch currentState {
+            case .recording, .transcribing:
+                print("[EchoApp] handleVoiceDeepLink: already recording, toggling to stop")
+                await backgroundDictation.stopDictation()
+                await MainActor.run {
+                    bridge.clearPendingLaunchIntent()
+                    autoReturnToHostApp()
                 }
+                return
+
+            case .finalizing:
+                print("[EchoApp] handleVoiceDeepLink: finalizing, returning immediately")
+                await MainActor.run {
+                    bridge.clearPendingLaunchIntent()
+                    autoReturnToHostApp()
+                }
+                return
+
+            case .idle, .error:
+                break // Proceed to start
             }
+
+            await backgroundDictation.startDictationForKeyboardIntent()
+
+            // Wait briefly for recording to initialize, then return regardless.
+            // On cold launch the audio engine may take a moment to spin up.
+            // The recording continues in background via audio background mode.
+            let started = await waitForRecordingState(timeout: 1.5)
+            print("[EchoApp] handleVoiceDeepLink: recording started=\(started), state=\(backgroundDictation.state)")
 
             await MainActor.run {
-                if started || shouldReturn {
-                    bridge.clearPendingLaunchIntent()
-                    autoReturnToHostAppIfNeeded()
+                bridge.clearPendingLaunchIntent()
+
+                if case .error = backgroundDictation.state {
+                    print("[EchoApp] handleVoiceDeepLink: error state, staying in app")
                     return
                 }
 
-                if case .error = backgroundDictation.state {
-                    print("[EchoApp] handleVoiceDeepLink: dictation entered error state, keeping app foreground")
-                    bridge.clearPendingLaunchIntent()
-                } else {
-                    print("[EchoApp] handleVoiceDeepLink: dictation not started yet; keeping pending intent for retry")
-                }
+                // Always return to the previous app. Even if recording hasn't
+                // fully started yet, the audio background mode keeps us alive.
+                autoReturnToHostApp()
             }
         }
     }
@@ -211,33 +224,69 @@ extension MainView.DeepLink: Identifiable {
         }
     }
 
-    func autoReturnToHostAppIfNeeded() {
-        guard backgroundDictation.state.canReturnToKeyboard else {
+    func autoReturnToHostApp() {
+        let bridge = AppGroupBridge()
+
+        // Try returning to the specific host app by bundle ID.
+        // This is needed for third-party apps where suspend() goes to Home screen
+        // instead of back to the host app.
+        if let hostBundleID = bridge.returnAppBundleID, !hostBundleID.isEmpty {
+            bridge.clearReturnAppBundleID()
+            rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace in 0.4s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if openAppByBundleID(hostBundleID) {
+                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(hostBundleID)")
+                    return
+                }
+                rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed, falling back to suspend")
+                suspendApp()
+            }
             return
         }
+
+        // Fallback: suspend (works for system apps)
+        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID saved, scheduling suspend in 0.4s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            suspendApp()
+        }
+    }
+
+    func suspendApp() {
         let selector = NSSelectorFromString("suspend")
         guard UIApplication.shared.responds(to: selector) else {
+            rlog("[EchoApp] suspendApp: suspend selector not available")
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            UIApplication.shared.perform(selector)
-        }
-    }
-}
-
-private extension BackgroundDictationService.SessionState {
-    var isIdle: Bool {
-        if case .idle = self { return true }
-        return false
+        rlog("[EchoApp] suspendApp: calling suspend now")
+        UIApplication.shared.perform(selector)
     }
 
-    var canReturnToKeyboard: Bool {
-        switch self {
-        case .error:
+    func openAppByBundleID(_ bundleID: String) -> Bool {
+        guard let wsClass = NSClassFromString("LSApplicationWorkspace") else {
+            rlog("[EchoApp] LSApplicationWorkspace class not found")
             return false
-        default:
-            return true
         }
+
+        let defaultWsSel = NSSelectorFromString("defaultWorkspace")
+        guard wsClass.responds(to: defaultWsSel) else {
+            rlog("[EchoApp] LSApplicationWorkspace does not respond to defaultWorkspace")
+            return false
+        }
+        guard let wsResult = (wsClass as AnyObject).perform(defaultWsSel) else {
+            rlog("[EchoApp] defaultWorkspace returned nil")
+            return false
+        }
+        let workspace = wsResult.takeUnretainedValue()
+
+        let openSel = NSSelectorFromString("openApplicationWithBundleIdentifier:")
+        guard (workspace as AnyObject).responds(to: openSel) else {
+            rlog("[EchoApp] workspace does not respond to openApplicationWithBundleIdentifier:")
+            return false
+        }
+
+        rlog("[EchoApp] opening app via LSApplicationWorkspace: \(bundleID)")
+        _ = (workspace as AnyObject).perform(openSel, with: bundleID)
+        return true
     }
 }
 
