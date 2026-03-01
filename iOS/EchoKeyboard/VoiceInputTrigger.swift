@@ -464,16 +464,63 @@ enum VoiceInputTrigger {
             return false
         }
 
-        // Step 1: register navigation context for third-party host.
+        // Track whether an open request has already been sent to avoid premature failure.
+        var didIssueOpenRequest = false
+
+        // Step 1: register navigation context and try extensionContext.open() first.
+        // On iOS 18+ this often works when runtime UIApplication path is blocked.
         if let extensionContext = resolvedViewController.extensionContext {
             reportOpenAttempt("extensionContext.open", true)
-            extensionContext.open(url, completionHandler: nil)
-        }
 
-        // Step 2: actual launch request (reliable on iOS 18+).
-        if openURLFromExtension(url) {
-            reportOpenAttempt("openURLFromExtension", true)
-            finish(true)
+            let fallbackTimeout = DispatchWorkItem {
+                guard !didFinish else { return }
+                guard !didIssueOpenRequest else { return }
+                print("[VoiceInputTrigger] extensionContext.open timed out, trying runtime/fallback path")
+
+                didIssueOpenRequest = true
+                if openURLFromExtension(url) {
+                    reportOpenAttempt("openURLFromExtension", true)
+                    finish(true)
+                    return
+                }
+
+                if tryFallbackOpen() {
+                    finish(true)
+                    return
+                }
+
+                finish(false)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackTimeout)
+
+            extensionContext.open(url) { success in
+                fallbackTimeout.cancel()
+                reportOpenAttempt("extensionContext.open completion", success)
+                guard !didFinish else { return }
+
+                didIssueOpenRequest = true
+
+                if success {
+                    finish(true)
+                    return
+                }
+
+                print("[VoiceInputTrigger] extensionContext.open reported failure, trying runtime/fallback path")
+                if openURLFromExtension(url) {
+                    reportOpenAttempt("openURLFromExtension", true)
+                    finish(true)
+                    return
+                }
+
+                if tryFallbackOpen() {
+                    finish(true)
+                    return
+                }
+
+                finish(false)
+            }
+
             return
         }
 
