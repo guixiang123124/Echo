@@ -67,6 +67,8 @@ public struct AppGroupBridge: Sendable {
         static let dictationState = "echo.dictation.state"
         static let dictationSessionId = "echo.dictation.sessionId"
         static let dictationStateAt = "echo.dictation.stateAt"
+        // Return-to app (host app bundle ID saved by keyboard extension)
+        static let returnAppBundleID = "echo.keyboard.returnAppBundleID"
         // Streaming partial
         static let streamingText = "echo.streaming.text"
         static let streamingSequence = "echo.streaming.sequence"
@@ -345,6 +347,25 @@ public struct AppGroupBridge: Sendable {
         bridgeDefaults.removeObject(forKey: Keys.streamingSequence)
         bridgeDefaults.removeObject(forKey: Keys.streamingIsFinal)
         bridgeDefaults.removeObject(forKey: Keys.streamingSessionId)
+        bridgeDefaults.synchronize()
+    }
+
+    // MARK: - Return App Bundle ID
+
+    /// Save the host app bundle ID so the main app can return to it directly.
+    public func setReturnAppBundleID(_ bundleID: String) {
+        bridgeDefaults.set(bundleID, forKey: Keys.returnAppBundleID)
+        bridgeDefaults.synchronize()
+    }
+
+    /// Read the saved return app bundle ID.
+    public var returnAppBundleID: String? {
+        bridgeDefaults.string(forKey: Keys.returnAppBundleID)
+    }
+
+    /// Clear the saved return app bundle ID.
+    public func clearReturnAppBundleID() {
+        bridgeDefaults.removeObject(forKey: Keys.returnAppBundleID)
         bridgeDefaults.synchronize()
     }
 

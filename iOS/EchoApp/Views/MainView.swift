@@ -225,18 +225,68 @@ extension MainView.DeepLink: Identifiable {
     }
 
     func autoReturnToHostApp() {
-        let selector = NSSelectorFromString("suspend")
-        guard UIApplication.shared.responds(to: selector) else {
-            print("[EchoApp] autoReturnToHostApp: suspend selector not available")
+        let bridge = AppGroupBridge()
+
+        // Try returning to the specific host app by bundle ID.
+        // This is needed for third-party apps where suspend() goes to Home screen
+        // instead of back to the host app.
+        if let hostBundleID = bridge.returnAppBundleID, !hostBundleID.isEmpty {
+            bridge.clearReturnAppBundleID()
+            rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace in 0.4s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                if openAppByBundleID(hostBundleID) {
+                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(hostBundleID)")
+                    return
+                }
+                rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed, falling back to suspend")
+                suspendApp()
+            }
             return
         }
-        // Delay to ensure the app's UI is fully presented before suspending.
-        // On cold launch, 0.05s is too fast — the window may not be ready.
-        print("[EchoApp] autoReturnToHostApp: scheduling suspend in 0.4s")
+
+        // Fallback: suspend (works for system apps)
+        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID saved, scheduling suspend in 0.4s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            print("[EchoApp] autoReturnToHostApp: calling suspend now")
-            UIApplication.shared.perform(selector)
+            suspendApp()
         }
+    }
+
+    func suspendApp() {
+        let selector = NSSelectorFromString("suspend")
+        guard UIApplication.shared.responds(to: selector) else {
+            rlog("[EchoApp] suspendApp: suspend selector not available")
+            return
+        }
+        rlog("[EchoApp] suspendApp: calling suspend now")
+        UIApplication.shared.perform(selector)
+    }
+
+    func openAppByBundleID(_ bundleID: String) -> Bool {
+        guard let wsClass = NSClassFromString("LSApplicationWorkspace") else {
+            rlog("[EchoApp] LSApplicationWorkspace class not found")
+            return false
+        }
+
+        let defaultWsSel = NSSelectorFromString("defaultWorkspace")
+        guard wsClass.responds(to: defaultWsSel) else {
+            rlog("[EchoApp] LSApplicationWorkspace does not respond to defaultWorkspace")
+            return false
+        }
+        guard let wsResult = (wsClass as AnyObject).perform(defaultWsSel) else {
+            rlog("[EchoApp] defaultWorkspace returned nil")
+            return false
+        }
+        let workspace = wsResult.takeUnretainedValue()
+
+        let openSel = NSSelectorFromString("openApplicationWithBundleIdentifier:")
+        guard (workspace as AnyObject).responds(to: openSel) else {
+            rlog("[EchoApp] workspace does not respond to openApplicationWithBundleIdentifier:")
+            return false
+        }
+
+        rlog("[EchoApp] opening app via LSApplicationWorkspace: \(bundleID)")
+        _ = (workspace as AnyObject).perform(openSel, with: bundleID)
+        return true
     }
 }
 

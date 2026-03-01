@@ -1,5 +1,10 @@
 import UIKit
 import EchoCore
+import ObjectiveC
+
+// proc_pidpath is in libproc
+@_silgen_name("proc_pidpath")
+func proc_pidpath(_ pid: Int32, _ buffer: UnsafeMutablePointer<CChar>, _ buffersize: UInt32) -> Int32
 
 /// Handles triggering voice input from the keyboard extension
 /// Since keyboard extensions cannot access the microphone,
@@ -274,9 +279,121 @@ enum VoiceInputTrigger {
         return false
     }
 
+    /// Save the host app's bundle ID before opening the main app,
+    /// so the main app can return to the host app directly.
+    /// This is needed for third-party apps where suspend() goes to Home screen.
+    static func saveHostAppBundleID(from viewController: UIViewController?) {
+        guard let vc = viewController else {
+            rlog("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
+            return
+        }
+        guard let bundleID = detectHostBundleID(from: vc) else {
+            rlog("[VoiceInputTrigger] could not detect host app bundle ID from any source")
+            return
+        }
+        rlog("[VoiceInputTrigger] saving host app bundle ID: \(bundleID)")
+        AppGroupBridge().setReturnAppBundleID(bundleID)
+    }
+
+    private static func detectHostBundleID(from viewController: UIViewController) -> String? {
+        let selNames = ["_hostBundleID", "hostBundleID"]
+        let targets = [viewController, viewController.parent].compactMap { $0 }
+
+        // _hostApplicationBundleIdentifier exists on UIViewController but returns <null> on iOS 18.
+        // Try it anyway in case Apple fixes it in future versions.
+        let allSelNames = ["_hostApplicationBundleIdentifier", "_hostBundleID", "hostBundleID"]
+
+        rlog("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
+
+        for target in targets {
+            let targetType = String(describing: type(of: target))
+            for selName in allSelNames {
+                let sel = NSSelectorFromString(selName)
+                guard target.responds(to: sel) else { continue }
+                guard let result = target.perform(sel) else { continue }
+                let obj = result.takeUnretainedValue()
+                guard let bundleID = obj as? String,
+                      !bundleID.isEmpty,
+                      bundleID != "<null>",
+                      bundleID != "(null)" else {
+                    rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
+                    continue
+                }
+                rlog("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
+                return bundleID
+            }
+        }
+
+        // Approach 2: Use _hostProcessIdentifier to get PID, then resolve bundle ID via proc_pidpath
+        if let bundleID = resolveHostBundleIDViaPID(from: viewController) {
+            return bundleID
+        }
+
+        // Approach 3: Infer from extension's bundle path
+        // e.g. /var/containers/Bundle/Application/UUID/EchoApp.app/PlugIns/EchoKeyboard.appex
+        // The parent .app is our own app, not the host. But we can try other heuristics.
+
+        rlog("[VoiceInputTrigger] all host bundle ID detection methods failed")
+        return nil
+    }
+
+    private static func resolveHostBundleIDViaPID(from viewController: UIViewController) -> String? {
+        let targets = [viewController, viewController.parent].compactMap { $0 }
+        let pidSelName = "_hostProcessIdentifier"
+        let pidSel = NSSelectorFromString(pidSelName)
+
+        for target in targets {
+            let targetType = String(describing: type(of: target))
+            guard target.responds(to: pidSel) else {
+                rlog("[VoiceInputTrigger] \(targetType).responds(to: \(pidSelName)) = false")
+                continue
+            }
+
+            // _hostProcessIdentifier returns pid_t (Int32), not an object.
+            // Must use method(for:) + unsafeBitCast to call correctly.
+            typealias PidFunc = @convention(c) (AnyObject, Selector) -> Int32
+            let imp = target.method(for: pidSel)
+            let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
+            let hostPid = getHostPid(target, pidSel)
+
+            rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
+
+            guard hostPid > 0 else { continue }
+
+            // Use proc_pidpath to get the executable path
+            var pathBuffer = [CChar](repeating: 0, count: 4096)
+            let pathLen = proc_pidpath(hostPid, &pathBuffer, UInt32(pathBuffer.count))
+            guard pathLen > 0 else {
+                rlog("[VoiceInputTrigger] proc_pidpath(\(hostPid)) failed")
+                continue
+            }
+
+            let execPath = String(cString: pathBuffer)
+            rlog("[VoiceInputTrigger] host exec path: \(execPath)")
+
+            // Extract .app bundle path: /path/to/SomeApp.app/SomeApp → /path/to/SomeApp.app
+            let appBundlePath = (execPath as NSString).deletingLastPathComponent
+
+            // Read CFBundleIdentifier from Info.plist
+            let infoPlistPath = appBundlePath + "/Info.plist"
+            if let dict = NSDictionary(contentsOfFile: infoPlistPath),
+               let bundleID = dict["CFBundleIdentifier"] as? String,
+               !bundleID.isEmpty {
+                rlog("[VoiceInputTrigger] resolved host bundle ID from PID \(hostPid): \(bundleID)")
+                return bundleID
+            } else {
+                rlog("[VoiceInputTrigger] could not read bundle ID from \(infoPlistPath)")
+            }
+        }
+
+        return nil
+    }
+
     /// Open the main Echo app for voice recording.
     /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
+        // Save the host app's bundle ID so main app can return to it
+        saveHostAppBundleID(from: viewController)
         AppGroupBridge().setPendingLaunchIntent(.voice)
         let trace = UUID().uuidString.prefix(8)
         let urls = [
