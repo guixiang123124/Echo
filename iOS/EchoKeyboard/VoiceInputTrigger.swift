@@ -122,9 +122,8 @@ enum VoiceInputTrigger {
         case .recording, .transcribing:
             return true
         case .idle, .error, .finalizing, nil:
-            // .finalizing means recording already stopped and ASR is processing.
-            // Treat it as "not recording" so waitForDictationStop can confirm
-            // the stop quickly instead of timing out during finalization.
+            // finalizing means recording already stopped and ASR is processing.
+            // Treat it as "not recording" so stop can complete without timeout.
             return false
         }
     }
@@ -236,11 +235,10 @@ enum VoiceInputTrigger {
 
     /// Open a URL from a keyboard extension using UIApplication.shared via runtime access.
     /// On iOS 18+, extensionContext.open(), responder chain, and SwiftUI Link all fail
-    /// for keyboard extensions. This runtime approach is used by virtually all production
-    /// third-party keyboards (Gboard, SwiftKey, Fleksy, etc.).
+    /// for keyboard extensions. This runtime approach is used by many production
+    /// third-party keyboards.
     ///
-    /// Uses the modern `open(_:options:completionHandler:)` API which properly handles
-    /// cold launches (app completely killed), unlike the deprecated `openURL:`.
+    /// Uses the modern `open(_:options:completionHandler:)` API for reliable cold launches.
     @discardableResult
     static func openURLFromExtension(_ url: URL) -> Bool {
         let sharedSel = NSSelectorFromString("sharedApplication")
@@ -254,10 +252,9 @@ enum VoiceInputTrigger {
         }
         let app = result.takeUnretainedValue()
 
-        // Use the modern open(_:options:completionHandler:) API for reliable cold launches.
         let openSel = NSSelectorFromString("openURL:options:completionHandler:")
         if app.responds(to: openSel) {
-            print("[VoiceInputTrigger] Opening URL via UIApplication.open (modern API): \(url.absoluteString)")
+            print("[VoiceInputTrigger] Opening URL via UIApplication.open: \(url.absoluteString)")
             typealias OpenFunc = @convention(c) (AnyObject, Selector, URL, [String: Any], ((Bool) -> Void)?) -> Void
             let imp = app.method(for: openSel)
             let open = unsafeBitCast(imp, to: OpenFunc.self)
@@ -267,43 +264,35 @@ enum VoiceInputTrigger {
             return true
         }
 
-        // Fallback to deprecated openURL: for older iOS
         let legacySel = NSSelectorFromString("openURL:")
         if app.responds(to: legacySel) {
-            print("[VoiceInputTrigger] Opening URL via UIApplication.openURL (legacy): \(url.absoluteString)")
-            app.perform(legacySel, with: url)
+            print("[VoiceInputTrigger] Opening URL via UIApplication.openURL: \(url.absoluteString)")
+            _ = app.perform(legacySel, with: url)
             return true
         }
 
-        print("[VoiceInputTrigger] UIApplication does not respond to any openURL selector")
+        print("[VoiceInputTrigger] UIApplication does not respond to any open URL selector")
         return false
     }
 
-    /// Save the host app's bundle ID before opening the main app,
-    /// so the main app can return to the host app directly.
-    /// This is needed for third-party apps where suspend() goes to Home screen.
+    /// Save host app bundle ID so main app can return directly after recording.
     static func saveHostAppBundleID(from viewController: UIViewController?) {
         guard let vc = viewController else {
-            rlog("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
+            print("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
             return
         }
         guard let bundleID = detectHostBundleID(from: vc) else {
-            rlog("[VoiceInputTrigger] could not detect host app bundle ID from any source")
+            print("[VoiceInputTrigger] saveHostAppBundleID: no host bundle ID detected")
             return
         }
-        rlog("[VoiceInputTrigger] saving host app bundle ID: \(bundleID)")
+        print("[VoiceInputTrigger] saveHostAppBundleID: \(bundleID)")
         AppGroupBridge().setReturnAppBundleID(bundleID)
     }
 
     private static func detectHostBundleID(from viewController: UIViewController) -> String? {
-        let selNames = ["_hostBundleID", "hostBundleID"]
-        let targets = [viewController, viewController.parent].compactMap { $0 }
-
-        // _hostApplicationBundleIdentifier exists on UIViewController but returns <null> on iOS 18.
-        // Try it anyway in case Apple fixes it in future versions.
         let allSelNames = ["_hostApplicationBundleIdentifier", "_hostBundleID", "hostBundleID"]
-
-        rlog("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
+        let targets = [viewController, viewController.parent].compactMap { $0 }
+        print("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
 
         for target in targets {
             let targetType = String(describing: type(of: target))
@@ -316,24 +305,19 @@ enum VoiceInputTrigger {
                       !bundleID.isEmpty,
                       bundleID != "<null>",
                       bundleID != "(null)" else {
-                    rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
+                    print("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
                     continue
                 }
-                rlog("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
+                print("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
                 return bundleID
             }
         }
 
-        // Approach 2: Use _hostProcessIdentifier to get PID, then resolve bundle ID via proc_pidpath
         if let bundleID = resolveHostBundleIDViaPID(from: viewController) {
             return bundleID
         }
 
-        // Approach 3: Infer from extension's bundle path
-        // e.g. /var/containers/Bundle/Application/UUID/EchoApp.app/PlugIns/EchoKeyboard.appex
-        // The parent .app is our own app, not the host. But we can try other heuristics.
-
-        rlog("[VoiceInputTrigger] all host bundle ID detection methods failed")
+        print("[VoiceInputTrigger] detectHostBundleID: all methods failed")
         return nil
     }
 
@@ -345,44 +329,38 @@ enum VoiceInputTrigger {
         for target in targets {
             let targetType = String(describing: type(of: target))
             guard target.responds(to: pidSel) else {
-                rlog("[VoiceInputTrigger] \(targetType).responds(to: \(pidSelName)) = false")
+                print("[VoiceInputTrigger] \(targetType).\(pidSelName) unavailable")
                 continue
             }
 
-            // _hostProcessIdentifier returns pid_t (Int32), not an object.
-            // Must use method(for:) + unsafeBitCast to call correctly.
             typealias PidFunc = @convention(c) (AnyObject, Selector) -> Int32
             let imp = target.method(for: pidSel)
             let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
             let hostPid = getHostPid(target, pidSel)
+            print("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
 
-            rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
+            guard hostPid > 0 else {
+                continue
+            }
 
-            guard hostPid > 0 else { continue }
-
-            // Use proc_pidpath to get the executable path
             var pathBuffer = [CChar](repeating: 0, count: 4096)
             let pathLen = proc_pidpath(hostPid, &pathBuffer, UInt32(pathBuffer.count))
             guard pathLen > 0 else {
-                rlog("[VoiceInputTrigger] proc_pidpath(\(hostPid)) failed")
+                print("[VoiceInputTrigger] proc_pidpath(\(hostPid)) failed")
                 continue
             }
 
             let execPath = String(cString: pathBuffer)
-            rlog("[VoiceInputTrigger] host exec path: \(execPath)")
-
-            // Extract .app bundle path: /path/to/SomeApp.app/SomeApp → /path/to/SomeApp.app
+            print("[VoiceInputTrigger] host exec path: \(execPath)")
             let appBundlePath = (execPath as NSString).deletingLastPathComponent
-
-            // Read CFBundleIdentifier from Info.plist
             let infoPlistPath = appBundlePath + "/Info.plist"
             if let dict = NSDictionary(contentsOfFile: infoPlistPath),
                let bundleID = dict["CFBundleIdentifier"] as? String,
                !bundleID.isEmpty {
-                rlog("[VoiceInputTrigger] resolved host bundle ID from PID \(hostPid): \(bundleID)")
+                print("[VoiceInputTrigger] resolved host bundle ID via PID \(hostPid): \(bundleID)")
                 return bundleID
             } else {
-                rlog("[VoiceInputTrigger] could not read bundle ID from \(infoPlistPath)")
+                print("[VoiceInputTrigger] could not read bundle ID from \(infoPlistPath)")
             }
         }
 
@@ -392,7 +370,6 @@ enum VoiceInputTrigger {
     /// Open the main Echo app for voice recording.
     /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
-        // Save the host app's bundle ID so main app can return to it
         saveHostAppBundleID(from: viewController)
         AppGroupBridge().setPendingLaunchIntent(.voice)
         let trace = UUID().uuidString.prefix(8)
@@ -444,11 +421,14 @@ enum VoiceInputTrigger {
                 waitForLaunchAcknowledgement(timeout: launchAckTimeout, pollInterval: launchAckPollInterval) { acknowledged in
                     guard !didFinish else { return }
                     print("[VoiceInputTrigger] launch ack for \(candidate.absoluteString): \(acknowledged)")
-                    if !acknowledged {
-                        print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString)")
+                    if acknowledged {
+                        finish(true)
+                        return
                     }
+
+                    print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString)")
+                    attempt(at: index + 1)
                 }
-                finish(true)
             }
         }
 
@@ -456,6 +436,12 @@ enum VoiceInputTrigger {
     }
 
     private static func open(url: URL, from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
+        guard let viewController else {
+            completion?(false)
+            return
+        }
+
+        let resolvedViewController = viewController
         let urlString = url.absoluteString
         var didFinish = false
 
@@ -465,39 +451,38 @@ enum VoiceInputTrigger {
             completion?(success)
         }
 
-        // Step 1: Fire extensionContext.open() to register the "Back to [host app]"
-        // navigation context with iOS. On iOS 18+ this may not actually open the URL,
-        // but it tells the system that the host app is the return target when our app
-        // calls suspend(). Without this, suspend() returns to the Home screen instead
-        // of the host app for third-party apps.
-        if let extensionContext = viewController?.extensionContext {
-            print("[VoiceInputTrigger] extensionContext.open (for back-navigation context): \(urlString)")
+        let reportOpenAttempt: (_ path: String, _ success: Bool) -> Void = { path, success in
+            print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
+        }
+
+        let tryFallbackOpen: () -> Bool = {
+            if let inputViewController = resolvedViewController as? UIInputViewController,
+               openViaInputViewController(url, from: inputViewController) {
+                reportOpenAttempt("UIInputViewController.openURL", true)
+                return true
+            }
+            if openViaResponderChain(url: url, from: resolvedViewController) {
+                reportOpenAttempt("Responder chain", true)
+                return true
+            }
+            return false
+        }
+
+        // Step 1: register navigation context for third-party host.
+        if let extensionContext = resolvedViewController.extensionContext {
+            reportOpenAttempt("extensionContext.open", true)
             extensionContext.open(url, completionHandler: nil)
         }
 
-        // Step 2: Actually open the URL via UIApplication runtime access.
-        // This is the reliable path on iOS 18+ for keyboard extensions.
+        // Step 2: actual launch request (reliable on iOS 18+).
         if openURLFromExtension(url) {
-            print("[VoiceInputTrigger] open via UIApplication runtime succeeded for \(urlString)")
+            reportOpenAttempt("openURLFromExtension", true)
             finish(true)
             return
         }
 
-        // Step 3: Fallbacks for older iOS versions
-        guard let viewController else {
-            completion?(false)
-            return
-        }
-
-        if let inputViewController = viewController as? UIInputViewController,
-           openViaInputViewController(url, from: inputViewController) {
-            print("[VoiceInputTrigger] open via UIInputViewController.openURL for \(urlString)")
-            finish(true)
-            return
-        }
-
-        if openViaResponderChain(url: url, from: viewController) {
-            print("[VoiceInputTrigger] open via responder chain for \(urlString)")
+        // Step 3: legacy fallback for older OS paths.
+        if tryFallbackOpen() {
             finish(true)
             return
         }
