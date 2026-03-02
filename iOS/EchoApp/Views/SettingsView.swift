@@ -30,6 +30,9 @@ struct SettingsView: View {
     @State private var hapticEnabled = true
     @State private var cloudSyncBaseURL = ""
     @State private var cloudUploadAudioEnabled = false
+    @State private var debugLogSnapshot: String = ""
+    @State private var showDebugLogSheet = false
+    @State private var debugCopied = false
 
     var body: some View {
         NavigationStack {
@@ -346,6 +349,95 @@ struct SettingsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+
+                // Debug
+                Section("Debug") {
+                    Button("Show Bridge Debug Log (Last 120)") {
+                        let bridge = AppGroupBridge()
+                        debugLogSnapshot = bridge.formattedDebugLog(limit: 120)
+                        if debugLogSnapshot.isEmpty {
+                            debugLogSnapshot = "No debug logs yet."
+                        }
+                        showDebugLogSheet = true
+                    }
+
+                    Button("Copy Bridge Debug Log") {
+                        let bridge = AppGroupBridge()
+                        UIPasteboard.general.string = bridge.formattedDebugLog(limit: 200)
+                        debugCopied = true
+                    }
+
+                    Button("Show Bridge Debug Log (Compact)") {
+                        let bridge = AppGroupBridge()
+                        let compact = compactLog(
+                            bridge.formattedDebugLog(limit: 300),
+                            title: "Bridge Debug Log (Compact)"
+                        )
+                        debugLogSnapshot = compact
+                        showDebugLogSheet = true
+                    }
+
+                    Button("Copy Bridge Debug Log (Compact)") {
+                        let bridge = AppGroupBridge()
+                        UIPasteboard.general.string = compactLog(
+                            bridge.formattedDebugLog(limit: 300),
+                            title: ""
+                        )
+                        debugCopied = true
+                    }
+
+                    Button("Clear Bridge Debug Log") {
+                        AppGroupBridge().clearDebugLog()
+                        debugLogSnapshot = "Cleared."
+                        debugCopied = false
+                    }
+
+                    Button("Show Persistent Bridge Log (Last 120)") {
+                        let bridge = AppGroupBridge()
+                        debugLogSnapshot = bridge.formattedPersistentDebugLog(limit: 120)
+                        if debugLogSnapshot.isEmpty {
+                            debugLogSnapshot = "No persistent debug logs yet."
+                        }
+                        showDebugLogSheet = true
+                    }
+
+                    Button("Show Persistent Bridge Log (Compact)") {
+                        let bridge = AppGroupBridge()
+                        let compact = compactLog(
+                            bridge.formattedPersistentDebugLog(limit: 300),
+                            title: "Persistent Bridge Log (Compact)"
+                        )
+                        debugLogSnapshot = compact
+                        showDebugLogSheet = true
+                    }
+
+                    Button("Copy Persistent Bridge Log (Compact)") {
+                        let bridge = AppGroupBridge()
+                        UIPasteboard.general.string = compactLog(
+                            bridge.formattedPersistentDebugLog(limit: 300),
+                            title: ""
+                        )
+                        debugCopied = true
+                    }
+
+                    Button("Copy Persistent Bridge Log") {
+                        let bridge = AppGroupBridge()
+                        UIPasteboard.general.string = bridge.formattedPersistentDebugLog(limit: 300)
+                        debugCopied = true
+                    }
+
+                    Button("Clear Persistent Bridge Log") {
+                        AppGroupBridge().clearPersistentDebugLog()
+                        debugLogSnapshot = "Persistent log cleared."
+                        debugCopied = false
+                    }
+
+                    if debugCopied {
+                        Text("Copied to clipboard")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle("Settings")
             .onAppear {
@@ -390,7 +482,98 @@ struct SettingsView: View {
             AuthSheetView()
                 .environmentObject(authSession)
         }
+        .sheet(isPresented: $showDebugLogSheet) {
+            NavigationStack {
+                List {
+                    Section("Bridge Debug Log") {
+                        Text(debugLogSnapshot)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                }
+                .navigationTitle("Debug Log")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Done") {
+                            showDebugLogSheet = false
+                        }
+                    }
+                }
+            }
+        }
     }
+
+
+    private func compactLog(_ raw: String, title: String) -> String {
+        guard !raw.isEmpty else {
+            return title.isEmpty ? "No compact logs found." : "\(title): No matching events in this range."
+        }
+
+        let keepPatterns = [
+            "[MainView.Intent]",
+            "[MainView.Return]",
+            "[VoiceInputTrigger]",
+            "[BackgroundDictation]",
+            "onOpenURL route voice",
+            "onOpenURL received",
+            "autoReturnToHostApp",
+            "handleVoiceDeepLink started",
+            "consumeKeyboardLaunchIntentIfNeeded got intent=",
+            "no intent x",
+            "openMainAppForVoice",
+            "trying launch url",
+            "launch ack",
+            "no host",
+            "hostBundle",
+            "hostPID"
+        ]
+
+        let filtered = raw
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { line in
+                keepPatterns.contains { pattern in
+                    line.contains(pattern)
+                }
+            }
+
+        if filtered.isEmpty {
+            return title.isEmpty ? "No compact logs found." : "\(title): No matching events in this range."
+        }
+
+        let uniqueCompact = compactConsecutiveRepeats(Array(filtered))
+        return uniqueCompact.joined(separator: "\n")
+    }
+
+    private func compactConsecutiveRepeats(_ lines: [String]) -> [String] {
+        var result: [String] = []
+        var previous: String = ""
+        var repeatCount = 0
+
+        for line in lines {
+            if line == previous {
+                repeatCount += 1
+                continue
+            }
+
+            if repeatCount > 1 {
+                if let last = result.popLast() {
+                    result.append("\(last) [x\(repeatCount)]")
+                }
+            }
+
+            result.append(line)
+            previous = line
+            repeatCount = 1
+        }
+
+        if repeatCount > 1, let last = result.popLast() {
+            result.append("\(last) [x\(repeatCount)]")
+        }
+
+        return result
+    }
+
 
     private func syncAutoEditSettingsFromStore() {
         autoEditPreset = settings.autoEditPreset
