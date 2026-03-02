@@ -291,73 +291,61 @@ extension MainView.DeepLink: Identifiable {
 
     func autoReturnToHostApp() {
         let bridge = AppGroupBridge()
+        let suspendDelay: TimeInterval = 0.08
         logEvent("autoReturnToHostApp start")
 
         // Try returning to the specific host app by bundle ID.
-        // This is needed for third-party apps where suspend() goes to Home screen
-        // instead of back to the host app.
+        // This is needed for third-party apps where suspend() goes to Home screen.
         if let hostBundleID = bridge.returnAppBundleID, !hostBundleID.isEmpty {
-            logEvent("autoReturnToHostApp use bundleID=\(hostBundleID)")
+            logEvent("autoReturnToHostApp use return bundleID=\(hostBundleID)")
             bridge.clearReturnAppBundleID()
             bridge.clearReturnAppPID()
-            rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace in 0.4s")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                if openAppByBundleID(hostBundleID) {
-                    AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open success: \(hostBundleID)", source: "mainapp", category: "MainView.Return")
-                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(hostBundleID)")
-                    return
-                }
-                AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open failed, fallback suspend", source: "mainapp", category: "MainView.Return")
-                rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed, falling back to suspend")
+            rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace now")
+
+            if openAppByBundleID(hostBundleID) {
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open success: \(hostBundleID)", source: "mainapp", category: "MainView.Return")
+                rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(hostBundleID)")
+                return
+            }
+
+            AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open failed, fallback suspend", source: "mainapp", category: "MainView.Return")
+            rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(hostBundleID), fallback suspend in \(suspendDelay)s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + suspendDelay) {
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp fallback suspend", source: "mainapp", category: "MainView.Return")
                 suspendApp()
             }
             return
         }
 
-        // Fallback: resolve host app PID to bundle ID.
-        // The keyboard extension saves the PID when it cannot call proc_pidpath
-        // due to sandbox restrictions. The main app resolves it here instead.
+        // Fallback: resolve host app PID to bundle ID, single-attempt.
         if let hostPID = bridge.returnAppPID {
             logEvent("autoReturnToHostApp use return PID=\(hostPID)")
             bridge.clearReturnAppPID()
 
-            func attemptPIDReturn(_ attempt: Int) {
-                let delay = 0.35 + Double(attempt) * 0.25
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    rlog("[EchoApp] autoReturnToHostApp: attempt \(attempt + 1) resolve PID = \(hostPID)")
-                    if let resolvedBundleID = resolveBundleIDFromPID(hostPID) {
-                        rlog("[EchoApp] autoReturnToHostApp: resolved PID \(hostPID) -> \(resolvedBundleID), trying LSApplicationWorkspace")
-                        if openAppByBundleID(resolvedBundleID) {
-                            AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open success: \(resolvedBundleID)", source: "mainapp", category: "MainView.Return")
-                            rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(resolvedBundleID) (from PID \(hostPID))")
-                            return
-                        }
-                        AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open failed: \(resolvedBundleID), attempt=\(attempt + 1)", source: "mainapp", category: "MainView.Return")
-                        rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(resolvedBundleID), attempt=\(attempt + 1)")
-                    } else {
-                        AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolve failed for \(hostPID), attempt=\(attempt + 1)", source: "mainapp", category: "MainView.Return")
-                        rlog("[EchoApp] autoReturnToHostApp: proc_pidpath/resolve failed for PID \(hostPID), attempt=\(attempt + 1)")
-                    }
-
-                    let maxAttempts = 3
-                    if attempt + 1 < maxAttempts {
-                        attemptPIDReturn(attempt + 1)
-                        return
-                    }
-
-                    AppGroupBridge().appendDebugEvent("autoReturnToHostApp fallback suspend after PID resolve retries for \(hostPID)", source: "mainapp", category: "MainView.Return")
-                    rlog("[EchoApp] autoReturnToHostApp: PID resolve path exhausted, falling back to suspend")
-                    suspendApp()
+            if let resolvedBundleID = resolveBundleIDFromPID(hostPID) {
+                rlog("[EchoApp] autoReturnToHostApp: resolved PID \(hostPID) -> \(resolvedBundleID), trying LSApplicationWorkspace now")
+                if openAppByBundleID(resolvedBundleID) {
+                    AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open success: \(resolvedBundleID)", source: "mainapp", category: "MainView.Return")
+                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(resolvedBundleID) (from PID \(hostPID))")
+                    return
                 }
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open failed: \(resolvedBundleID)", source: "mainapp", category: "MainView.Return")
+                rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(resolvedBundleID)")
+            } else {
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolve failed for \(hostPID)", source: "mainapp", category: "MainView.Return")
+                rlog("[EchoApp] autoReturnToHostApp: PID resolve failed for \(hostPID)")
             }
 
-            attemptPIDReturn(0)
+            DispatchQueue.main.asyncAfter(deadline: .now() + suspendDelay) {
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp using fallback suspend after PID path", source: "mainapp", category: "MainView.Return")
+                suspendApp()
+            }
             return
         }
 
         // Fallback: suspend (works for system apps)
-        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID or PID available, scheduling suspend in 0.4s")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        rlog("[EchoApp] autoReturnToHostApp: no host bundle ID or PID available, scheduling suspend in \(suspendDelay)s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + suspendDelay) {
             AppGroupBridge().appendDebugEvent("autoReturnToHostApp using fallback suspend", source: "mainapp", category: "MainView.Return")
             suspendApp()
         }
