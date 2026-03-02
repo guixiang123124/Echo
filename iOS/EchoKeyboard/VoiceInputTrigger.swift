@@ -331,7 +331,7 @@ enum VoiceInputTrigger {
     /// so the main app can return to the host app directly.
     /// This is needed for third-party apps where suspend() goes to Home screen.
     @discardableResult
-    static func saveHostAppBundleID(from viewController: UIViewController?) -> HostAppInfo {
+    private static func saveHostAppBundleID(from viewController: UIViewController?) -> HostAppInfo {
         guard let vc = viewController else {
             rlog("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
             return HostAppInfo(bundleID: nil, pid: nil)
