@@ -48,21 +48,39 @@ private final class AppURLBridge: NSObject, UIApplicationDelegate {
        print("[EchoApp] application open URL parsed intent: \(intent.rawValue)")
        let bridge = AppGroupBridge()
 
-       // Capture source application from Open URL options for return-to-host flow.
-       // In some launch paths, this can provide a direct and more reliable host app
-       // bundle ID than keyboard-extension-only PID detection.
-       if let sourceApp = options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String,
-          !sourceApp.isEmpty,
-          sourceApp != Bundle.main.bundleIdentifier,
-          !sourceApp.hasPrefix("com.apple."),
-          !sourceApp.hasSuffix(".keyboard") {
-           print("[EchoApp] captured sourceApplication for return flow: \(sourceApp)")
-           bridge.setReturnAppBundleID(sourceApp)
+       let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+       let sourceAppFromURL = queryItems?.first(where: { $0.name == "hostBundle" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines)
+       let hostPIDFromURL = queryItems?.first(where: { $0.name == "hostPID" })?.value.flatMap { Int32($0) }
+
+       func isValidHostBundle(_ bundleID: String?) -> Bool {
+           guard let bundleID, !bundleID.isEmpty else { return false }
+           return bundleID != Bundle.main.bundleIdentifier
+               && !bundleID.hasPrefix("com.apple.")
+               && !bundleID.hasSuffix(".keyboard")
+       }
+
+       // Prefer explicit host bundle info from URL, then sourceApplication.
+       if isValidHostBundle(sourceAppFromURL) {
+           print("[EchoApp] captured host bundle from URL: \(sourceAppFromURL!)")
+           bridge.setReturnAppBundleID(sourceAppFromURL!)
            bridge.clearReturnAppPID()
-           bridge.appendDebugEvent("sourceApplication captured for return: \(sourceApp)", source: "mainapp", category: "MainView.Return")
+           bridge.appendDebugEvent("host bundle captured from URL: \(sourceAppFromURL!)", source: "mainapp", category: "MainView.Return")
+       } else if isValidHostBundle(options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String) {
+           if let sourceApp = options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String {
+               print("[EchoApp] captured sourceApplication for return flow: \(sourceApp)")
+               bridge.setReturnAppBundleID(sourceApp)
+               bridge.clearReturnAppPID()
+               bridge.appendDebugEvent("sourceApplication captured for return: \(sourceApp)", source: "mainapp", category: "MainView.Return")
+           }
        } else if let sourceApp = options[UIApplication.OpenURLOptionsKey.sourceApplication] as? String, !sourceApp.isEmpty {
            print("[EchoApp] sourceApplication ignored for return flow: \(sourceApp)")
            bridge.appendDebugEvent("sourceApplication ignored for return: \(sourceApp)", source: "mainapp", category: "MainView.Return")
+       }
+
+       if let hostPIDFromURL, hostPIDFromURL > 0, bridge.returnAppBundleID == nil {
+           print("[EchoApp] captured host PID from URL: \(hostPIDFromURL)")
+           bridge.setReturnAppPID(hostPIDFromURL)
+           bridge.appendDebugEvent("host PID captured from URL: \(hostPIDFromURL)", source: "mainapp", category: "MainView.Return")
        }
 
        bridge.setPendingLaunchIntent(intent)

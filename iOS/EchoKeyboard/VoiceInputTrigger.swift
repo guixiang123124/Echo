@@ -13,6 +13,7 @@ enum VoiceInputTrigger {
     private static let directCommandHeartbeatWindow: TimeInterval = 2.5
     private static let dictationStateFreshnessWindow: TimeInterval = 2.6
     private static let dictationStateRequestSlack: TimeInterval = 0.4
+    private static let launchWarmupCommandWindow: TimeInterval = 2.8
 
     /// Check if the voice engine is ready (running and healthy)
     /// Returns true if we can send Start/Stop commands without jumping
@@ -23,59 +24,100 @@ enum VoiceInputTrigger {
 
     /// Smart voice trigger: if dictation is ready, send direct command;
     /// otherwise, jump to main app to start engine.
-    /// otherwise, jump to main app to start engine.
+    /// On iOS keyboard extensions we keep a warm-up path for the first few seconds
+    /// after a launch request to avoid repeated deep-links.
     static func triggerVoiceInput(
         isCurrentlyRecording: Bool,
         from viewController: UIViewController?,
         completion: ((Bool) -> Void)? = nil
     ) {
         let bridge = AppGroupBridge()
-        let priorState = bridge.readDictationState()
         let requestAt = Date().timeIntervalSince1970
+        let priorState = bridge.readDictationState()
+
         var isRecordingNow = isDictationRecordingNow(bridge)
         if !isRecordingNow && isCurrentlyRecording && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow) {
             isRecordingNow = true
         }
+
         let shouldDirect = shouldUseDirectCommand(bridge: bridge)
-        print("[VoiceInputTrigger] triggerVoiceInput: direct=\(shouldDirect), isRecordingNow=\(isRecordingNow), isCurrentlyRecording=\(isCurrentlyRecording), state=\(String(describing: priorState)), heartbeats=\(bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)), engineHealthy=\(bridge.isEngineHealthy)")
+        let warmupAfterLaunch = bridge.hasRecentPendingLaunchIntent(maxAge: launchWarmupCommandWindow)
+        logEvent("triggerVoiceInput: direct=\(shouldDirect), warmupAfterLaunch=\(warmupAfterLaunch), isRecordingNow=\(isRecordingNow), isCurrentlyRecording=\(isCurrentlyRecording), state=\(String(describing: priorState)), heartbeats=\(bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)), engineHealthy=\(bridge.isEngineHealthy)")
 
         // Prefer direct command path when dictation is ready.
         if shouldDirect {
-            let darwin = DarwinNotificationCenter.shared
-            if isRecordingNow {
-                darwin.post(.dictationStop)
-                waitForDictationStop(
-                    maxWait: directStopWaitTimeout,
-                    requestAt: requestAt,
-                    priorSessionId: priorState?.sessionId
-                ) { stopped in
-                    if stopped {
+            sendDirectCommand(
+                isRecordingNow: isRecordingNow,
+                priorState: priorState,
+                requestAt: requestAt,
+                source: "primary",
+                completion: { success in
+                    if success {
                         completion?(true)
                     } else {
-                        print("[VoiceInputTrigger] direct stop failed, fallback to app launch")
+                        logEvent("primary direct command failed, fallback to app launch")
                         openMainAppForVoice(from: viewController, completion: completion)
                     }
                 }
-            } else {
-                darwin.post(.dictationStart)
-                waitForDictationStart(
-                    maxWait: directStartWaitTimeout,
-                    priorSessionId: priorState?.sessionId,
-                    requestAt: requestAt
-                ) { started in
-                    if started {
+            )
+            return
+        }
+
+        // If we recently attempted launch, try one quick direct command retry first.
+        // This handles the "activate once, then keep toggling in keyboard" behavior.
+        if warmupAfterLaunch {
+            logEvent("warmup window active, retrying direct command first")
+            sendDirectCommand(
+                isRecordingNow: isRecordingNow,
+                priorState: priorState,
+                requestAt: requestAt,
+                source: "warmup",
+                completion: { success in
+                    if success {
                         completion?(true)
                     } else {
-                        print("[VoiceInputTrigger] direct start failed, fallback to app launch")
+                        logEvent("warmup direct retry failed, opening main app")
                         openMainAppForVoice(from: viewController, completion: completion)
                     }
                 }
+            )
+            return
+        }
+
+        logEvent("direct path skipped, opening main app")
+        openMainAppForVoice(from: viewController, completion: completion)
+    }
+
+    private static func sendDirectCommand(
+        isRecordingNow: Bool,
+        priorState: (state: AppGroupBridge.DictationState, sessionId: String)?,
+        requestAt: TimeInterval,
+        source: String,
+        completion: ((Bool) -> Void)?
+    ) {
+        let darwin = DarwinNotificationCenter.shared
+        if isRecordingNow {
+            logEvent("sendDirectCommand(source=\(source)) -> stop")
+            darwin.post(.dictationStop)
+            waitForDictationStop(
+                maxWait: directStopWaitTimeout,
+                requestAt: requestAt,
+                priorSessionId: priorState?.sessionId
+            ) { stopped in
+                completion?(stopped)
             }
             return
         }
 
-        print("[VoiceInputTrigger] direct command path not used, opening main app")
-        openMainAppForVoice(from: viewController, completion: completion)
+        logEvent("sendDirectCommand(source=\(source)) -> start")
+        darwin.post(.dictationStart)
+        waitForDictationStart(
+            maxWait: directStartWaitTimeout,
+            priorSessionId: priorState?.sessionId,
+            requestAt: requestAt
+        ) { started in
+            completion?(started)
+        }
     }
 
     private static func shouldUseDirectCommand(bridge: AppGroupBridge) -> Bool {
@@ -113,13 +155,19 @@ enum VoiceInputTrigger {
         return bridge.isRecording && bridge.hasRecentHeartbeat(maxAge: directCommandHeartbeatWindow)
     }
 
+    private static func logEvent(_ message: String, category: String = "VoiceInputTrigger", source: String = "keyboard") {
+        print("[VoiceInputTrigger] \(message)")
+        AppGroupBridge().appendDebugEvent(message, source: source, category: category)
+    }
+
     private static func isDictationStateRecordingLike(_ state: AppGroupBridge.DictationState?) -> Bool {
         switch state {
         case .recording, .transcribing:
             return true
         case .idle, .error, .finalizing, nil:
-            // finalizing means recording already stopped and ASR is processing.
-            // Treat it as "not recording" so stop can complete without timeout.
+            // .finalizing means recording already stopped and ASR is processing.
+            // Treat it as "not recording" so waitForDictationStop can confirm
+            // the stop quickly instead of timing out during finalization.
             return false
         }
     }
@@ -231,26 +279,28 @@ enum VoiceInputTrigger {
 
     /// Open a URL from a keyboard extension using UIApplication.shared via runtime access.
     /// On iOS 18+, extensionContext.open(), responder chain, and SwiftUI Link all fail
-    /// for keyboard extensions. This runtime approach is used by many production
-    /// third-party keyboards.
+    /// for keyboard extensions. This runtime approach is used by virtually all production
+    /// third-party keyboards (Gboard, SwiftKey, Fleksy, etc.).
     ///
-    /// Uses the modern `open(_:options:completionHandler:)` API for reliable cold launches.
+    /// Uses the modern `open(_:options:completionHandler:)` API which properly handles
+    /// cold launches (app completely killed), unlike the deprecated `openURL:`.
     @discardableResult
     static func openURLFromExtension(_ url: URL) -> Bool {
         let sharedSel = NSSelectorFromString("sharedApplication")
         guard UIApplication.responds(to: sharedSel) else {
-            print("[VoiceInputTrigger] UIApplication does not respond to sharedApplication")
+            logEvent("UIApplication.responds(sharedApplication)==false")
             return false
         }
         guard let result = UIApplication.perform(sharedSel) else {
-            print("[VoiceInputTrigger] UIApplication.perform(sharedApplication) returned nil")
+            logEvent("UIApplication.sharedApplication perform returned nil")
             return false
         }
         let app = result.takeUnretainedValue()
 
+        // Use the modern open(_:options:completionHandler:) API for reliable cold launches.
         let openSel = NSSelectorFromString("openURL:options:completionHandler:")
         if app.responds(to: openSel) {
-            print("[VoiceInputTrigger] Opening URL via UIApplication.open: \(url.absoluteString)")
+            print("[VoiceInputTrigger] Opening URL via UIApplication.open (modern API): \(url.absoluteString)")
             typealias OpenFunc = @convention(c) (AnyObject, Selector, URL, [String: Any], ((Bool) -> Void)?) -> Void
             let imp = app.method(for: openSel)
             let open = unsafeBitCast(imp, to: OpenFunc.self)
@@ -260,24 +310,31 @@ enum VoiceInputTrigger {
             return true
         }
 
+        // Fallback to deprecated openURL: for older iOS
         let legacySel = NSSelectorFromString("openURL:")
         if app.responds(to: legacySel) {
-            print("[VoiceInputTrigger] Opening URL via UIApplication.openURL: \(url.absoluteString)")
-            _ = app.perform(legacySel, with: url)
+            print("[VoiceInputTrigger] Opening URL via UIApplication.openURL (legacy): \(url.absoluteString)")
+            app.perform(legacySel, with: url)
             return true
         }
 
-        print("[VoiceInputTrigger] UIApplication does not respond to any open URL selector")
+        print("[VoiceInputTrigger] UIApplication does not respond to any openURL selector")
         return false
+    }
+
+    private struct HostAppInfo {
+        let bundleID: String?
+        let pid: Int32?
     }
 
     /// Save the host app's bundle ID (or PID as fallback) before opening the main app,
     /// so the main app can return to the host app directly.
     /// This is needed for third-party apps where suspend() goes to Home screen.
-    static func saveHostAppBundleID(from viewController: UIViewController?) {
+    @discardableResult
+    static func saveHostAppBundleID(from viewController: UIViewController?) -> HostAppInfo {
         guard let vc = viewController else {
-            print("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
-            return
+            rlog("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
+            return HostAppInfo(bundleID: nil, pid: nil)
         }
         let bridge = AppGroupBridge()
 
@@ -285,7 +342,7 @@ enum VoiceInputTrigger {
         if let bundleID = detectHostBundleID(from: vc) {
             rlog("[VoiceInputTrigger] saving host app bundle ID: \(bundleID)")
             bridge.setReturnAppBundleID(bundleID)
-            return
+            return HostAppInfo(bundleID: bundleID, pid: nil)
         }
 
         // Fallback: save the host app PID so the main app can resolve it
@@ -293,19 +350,45 @@ enum VoiceInputTrigger {
         if let hostPID = detectHostPID(from: vc) {
             rlog("[VoiceInputTrigger] bundle ID detection failed, saving host PID: \(hostPID)")
             bridge.setReturnAppPID(hostPID)
-            return
+            return HostAppInfo(bundleID: nil, pid: hostPID)
         }
 
         rlog("[VoiceInputTrigger] could not detect host app bundle ID or PID from any source")
+        return HostAppInfo(bundleID: nil, pid: nil)
     }
 
     private static func detectHostBundleID(from viewController: UIViewController) -> String? {
-        let targets = [viewController, viewController.parent].compactMap { $0 }
-        let allSelNames = ["_hostApplicationBundleIdentifier", "_hostBundleID", "hostBundleID"]
+        var targets: [NSObject] = [viewController, viewController.parent, viewController.extensionContext].compactMap { $0 }
 
         // _hostApplicationBundleIdentifier exists on UIViewController but returns <null> on iOS 18.
-        // Try it anyway in case Apple fixes it in future versions.
-        print("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
+        // Try a broader set of selectors for broader iOS coverage.
+        let allSelNames = [
+            "_hostApplicationBundleIdentifier",
+            "hostApplicationBundleIdentifier",
+            "_hostBundleIdentifier",
+            "hostBundleIdentifier",
+            "_hostBundleID",
+            "hostBundleID",
+            "_hostBundleId",
+            "hostBundleId",
+            "hostBundle"
+        ]
+
+        rlog("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
+
+        func asString(_ raw: Any) -> String? {
+            if let s = raw as? String {
+                return s
+            }
+            if let s = raw as? NSString {
+                return String(s)
+            }
+            let fallback = String(describing: raw)
+            guard fallback != "<null>", fallback != "(null)", !fallback.isEmpty else {
+                return nil
+            }
+            return fallback
+        }
 
         for target in targets {
             let targetType = String(describing: type(of: target))
@@ -314,14 +397,14 @@ enum VoiceInputTrigger {
                 guard target.responds(to: sel) else { continue }
                 guard let result = target.perform(sel) else { continue }
                 let obj = result.takeUnretainedValue()
-                guard let bundleID = obj as? String,
+                guard let bundleID = asString(obj),
                       !bundleID.isEmpty,
                       bundleID != "<null>",
                       bundleID != "(null)" else {
-                    print("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
+                    rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
                     continue
                 }
-                print("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
+                rlog("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
                 return bundleID
             }
         }
@@ -338,25 +421,63 @@ enum VoiceInputTrigger {
     /// The PID is passed to the main app via AppGroupBridge for resolution,
     /// since proc_pidpath is blocked by the keyboard extension sandbox.
     private static func detectHostPID(from viewController: UIViewController) -> Int32? {
-        let targets = [viewController, viewController.parent].compactMap { $0 }
-        let pidSelName = "_hostProcessIdentifier"
-        let pidSel = NSSelectorFromString(pidSelName)
+        var targets: [NSObject] = [viewController, viewController.parent, viewController.extensionContext].compactMap { $0 }
+        let pidSelNames = [
+            "_hostProcessIdentifier",
+            "hostProcessIdentifier",
+            "hostProcessId",
+            "_hostProcessId",
+            "_hostPID",
+            "hostPID"
+        ]
+
+        func asInt32(_ raw: Any) -> Int32? {
+            if let n = raw as? NSNumber {
+                return n.int32Value
+            }
+            if let s = raw as? String, let v = Int32(s) {
+                return v
+            }
+            let fallback = String(describing: raw)
+            return Int32(fallback)
+        }
 
         for target in targets {
             let targetType = String(describing: type(of: target))
-            guard target.responds(to: pidSel) else {
-                print("[VoiceInputTrigger] \(targetType).\(pidSelName) unavailable")
-                continue
+            for pidSelName in pidSelNames {
+                let pidSel = NSSelectorFromString(pidSelName)
+                guard target.responds(to: pidSel) else {
+                    continue
+                }
+
+                // _hostProcessIdentifier returns pid_t (Int32), not an object.
+                // Must use method(for:) + unsafeBitCast to call correctly.
+                let methodReturnType = target.method(for: pidSel)
+                let hostPid: Int32
+                if (methodReturnType != nil) {
+                    // Try Int32-returning selector signature first.
+                    typealias PidFunc = @convention(c) (AnyObject, Selector) -> Int32
+                    let imp = target.method(for: pidSel)
+                    let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
+                    hostPid = getHostPid(target, pidSel)
+                } else {
+                    continue
+                }
+
+                if hostPid > 0 {
+                    rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
+                    return hostPid
+                }
+
+                // Fallback when selector unexpectedly returns object.
+                if let result = target.perform(pidSel) {
+                    let obj = result.takeUnretainedValue()
+                    if let hostPid = asInt32(obj), hostPid > 0 {
+                        rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid) (object)")
+                        return hostPid
+                    }
+                }
             }
-
-            typealias PidFunc = @convention(c) (AnyObject, Selector) -> Int32
-            let imp = target.method(for: pidSel)
-            let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
-            let hostPid = getHostPid(target, pidSel)
-            rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
-
-            guard hostPid > 0 else { continue }
-            return hostPid
         }
 
         rlog("[VoiceInputTrigger] no valid host PID found")
@@ -366,16 +487,36 @@ enum VoiceInputTrigger {
     /// Open the main Echo app for voice recording.
     /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
-        saveHostAppBundleID(from: viewController)
+        // Save the host app's bundle ID so main app can return to it
+        let hostInfo = saveHostAppBundleID(from: viewController)
         AppGroupBridge().setPendingLaunchIntent(.voice)
         let trace = UUID().uuidString.prefix(8)
-        let urls = [
+        logEvent("openMainAppForVoice trace=\(trace) intent set")
+
+        func appendHostQuery(_ url: URL) -> URL {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            var items = components?.queryItems ?? []
+            items.append(URLQueryItem(name: "trace", value: String(trace)))
+
+            if let hostBundle = hostInfo.bundleID {
+                items.append(URLQueryItem(name: "hostBundle", value: hostBundle))
+            }
+            if let hostPID = hostInfo.pid {
+                items.append(URLQueryItem(name: "hostPID", value: String(hostPID)))
+            }
+            components?.queryItems = items
+            return components?.url ?? url
+        }
+
+        let baseURLs: [URL] = [
             AppGroupBridge.voiceInputURL,
-            URL(string: "echo://voice?trace=\(trace)")!,
-            URL(string: "echo:///voice?trace=\(trace)")!,
-            URL(string: "echoapp://voice?trace=\(trace)")!,
-            URL(string: "echoapp:///voice?trace=\(trace)")!
+            URL(string: "echo://voice")!,
+            URL(string: "echo:///voice")!,
+            URL(string: "echoapp://voice")!,
+            URL(string: "echoapp:///voice")!
         ]
+
+        let urls = baseURLs.map(appendHostQuery)
         open(urls: urls, from: viewController, completion: completion)
     }
 
@@ -393,6 +534,7 @@ enum VoiceInputTrigger {
 
     private static func open(urls: [URL], from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
         var didFinish = false
+        let bridge = AppGroupBridge()
 
         let finish: (Bool) -> Void = { success in
             guard !didFinish else { return }
@@ -400,30 +542,38 @@ enum VoiceInputTrigger {
             completion?(success)
         }
 
+        var hadInvoked = false
+
         func attempt(at index: Int) {
             guard index < urls.count else {
-                AppGroupBridge().clearPendingLaunchIntent()
-                finish(false)
+                // Keep pending launch intent when no URL route is acknowledged.
+                // This avoids silently dropping the intent and lets the
+                // main app recover via its AppGroup poller within the
+                // pending-intent validity window (default 30s).
+                finish(hadInvoked && bridge.hasRecentPendingLaunchIntent())
                 return
             }
 
             let candidate = urls[index]
+            logEvent("trying launch url[\(index)]=\(candidate.absoluteString)")
             open(url: candidate, from: viewController) { didInvoke in
-                guard didInvoke else {
+                if didInvoke {
+                    hadInvoked = true
+                } else {
+                    logEvent("launch candidate did not invoke URL, trying next")
                     attempt(at: index + 1)
                     return
                 }
 
                 waitForLaunchAcknowledgement(timeout: launchAckTimeout, pollInterval: launchAckPollInterval) { acknowledged in
                     guard !didFinish else { return }
-                    print("[VoiceInputTrigger] launch ack for \(candidate.absoluteString): \(acknowledged)")
+                    logEvent("launch ack for \(candidate.absoluteString): \(acknowledged)", category: "LaunchAck")
                     if acknowledged {
                         finish(true)
-                        return
+                    } else {
+                        logEvent("launch ack not observed for \(candidate.absoluteString), trying next candidate")
+                        attempt(at: index + 1)
                     }
-
-                    print("[VoiceInputTrigger] launch ack not observed for \(candidate.absoluteString)")
-                    attempt(at: index + 1)
                 }
             }
         }
@@ -432,12 +582,6 @@ enum VoiceInputTrigger {
     }
 
     private static func open(url: URL, from viewController: UIViewController?, completion: ((Bool) -> Void)?) {
-        guard let viewController else {
-            completion?(false)
-            return
-        }
-
-        let resolvedViewController = viewController
         let urlString = url.absoluteString
         var didFinish = false
 
@@ -447,85 +591,39 @@ enum VoiceInputTrigger {
             completion?(success)
         }
 
-        let reportOpenAttempt: (_ path: String, _ success: Bool) -> Void = { path, success in
-            print("[VoiceInputTrigger] open via \(path) result for \(urlString): \(success)")
+        // Step 1: Fire extensionContext.open() to register the "Back to [host app]"
+        // navigation context with iOS. On iOS 18+ this may not actually open the URL,
+        // but it tells the system that the host app is the return target when our app
+        // calls suspend(). Without this, suspend() returns to the Home screen instead
+        // of the host app for third-party apps.
+        if let extensionContext = viewController?.extensionContext {
+            logEvent("extensionContext.open for back-navigation context: \(urlString)")
+            extensionContext.open(url, completionHandler: nil)
         }
 
-        let tryFallbackOpen: () -> Bool = {
-            if let inputViewController = resolvedViewController as? UIInputViewController,
-               openViaInputViewController(url, from: inputViewController) {
-                reportOpenAttempt("UIInputViewController.openURL", true)
-                return true
-            }
-            if openViaResponderChain(url: url, from: resolvedViewController) {
-                reportOpenAttempt("Responder chain", true)
-                return true
-            }
-            return false
-        }
-
-        // Track whether an open request has already been sent to avoid premature failure.
-        var didIssueOpenRequest = false
-
-        // Step 1: register navigation context and try extensionContext.open() first.
-        // On iOS 18+ this often works when runtime UIApplication path is blocked.
-        if let extensionContext = resolvedViewController.extensionContext {
-            reportOpenAttempt("extensionContext.open", true)
-
-            let fallbackTimeout = DispatchWorkItem {
-                guard !didFinish else { return }
-                guard !didIssueOpenRequest else { return }
-                print("[VoiceInputTrigger] extensionContext.open timed out, trying runtime/fallback path")
-
-                didIssueOpenRequest = true
-                if openURLFromExtension(url) {
-                    reportOpenAttempt("openURLFromExtension", true)
-                    finish(true)
-                    return
-                }
-
-                if tryFallbackOpen() {
-                    finish(true)
-                    return
-                }
-
-                finish(false)
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: fallbackTimeout)
-
-            extensionContext.open(url) { success in
-                fallbackTimeout.cancel()
-                reportOpenAttempt("extensionContext.open completion", success)
-                guard !didFinish else { return }
-
-                didIssueOpenRequest = true
-
-                if success {
-                    finish(true)
-                    return
-                }
-
-                print("[VoiceInputTrigger] extensionContext.open reported failure, trying runtime/fallback path")
-                if openURLFromExtension(url) {
-                    reportOpenAttempt("openURLFromExtension", true)
-                    finish(true)
-                    return
-                }
-
-                if tryFallbackOpen() {
-                    finish(true)
-                    return
-                }
-
-                finish(false)
-            }
-
+        // Step 2: Actually open the URL via UIApplication runtime access.
+        // This is the reliable path on iOS 18+ for keyboard extensions.
+        if openURLFromExtension(url) {
+            logEvent("open via UIApplication runtime succeeded for \(urlString)")
+            finish(true)
             return
         }
 
-        // Step 3: legacy fallback for older OS paths.
-        if tryFallbackOpen() {
+        // Step 3: Fallbacks for older iOS versions
+        guard let viewController else {
+            completion?(false)
+            return
+        }
+
+        if let inputViewController = viewController as? UIInputViewController,
+           openViaInputViewController(url, from: inputViewController) {
+            logEvent("open via UIInputViewController.openURL for \(urlString)")
+            finish(true)
+            return
+        }
+
+        if openViaResponderChain(url: url, from: viewController) {
+            logEvent("open via responder chain for \(urlString)")
             finish(true)
             return
         }
@@ -563,7 +661,7 @@ enum VoiceInputTrigger {
                     function(current, selector, url) { opened in
                         callbackCalled = true
                         result = opened
-                        print("VoiceInputTrigger: \(selector.description) completion result for \(url.absoluteString): \(opened)")
+                        logEvent("VoiceInputTrigger: \(selector.description) completion result for \(url.absoluteString): \(opened)", category: "openViaResponderChain")
                     }
                     if callbackCalled {
                         return result
@@ -585,7 +683,7 @@ enum VoiceInputTrigger {
                     function(current, selector, url, [:]) { opened in
                         callbackCalled = true
                         result = opened
-                        print("VoiceInputTrigger: openURL:options:completionHandler: completion result for \(url.absoluteString): \(opened)")
+                        logEvent("openURL:options:completionHandler: completion result for \(url.absoluteString): \(opened)")
                     }
                     if callbackCalled {
                         return result
@@ -608,7 +706,7 @@ enum VoiceInputTrigger {
                     function(current, selector, url, [:], { opened in
                         callbackCalled = true
                         result = opened
-                        print("VoiceInputTrigger: openURL:options:completionHandler:sourceApplication: completion result for \(url.absoluteString): \(opened)")
+                        logEvent("openURL:options:completionHandler:sourceApplication: completion result for \(url.absoluteString): \(opened)")
                     }, "")
                     if callbackCalled {
                         return result
@@ -635,7 +733,7 @@ enum VoiceInputTrigger {
             function(viewController, selector, url) { opened in
                 callbackCalled = true
                 result = opened
-                print("VoiceInputTrigger: openURL:completion result for \(url.absoluteString): \(opened)")
+                logEvent("openURL:completion result for \(url.absoluteString): \(opened)")
             }
             print("VoiceInputTrigger: openURL:completion handler invocation attempted for \(url.absoluteString)")
 
