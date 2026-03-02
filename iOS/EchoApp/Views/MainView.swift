@@ -352,10 +352,17 @@ extension MainView.DeepLink: Identifiable {
     }
 
     /// Resolve a PID to a bundle ID using multiple strategies.
-    /// Strategy 1: proc_pidpath (fails on iOS sandbox but kept for diagnostics).
-    /// Strategy 2: sysctl KERN_PROC_PID → process name → match installed apps.
+    /// Strategy 1: direct PID field on LSApplicationWorkspace application objects.
+    /// Strategy 2: proc_pidpath (fails on iOS sandbox but kept for diagnostics).
+    /// Strategy 3: sysctl KERN_PROC_PID → process name → match installed apps.
     func resolveBundleIDFromPID(_ pid: Int32) -> String? {
-        // Strategy 1: proc_pidpath
+        // Strategy 1: scan installed app proxies for matching PID.
+        if let bundleID = matchBundleIDByProcessID(pid) {
+            rlog("[EchoApp] resolveBundleIDFromPID: PID \(pid) matched running app proxy: \(bundleID)")
+            return bundleID
+        }
+
+        // Strategy 2: proc_pidpath (best effort; often restricted in sandbox)
         var pathBuffer = [CChar](repeating: 0, count: 4096)
         let pathLen = proc_pidpath(pid, &pathBuffer, UInt32(pathBuffer.count))
         if pathLen > 0 {
@@ -373,7 +380,7 @@ extension MainView.DeepLink: Identifiable {
             rlog("[EchoApp] resolveBundleIDFromPID: proc_pidpath(\(pid)) failed (returned \(pathLen))")
         }
 
-        // Strategy 2: sysctl → process name → match installed apps via LSApplicationWorkspace
+        // Strategy 3: sysctl → process name → match installed apps via LSApplicationWorkspace.
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
@@ -403,24 +410,100 @@ extension MainView.DeepLink: Identifiable {
         return nil
     }
 
-    /// Match a process name against installed apps using LSApplicationWorkspace.
-    func matchBundleIDByProcessName(_ processName: String) -> String? {
+
+    /// Match a process ID against installed app proxies using LSApplicationWorkspace.
+    func matchBundleIDByProcessID(_ pid: Int32) -> String? {
+        guard pid > 0 else { return nil }
+        guard let apps = installedApplicationsFromWorkspace() else { return nil }
+
+        let bundleIDSel = NSSelectorFromString("applicationIdentifier")
+        let pidSelectors = [
+            "pid",
+            "processIdentifier",
+            "applicationProcessIdentifier",
+            "bundleSeedID",
+            "pidString",
+            "bundleIdentifier"
+        ]
+
+        for app in apps {
+            for selName in pidSelectors {
+                let sel = NSSelectorFromString(selName)
+                let value = extractInt32(from: app, selector: sel)
+                if let value, value == pid {
+                    guard let idResult = app.perform?(bundleIDSel),
+                          let bundleID = idResult.takeUnretainedValue() as? String else {
+                        continue
+                    }
+                    rlog("[EchoApp] matchBundleIDByProcessID: matched selector '\(selName)' -> \(pid), bundleID=\(bundleID)")
+                    return bundleID
+                }
+            }
+        }
+
+        rlog("[EchoApp] matchBundleIDByProcessID: no running-app PID match for \(pid)")
+        return nil
+    }
+
+    /// Parse an Int32 value from an object's selector result.
+    private func extractInt32(from obj: AnyObject, selector: Selector) -> Int32? {
+        guard let nsObj = obj as? NSObject else { return nil }
+        guard nsObj.responds(to: selector) else { return nil }
+
+        if let method = nsObj.method(for: selector) {
+            typealias Fn = @convention(c) (AnyObject, Selector) -> Int32
+            let fn = unsafeBitCast(method, to: Fn.self)
+            let v = fn(nsObj, selector)
+            if v > 0 { return v }
+        }
+
+        if let result = nsObj.perform(selector) {
+            let value = result.takeUnretainedValue()
+            if let n = value as? NSNumber {
+                let intValue = n.int32Value
+                if intValue > 0 { return intValue }
+            }
+            if let s = value as? NSString {
+                let intValue = Int32(s.intValue)
+                if intValue > 0 { return intValue }
+            }
+            if let s = value as? String {
+                let intValue = Int32(s)
+                if let intValue, intValue > 0 { return intValue }
+            }
+        }
+
+        return nil
+    }
+
+    private func installedApplicationsFromWorkspace() -> [AnyObject]? {
         guard let wsClass = NSClassFromString("LSApplicationWorkspace") else {
-            rlog("[EchoApp] matchBundleIDByProcessName: LSApplicationWorkspace not available")
+            rlog("[EchoApp] installedApplicationsFromWorkspace: LSApplicationWorkspace not available")
             return nil
         }
+
         let defaultWsSel = NSSelectorFromString("defaultWorkspace")
         guard wsClass.responds(to: defaultWsSel),
               let wsResult = (wsClass as AnyObject).perform(defaultWsSel) else {
+            rlog("[EchoApp] installedApplicationsFromWorkspace: defaultWorkspace unavailable")
             return nil
         }
-        let workspace = wsResult.takeUnretainedValue()
 
+        let workspace = wsResult.takeUnretainedValue()
         let allAppsSel = NSSelectorFromString("allApplications")
         guard (workspace as AnyObject).responds(to: allAppsSel),
               let appsResult = (workspace as AnyObject).perform(allAppsSel),
               let apps = appsResult.takeUnretainedValue() as? [AnyObject] else {
-            rlog("[EchoApp] matchBundleIDByProcessName: could not enumerate installed apps")
+            rlog("[EchoApp] installedApplicationsFromWorkspace: allApplications unavailable")
+            return nil
+        }
+
+        return apps
+    }
+
+    /// Match a process name against installed apps using LSApplicationWorkspace.
+    func matchBundleIDByProcessName(_ processName: String) -> String? {
+        guard let apps = installedApplicationsFromWorkspace() else {
             return nil
         }
 
