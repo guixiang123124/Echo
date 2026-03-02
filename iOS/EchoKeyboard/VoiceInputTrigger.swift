@@ -584,7 +584,6 @@ enum VoiceInputTrigger {
                     return bundleID
                 }
 
-                rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(raw)")
             }
         }
 
