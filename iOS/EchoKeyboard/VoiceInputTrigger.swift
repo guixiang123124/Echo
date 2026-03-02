@@ -325,6 +325,7 @@ enum VoiceInputTrigger {
     private struct HostAppInfo {
         let bundleID: String?
         let pid: Int32?
+        let processName: String?
     }
 
     /// Save the host app's bundle ID (or PID as fallback) before opening the main app,
@@ -334,27 +335,35 @@ enum VoiceInputTrigger {
     private static func saveHostAppBundleID(from viewController: UIViewController?) -> HostAppInfo {
         guard let vc = viewController else {
             rlog("[VoiceInputTrigger] saveHostAppBundleID: no viewController")
-            return HostAppInfo(bundleID: nil, pid: nil)
+            return HostAppInfo(bundleID: nil, pid: nil, processName: nil)
         }
         let bridge = AppGroupBridge()
 
-        // Primary: try to detect bundle ID directly
+        // Primary: try to detect bundle ID directly.
         if let bundleID = detectHostBundleID(from: vc) {
             rlog("[VoiceInputTrigger] saving host app bundle ID: \(bundleID)")
             bridge.setReturnAppBundleID(bundleID)
-            return HostAppInfo(bundleID: bundleID, pid: nil)
+            bridge.clearReturnAppPID()
+            return HostAppInfo(bundleID: bundleID, pid: nil, processName: nil)
         }
 
-        // Fallback: save the host app PID so the main app can resolve it
-        // (proc_pidpath is blocked by the extension sandbox, but the main app can use it)
-        if let hostPID = detectHostPID(from: vc) {
-            rlog("[VoiceInputTrigger] bundle ID detection failed, saving host PID: \(hostPID)")
-            bridge.setReturnAppPID(hostPID)
-            return HostAppInfo(bundleID: nil, pid: hostPID)
+        // Fallback 1: save the host app PID so the main app can resolve it.
+        let hostPID = detectHostPID(from: vc)
+        let hostProcessName = detectHostProcessName(from: vc)
+
+        if let pid = hostPID {
+            rlog("[VoiceInputTrigger] bundle ID detection failed, saving host PID: \(pid), processName: \(hostProcessName ?? "<nil>")")
+            bridge.setReturnAppPID(pid)
+            return HostAppInfo(bundleID: nil, pid: pid, processName: hostProcessName)
         }
 
-        rlog("[VoiceInputTrigger] could not detect host app bundle ID or PID from any source")
-        return HostAppInfo(bundleID: nil, pid: nil)
+        if let processName = hostProcessName {
+            rlog("[VoiceInputTrigger] bundle ID + PID not found, saving host process name: \(processName)")
+            return HostAppInfo(bundleID: nil, pid: nil, processName: processName)
+        }
+
+        rlog("[VoiceInputTrigger] could not detect host app bundle ID / PID / process name from any source")
+        return HostAppInfo(bundleID: nil, pid: nil, processName: nil)
     }
 
     private static func hostCandidateTargets(from viewController: UIViewController) -> [NSObject] {
@@ -418,12 +427,101 @@ enum VoiceInputTrigger {
         return nil
     }
 
+    private static func extractHostProcessNameFromProxy(_ proxy: NSObject) -> String? {
+        let selectors = [
+            "displayName",
+            "executable",
+            "processName",
+            "process",
+            "name",
+            "bundleExecutable",
+            "bundleURL",
+            "executableURL",
+            "executablePath"
+        ]
+
+        for selectorName in selectors {
+            let sel = NSSelectorFromString(selectorName)
+            guard proxy.responds(to: sel) else { continue }
+            guard let result = proxy.perform(sel) else { continue }
+            let raw = result.takeUnretainedValue()
+
+            if let path = raw as? URL {
+                let base = path.lastPathComponent
+                if base.hasSuffix(".app") {
+                    return String(base.dropLast(4))
+                }
+                return base
+            }
+
+            if let name = asNormalizedHostString(raw), !name.isEmpty {
+                if name.hasSuffix(".app") {
+                    return String(name.dropLast(4))
+                }
+                return name
+            }
+        }
+
+        return nil
+    }
+
     private static func isValidHostBundleID(_ bundleID: String) -> Bool {
         return !bundleID.isEmpty
             && bundleID != Bundle.main.bundleIdentifier
             && !bundleID.hasSuffix(".keyboard")
             && !bundleID.hasPrefix("com.apple.")
             && bundleID.contains(".")
+    }
+
+    private static func detectHostProcessName(from viewController: UIViewController) -> String? {
+        let targets = hostCandidateTargets(from: viewController)
+        let selectors = [
+            "_hostProcessName",
+            "hostProcessName",
+            "_hostProcessNameRaw",
+            "hostProcessNameRaw",
+            "_hostExecutableName",
+            "hostExecutableName",
+            "_hostApplicationExecutableName",
+            "hostApplicationExecutableName",
+            "hostBundlePath",
+            "_hostBundlePath",
+            "hostApplicationBundlePath",
+            "_hostApplicationBundlePath"
+        ]
+
+        for target in targets {
+            let targetType = String(describing: type(of: target))
+            for selName in selectors {
+                let sel = NSSelectorFromString(selName)
+                guard target.responds(to: sel) else { continue }
+                guard let result = target.perform(sel) else { continue }
+                let raw = result.takeUnretainedValue()
+
+                if let name = asNormalizedHostString(raw) {
+                    let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    rlog("[VoiceInputTrigger] detectHostProcessName from \(targetType).\(selName) = \(normalized)")
+                    if let processName = normalized.split(separator: "/").last.map(String.init), processName.hasSuffix(".app") {
+                        return String(processName.dropLast(4))
+                    }
+                    return normalized
+                }
+            }
+
+            // Try proxy-based extraction, e.g., `_hostApplicationProxy`.
+            for selName in ["_hostApplicationProxy", "hostApplicationProxy", "hostApplication", "_hostApplication"] {
+                let sel = NSSelectorFromString(selName)
+                guard target.responds(to: sel), let result = target.perform(sel) else { continue }
+                let raw = result.takeUnretainedValue()
+                if let proxy = raw as? NSObject, let extracted = extractHostProcessNameFromProxy(proxy) {
+                    rlog("[VoiceInputTrigger] detectHostProcessName via proxy \(targetType).\(selName) = \(extracted)")
+                    return extracted
+                }
+            }
+        }
+
+        rlog("[VoiceInputTrigger] detectHostProcessName found nothing")
+        return nil
     }
 
     private static func detectHostBundleID(from viewController: UIViewController) -> String? {
@@ -582,6 +680,9 @@ enum VoiceInputTrigger {
             }
             if let hostPID = hostInfo.pid {
                 items.append(URLQueryItem(name: "hostPID", value: String(hostPID)))
+            }
+            if let hostProcessName = hostInfo.processName {
+                items.append(URLQueryItem(name: "hostProcessName", value: hostProcessName))
             }
             components?.queryItems = items
             return components?.url ?? url

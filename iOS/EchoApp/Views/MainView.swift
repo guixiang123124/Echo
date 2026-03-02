@@ -279,6 +279,21 @@ extension MainView.DeepLink: Identifiable {
             return
         }
 
+        if let hostProcessName = queryItems.first(where: { $0.name == "hostProcessName" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !hostProcessName.isEmpty,
+           bridge.returnAppBundleID == nil {
+            let candidate = hostProcessName.lowercased()
+            if let bundleID = matchBundleIDByProcessName(candidate) {
+                print("[EchoApp] onOpenURL mapped hostProcessName \(hostProcessName) -> \(bundleID)")
+                bridge.setReturnAppBundleID(bundleID)
+                bridge.clearReturnAppPID()
+                bridge.appendDebugEvent("hostProcessName mapped to bundleID from URL: \(candidate) -> \(bundleID)", source: "mainapp", category: "MainView.Return")
+                return
+            }
+            print("[EchoApp] onOpenURL captured hostProcessName: \(hostProcessName)")
+            bridge.appendDebugEvent("hostProcessName parsed from URL: \(hostProcessName)", source: "mainapp", category: "MainView.Return")
+        }
+
         if let hostPIDString = queryItems.first(where: { $0.name == "hostPID" })?.value,
            let hostPID = Int32(hostPIDString),
            hostPID > 0,
