@@ -26,7 +26,9 @@ struct MainView: View {
    @EnvironmentObject var authSession: EchoAuthSession
    @EnvironmentObject var backgroundDictation: BackgroundDictationService
    @Environment(\.scenePhase) private var scenePhase
-   private let keyboardIntentPoll = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+   private let keyboardIntentPoll = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
+   @State private var noIntentLogCounter = 0
+   @State private var noIntentLastLog = Date.distantPast
 
    var body: some View {
        TabView(selection: $selectedTab) {
@@ -239,6 +241,22 @@ extension MainView.DeepLink: Identifiable {
         return false
     }
 
+
+    private func logIntentPollNoIntent() {
+        noIntentLogCounter += 1
+        let now = Date()
+        // Throttle noisy poll logs. We still keep evidence by batching counts.
+        if now.timeIntervalSince(noIntentLastLog) >= 3.0 {
+            if noIntentLogCounter == 1 {
+                logEvent("consumeKeyboardLaunchIntentIfNeeded no intent", category: "MainView.Intent")
+            } else {
+                logEvent("consumeKeyboardLaunchIntentIfNeeded no intent x\(noIntentLogCounter)", category: "MainView.Intent")
+            }
+            noIntentLogCounter = 0
+            noIntentLastLog = now
+        }
+    }
+
     private func isValidHostBundleID(_ bundleID: String) -> Bool {
         guard !bundleID.isEmpty else { return false }
         if bundleID == Bundle.main.bundleIdentifier { return false }
@@ -274,11 +292,11 @@ extension MainView.DeepLink: Identifiable {
     func consumeKeyboardLaunchIntentIfNeeded() {
         let bridge = AppGroupBridge()
         guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
-            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
-            logEvent("consumeKeyboardLaunchIntentIfNeeded no intent", category: "MainView.Intent")
+            logIntentPollNoIntent()
             return
         }
-       print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
+       noIntentLogCounter = 0
+       noIntentLastLog = Date()
        logEvent("consumeKeyboardLaunchIntentIfNeeded got intent=\(intent)", category: "MainView.Intent")
        switch intent {
         case .voice, .voiceControl:
