@@ -63,6 +63,7 @@ struct MainView: View {
     .onOpenURL { url in
            print("[EchoApp] onOpenURL received: \(url.absoluteString)")
            logEvent("onOpenURL received: \(url.absoluteString)")
+           configureReturnContextFromURL(url)
            guard url.scheme == "echo" || url.scheme == "echoapp" else {
                print("[EchoApp] onOpenURL ignored due unsupported scheme: \(url.scheme ?? "<none>")")
                logEvent("onOpenURL unsupported scheme: \(url.scheme ?? "<none>")")
@@ -238,6 +239,38 @@ extension MainView.DeepLink: Identifiable {
         return false
     }
 
+    private func isValidHostBundleID(_ bundleID: String) -> Bool {
+        guard !bundleID.isEmpty else { return false }
+        if bundleID == Bundle.main.bundleIdentifier { return false }
+        if bundleID.hasSuffix(".keyboard") { return false }
+        if bundleID.hasPrefix("com.apple.") { return false }
+        return bundleID.contains(".")
+    }
+
+    private func configureReturnContextFromURL(_ url: URL) {
+        let bridge = AppGroupBridge()
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
+        let queryItems = components.queryItems ?? []
+
+        if let hostBundle = queryItems.first(where: { $0.name == "hostBundle" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines),
+           isValidHostBundleID(hostBundle) {
+            print("[EchoApp] onOpenURL captured hostBundle: \(hostBundle)")
+            bridge.setReturnAppBundleID(hostBundle)
+            bridge.clearReturnAppPID()
+            bridge.appendDebugEvent("hostBundle parsed from URL: \(hostBundle)", source: "mainapp", category: "MainView.Return")
+            return
+        }
+
+        if let hostPIDString = queryItems.first(where: { $0.name == "hostPID" })?.value,
+           let hostPID = Int32(hostPIDString),
+           hostPID > 0,
+           bridge.returnAppBundleID == nil {
+            print("[EchoApp] onOpenURL captured hostPID: \(hostPID)")
+            bridge.setReturnAppPID(hostPID)
+            bridge.appendDebugEvent("hostPID parsed from URL: \(hostPID)", source: "mainapp", category: "MainView.Return")
+        }
+    }
+
     func consumeKeyboardLaunchIntentIfNeeded() {
         let bridge = AppGroupBridge()
         guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
@@ -371,8 +404,10 @@ extension MainView.DeepLink: Identifiable {
             return nil
         }
         rlog("[EchoApp] resolveBundleIDFromPID: PID \(pid) process name = '\(processName)'")
+        let normalizedProcessName = processName.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let bundleID = matchBundleIDByProcessName(processName) {
+        let normalizedCandidate = normalizedProcessName.isEmpty ? processName : normalizedProcessName
+        if let bundleID = matchBundleIDByProcessName(normalizedCandidate) {
             return bundleID
         }
 
@@ -450,6 +485,27 @@ extension MainView.DeepLink: Identifiable {
                 if let idResult = app.perform?(bundleIDSel),
                    let bundleID = idResult.takeUnretainedValue() as? String {
                     rlog("[EchoApp] matchBundleIDByProcessName: Info.plist match '\(processName)' → \(bundleID) (exec: \(cfExec))")
+                    return bundleID
+                }
+            }
+        }
+
+        // Pass 4: relaxed match against tokens and display/executable names.
+        if let tokens = processName.split(separator: "-").first {
+            for app in apps {
+                guard let idResult = app.perform?(bundleIDSel), let bundleID = idResult.takeUnretainedValue() as? String else { continue }
+                guard let urlResult = app.perform?(bundleURLSel), let url = urlResult.takeUnretainedValue() as? URL else { continue }
+                let appPathName = url.lastPathComponent.lowercased()
+                if appPathName.contains(processName.lowercased()) || appPathName.contains(tokens.lowercased()) {
+                    rlog("[EchoApp] matchBundleIDByProcessName: relaxed token match '\(processName)' → \(bundleID) (app: \(appPathName))")
+                    return bundleID
+                }
+
+                if let dict = NSDictionary(contentsOf: url.appendingPathComponent("Info.plist")),
+                   let displayName = dict["CFBundleDisplayName"] as? String,
+                   let exec = dict["CFBundleExecutable"] as? String,
+                   displayName.lowercased().contains(processName.lowercased()) || exec.lowercased().contains(processName.lowercased()) || displayName.lowercased().contains(tokens.lowercased()) || exec.lowercased().contains(tokens.lowercased()) {
+                    rlog("[EchoApp] matchBundleIDByProcessName: display/exec relaxed match '\(processName)' → \(bundleID) (exec: \(exec), display: \(displayName))")
                     return bundleID
                 }
             }

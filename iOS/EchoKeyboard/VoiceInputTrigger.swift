@@ -357,11 +357,78 @@ enum VoiceInputTrigger {
         return HostAppInfo(bundleID: nil, pid: nil)
     }
 
-    private static func detectHostBundleID(from viewController: UIViewController) -> String? {
-        var targets: [NSObject] = [viewController, viewController.parent, viewController.extensionContext].compactMap { $0 }
+    private static func hostCandidateTargets(from viewController: UIViewController) -> [NSObject] {
+        var targets: [NSObject] = [viewController]
 
-        // _hostApplicationBundleIdentifier exists on UIViewController but returns <null> on iOS 18.
-        // Try a broader set of selectors for broader iOS coverage.
+        // Add direct hierarchy and responder chain hosts.
+        var responder = viewController.next
+        while let current = responder {
+            if let obj = current as? NSObject {
+                targets.append(obj)
+            }
+            responder = current.next
+        }
+
+        // Add parent to handle older responder structures.
+        if let parent = viewController.parent,
+           let obj = parent as? NSObject {
+            targets.append(obj)
+        }
+
+        if let context = viewController.extensionContext {
+            targets.append(context)
+        }
+
+        return targets
+    }
+
+    private static func asNormalizedHostString(_ raw: Any) -> String? {
+        if let s = raw as? String {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        if let s = raw as? NSString {
+            let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed as String }
+        }
+        let fallback = String(describing: raw)
+        if fallback.isEmpty || fallback == "<null>" || fallback == "(null)" {
+            return nil
+        }
+        return fallback
+    }
+
+    private static func extractHostBundleFromProxy(_ proxy: NSObject) -> String? {
+        let bundleSelectors = [
+            "applicationIdentifier",
+            "bundleIdentifier",
+            "bundleId",
+            "bundleID"
+        ]
+        for selectorName in bundleSelectors {
+            let sel = NSSelectorFromString(selectorName)
+            guard proxy.responds(to: sel) else { continue }
+            if let result = proxy.perform(sel) {
+                let obj = result.takeUnretainedValue()
+                if let bundleID = asNormalizedHostString(obj), !bundleID.isEmpty {
+                    return bundleID
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func isValidHostBundleID(_ bundleID: String) -> Bool {
+        return !bundleID.isEmpty
+            && bundleID != Bundle.main.bundleIdentifier
+            && !bundleID.hasSuffix(".keyboard")
+            && !bundleID.hasPrefix("com.apple.")
+            && bundleID.contains(".")
+    }
+
+    private static func detectHostBundleID(from viewController: UIViewController) -> String? {
+        let targets = hostCandidateTargets(from: viewController)
+
         let allSelNames = [
             "_hostApplicationBundleIdentifier",
             "hostApplicationBundleIdentifier",
@@ -371,48 +438,61 @@ enum VoiceInputTrigger {
             "hostBundleID",
             "_hostBundleId",
             "hostBundleId",
-            "hostBundle"
+            "hostBundle",
+            "_hostApplicationProxy",
+            "hostApplicationProxy",
+            "hostApplication",
+            "_hostApplication",
+            "_hostBundleInfo",
+            "hostBundleInfo"
         ]
 
-        rlog("[VoiceInputTrigger] detectHostBundleID: vc=\(type(of: viewController)), parent=\(viewController.parent.map { String(describing: type(of: $0)) } ?? "nil")")
+        let hostProxySelNames = [
+            "_hostApplicationProxy",
+            "hostApplicationProxy",
+            "_hostApplication",
+            "hostApplication"
+        ]
 
-        func asString(_ raw: Any) -> String? {
-            if let s = raw as? String {
-                return s
-            }
-            if let s = raw as? NSString {
-                return String(s)
-            }
-            let fallback = String(describing: raw)
-            guard fallback != "<null>", fallback != "(null)", !fallback.isEmpty else {
-                return nil
-            }
-            return fallback
-        }
+        rlog("[VoiceInputTrigger] detectHostBundleID start: vc=\(type(of: viewController)), candidates=\(targets.count)")
 
         for target in targets {
             let targetType = String(describing: type(of: target))
-            for selName in allSelNames {
+
+            for selName in hostProxySelNames {
                 let sel = NSSelectorFromString(selName)
                 guard target.responds(to: sel) else { continue }
                 guard let result = target.perform(sel) else { continue }
                 let obj = result.takeUnretainedValue()
-                guard let bundleID = asString(obj),
-                      !bundleID.isEmpty,
-                      bundleID != "<null>",
-                      bundleID != "(null)" else {
-                    rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(obj)")
-                    continue
+                if let proxy = obj as? NSObject, let bundleID = extractHostBundleFromProxy(proxy), isValidHostBundleID(bundleID) {
+                    rlog("[VoiceInputTrigger] detected host bundle via proxy \(targetType).\(selName): \(bundleID)")
+                    return bundleID
                 }
-                rlog("[VoiceInputTrigger] detected host bundle ID via \(targetType).\(selName): \(bundleID)")
-                return bundleID
+            }
+
+            for selName in allSelNames {
+                let sel = NSSelectorFromString(selName)
+                guard target.responds(to: sel) else { continue }
+                guard let result = target.perform(sel) else { continue }
+                let raw = result.takeUnretainedValue()
+
+                if let proxy = raw as? NSObject, let bundleID = extractHostBundleFromProxy(proxy), isValidHostBundleID(bundleID) {
+                    rlog("[VoiceInputTrigger] detected host bundle via proxy object \(targetType).\(selName): \(bundleID)")
+                    return bundleID
+                }
+
+                if let bundleID = asNormalizedHostString(raw), isValidHostBundleID(bundleID) {
+                    rlog("[VoiceInputTrigger] detected host bundle via \(targetType).\(selName): \(bundleID)")
+                    return bundleID
+                }
+
+                rlog("[VoiceInputTrigger] \(targetType).\(selName) returned unusable: \(raw)")
             }
         }
 
         // Note: proc_pidpath approach is not attempted here because it is blocked
         // by the keyboard extension sandbox. Instead, the PID is saved via
-        // detectHostPID() and resolved by the main app which has fewer restrictions.
-
+        // detectHostPID() and resolved by the main app.
         rlog("[VoiceInputTrigger] all host bundle ID detection methods failed")
         return nil
     }
@@ -421,22 +501,28 @@ enum VoiceInputTrigger {
     /// The PID is passed to the main app via AppGroupBridge for resolution,
     /// since proc_pidpath is blocked by the keyboard extension sandbox.
     private static func detectHostPID(from viewController: UIViewController) -> Int32? {
-        var targets: [NSObject] = [viewController, viewController.parent, viewController.extensionContext].compactMap { $0 }
+        let targets = hostCandidateTargets(from: viewController)
         let pidSelNames = [
             "_hostProcessIdentifier",
             "hostProcessIdentifier",
-            "hostProcessId",
             "_hostProcessId",
+            "hostProcessId",
             "_hostPID",
-            "hostPID"
+            "hostPID",
+            "hostProcessID",
+            "_hostProcessID",
+            "_hostPid"
         ]
 
         func asInt32(_ raw: Any) -> Int32? {
             if let n = raw as? NSNumber {
                 return n.int32Value
             }
-            if let s = raw as? String, let v = Int32(s) {
-                return v
+            if let s = raw as? NSString {
+                return Int32(s.intValue)
+            }
+            if let s = raw as? String {
+                return Int32(s)
             }
             let fallback = String(describing: raw)
             return Int32(fallback)
@@ -450,23 +536,16 @@ enum VoiceInputTrigger {
                     continue
                 }
 
-                // _hostProcessIdentifier returns pid_t (Int32), not an object.
-                // Must use method(for:) + unsafeBitCast to call correctly.
-                let methodReturnType = target.method(for: pidSel)
-                let hostPid: Int32
-                if (methodReturnType != nil) {
-                    // Try Int32-returning selector signature first.
+                let method = target.method(for: pidSel)
+                if method != nil {
+                    // Int32-returning selector signature.
                     typealias PidFunc = @convention(c) (AnyObject, Selector) -> Int32
-                    let imp = target.method(for: pidSel)
-                    let getHostPid = unsafeBitCast(imp, to: PidFunc.self)
-                    hostPid = getHostPid(target, pidSel)
-                } else {
-                    continue
-                }
-
-                if hostPid > 0 {
-                    rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid)")
-                    return hostPid
+                    let getHostPid = unsafeBitCast(method, to: PidFunc.self)
+                    let hostPid = getHostPid(target, pidSel)
+                    if hostPid > 0 {
+                        rlog("[VoiceInputTrigger] \(targetType).\(pidSelName) = \(hostPid) (typed)")
+                        return hostPid
+                    }
                 }
 
                 // Fallback when selector unexpectedly returns object.
@@ -484,7 +563,7 @@ enum VoiceInputTrigger {
         return nil
     }
 
-    /// Open the main Echo app for voice recording.
+        /// Open the main Echo app for voice recording.
     /// Includes a trace ID so the app can match the launch acknowledgement.
     static func openMainAppForVoice(from viewController: UIViewController?, completion: ((Bool) -> Void)? = nil) {
         // Save the host app's bundle ID so main app can return to it
