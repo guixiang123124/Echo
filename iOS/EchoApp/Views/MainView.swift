@@ -62,8 +62,10 @@ struct MainView: View {
        }
     .onOpenURL { url in
            print("[EchoApp] onOpenURL received: \(url.absoluteString)")
+           logEvent("onOpenURL received: \(url.absoluteString)")
            guard url.scheme == "echo" || url.scheme == "echoapp" else {
                print("[EchoApp] onOpenURL ignored due unsupported scheme: \(url.scheme ?? "<none>")")
+               logEvent("onOpenURL unsupported scheme: \(url.scheme ?? "<none>")")
                return
            }
            let route = (url.host?.isEmpty == false ? url.host : nil)
@@ -71,27 +73,35 @@ struct MainView: View {
                .map { $0.lowercased() }
            guard let route else { return }
            print("[EchoApp] onOpenURL parsed route: \(route)")
+           logEvent("onOpenURL parsed route: \(route)")
            switch route {
            case "home":
+               logEvent("onOpenURL route home")
                selectedTab = .home
                deepLink = nil
            case "history":
+               logEvent("onOpenURL route history")
                selectedTab = .history
                deepLink = nil
            case "dictionary":
+               logEvent("onOpenURL route dictionary")
                selectedTab = .dictionary
                deepLink = nil
            case "account":
+               logEvent("onOpenURL route account")
                selectedTab = .account
                deepLink = nil
            case "voice":
-                handleVoiceDeepLink()
-            case "settings":
-                deepLink = .settings
-                AppGroupBridge().markLaunchAcknowledged()
-                AppGroupBridge().clearPendingLaunchIntent()
+               logEvent("onOpenURL route voice")
+               handleVoiceDeepLink()
+           case "settings":
+               logEvent("onOpenURL route settings")
+               deepLink = .settings
+               AppGroupBridge().markLaunchAcknowledged()
+               AppGroupBridge().clearPendingLaunchIntent()
            default:
                print("[EchoApp] onOpenURL unsupported route: \(route)")
+               logEvent("onOpenURL unsupported route: \(route)")
                break
            }
        }
@@ -126,12 +136,19 @@ extension MainView.DeepLink: Identifiable {
 }
 
    private extension MainView {
+    private func logEvent(_ message: String, category: String = "MainView") {
+        rlog("[\(category)] \(message)")
+        AppGroupBridge().appendDebugEvent(message, source: "mainapp", category: category)
+    }
+
     func handleVoiceDeepLink() {
         guard !isHandlingKeyboardVoiceIntent else {
+            logEvent("handleVoiceDeepLink skipped: already handling")
             print("[EchoApp] handleVoiceDeepLink skipped: already handling")
             return
         }
 
+        logEvent("handleVoiceDeepLink started")
         isHandlingKeyboardVoiceIntent = true
         let bridge = AppGroupBridge()
         bridge.markLaunchAcknowledged()
@@ -145,6 +162,7 @@ extension MainView.DeepLink: Identifiable {
 
             await MainActor.run {
                 backgroundDictation.activate(authSession: authSession)
+                logEvent("main app activated for keyboard intent")
             }
 
             // Toggle: if already recording, stop instead of starting a new session.
@@ -152,6 +170,7 @@ extension MainView.DeepLink: Identifiable {
             switch currentState {
             case .recording, .transcribing:
                 print("[EchoApp] handleVoiceDeepLink: already recording, toggling to stop")
+                logEvent("state already recording/transcribing, toggling stop. state=\(currentState)")
                 await backgroundDictation.stopDictation()
                 await MainActor.run {
                     bridge.clearPendingLaunchIntent()
@@ -161,6 +180,7 @@ extension MainView.DeepLink: Identifiable {
 
             case .finalizing:
                 print("[EchoApp] handleVoiceDeepLink: finalizing, returning immediately")
+                logEvent("state finalizing, returning immediately")
                 await MainActor.run {
                     bridge.clearPendingLaunchIntent()
                     autoReturnToHostApp()
@@ -172,18 +192,22 @@ extension MainView.DeepLink: Identifiable {
             }
 
             await backgroundDictation.startDictationForKeyboardIntent()
+            logEvent("startDictationForKeyboardIntent called")
 
             // Wait briefly for recording to initialize, then return regardless.
             // On cold launch the audio engine may take a moment to spin up.
             // The recording continues in background via audio background mode.
             let started = await waitForRecordingState(timeout: 1.5)
             print("[EchoApp] handleVoiceDeepLink: recording started=\(started), state=\(backgroundDictation.state)")
+            logEvent("waitForRecordingState result=\(started), finalState=\(backgroundDictation.state)")
 
             await MainActor.run {
                 bridge.clearPendingLaunchIntent()
+                logEvent("cleared pending launch intent")
 
                 if case .error = backgroundDictation.state {
                     print("[EchoApp] handleVoiceDeepLink: error state, staying in app")
+                    logEvent("error state after start attempt; stay in app")
                     return
                 }
 
@@ -215,15 +239,17 @@ extension MainView.DeepLink: Identifiable {
     }
 
     func consumeKeyboardLaunchIntentIfNeeded() {
-       let bridge = AppGroupBridge()
-       guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
-           print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
-           return
-       }
+        let bridge = AppGroupBridge()
+        guard let intent = bridge.consumePendingLaunchIntent(maxAge: 30) else {
+            print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded: no pending intent")
+            logEvent("consumeKeyboardLaunchIntentIfNeeded no intent", category: "MainView.Intent")
+            return
+        }
        print("[EchoApp] consumeKeyboardLaunchIntentIfNeeded intent: \(intent)")
+       logEvent("consumeKeyboardLaunchIntentIfNeeded got intent=\(intent)", category: "MainView.Intent")
        switch intent {
-       case .voice, .voiceControl:
-           handleVoiceDeepLink()
+        case .voice, .voiceControl:
+            handleVoiceDeepLink()
         case .settings:
             deepLink = .settings
             bridge.markLaunchAcknowledged()
@@ -232,19 +258,23 @@ extension MainView.DeepLink: Identifiable {
 
     func autoReturnToHostApp() {
         let bridge = AppGroupBridge()
+        logEvent("autoReturnToHostApp start")
 
         // Try returning to the specific host app by bundle ID.
         // This is needed for third-party apps where suspend() goes to Home screen
         // instead of back to the host app.
         if let hostBundleID = bridge.returnAppBundleID, !hostBundleID.isEmpty {
+            logEvent("autoReturnToHostApp use bundleID=\(hostBundleID)")
             bridge.clearReturnAppBundleID()
             bridge.clearReturnAppPID()
             rlog("[EchoApp] autoReturnToHostApp: got host bundle ID = \(hostBundleID), trying LSApplicationWorkspace in 0.4s")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 if openAppByBundleID(hostBundleID) {
+                    AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open success: \(hostBundleID)", source: "mainapp", category: "MainView.Return")
                     rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(hostBundleID)")
                     return
                 }
+                AppGroupBridge().appendDebugEvent("autoReturnToHostApp bundleID open failed, fallback suspend", source: "mainapp", category: "MainView.Return")
                 rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed, falling back to suspend")
                 suspendApp()
             }
@@ -255,26 +285,47 @@ extension MainView.DeepLink: Identifiable {
         // The keyboard extension saves the PID when it cannot call proc_pidpath
         // due to sandbox restrictions. The main app resolves it here instead.
         if let hostPID = bridge.returnAppPID {
+            logEvent("autoReturnToHostApp use return PID=\(hostPID)")
             bridge.clearReturnAppPID()
-            rlog("[EchoApp] autoReturnToHostApp: got host PID = \(hostPID), resolving bundle ID via proc_pidpath")
-            if let resolvedBundleID = resolveBundleIDFromPID(hostPID) {
-                rlog("[EchoApp] autoReturnToHostApp: resolved PID \(hostPID) -> \(resolvedBundleID), trying LSApplicationWorkspace in 0.4s")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    if openAppByBundleID(resolvedBundleID) {
-                        rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(resolvedBundleID) (from PID \(hostPID))")
+
+            func attemptPIDReturn(_ attempt: Int) {
+                let delay = 0.35 + Double(attempt) * 0.25
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    rlog("[EchoApp] autoReturnToHostApp: attempt \(attempt + 1) resolve PID = \(hostPID)")
+                    if let resolvedBundleID = resolveBundleIDFromPID(hostPID) {
+                        rlog("[EchoApp] autoReturnToHostApp: resolved PID \(hostPID) -> \(resolvedBundleID), trying LSApplicationWorkspace")
+                        if openAppByBundleID(resolvedBundleID) {
+                            AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open success: \(resolvedBundleID)", source: "mainapp", category: "MainView.Return")
+                            rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace succeeded for \(resolvedBundleID) (from PID \(hostPID))")
+                            return
+                        }
+                        AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolved bundleID open failed: \(resolvedBundleID), attempt=\(attempt + 1)", source: "mainapp", category: "MainView.Return")
+                        rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(resolvedBundleID), attempt=\(attempt + 1)")
+                    } else {
+                        AppGroupBridge().appendDebugEvent("autoReturnToHostApp PID resolve failed for \(hostPID), attempt=\(attempt + 1)", source: "mainapp", category: "MainView.Return")
+                        rlog("[EchoApp] autoReturnToHostApp: proc_pidpath/resolve failed for PID \(hostPID), attempt=\(attempt + 1)")
+                    }
+
+                    let maxAttempts = 3
+                    if attempt + 1 < maxAttempts {
+                        attemptPIDReturn(attempt + 1)
                         return
                     }
-                    rlog("[EchoApp] autoReturnToHostApp: LSApplicationWorkspace failed for \(resolvedBundleID), falling back to suspend")
+
+                    AppGroupBridge().appendDebugEvent("autoReturnToHostApp fallback suspend after PID resolve retries for \(hostPID)", source: "mainapp", category: "MainView.Return")
+                    rlog("[EchoApp] autoReturnToHostApp: PID resolve path exhausted, falling back to suspend")
                     suspendApp()
                 }
-                return
             }
-            rlog("[EchoApp] autoReturnToHostApp: proc_pidpath failed for PID \(hostPID), falling back to suspend")
+
+            attemptPIDReturn(0)
+            return
         }
 
         // Fallback: suspend (works for system apps)
         rlog("[EchoApp] autoReturnToHostApp: no host bundle ID or PID available, scheduling suspend in 0.4s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            AppGroupBridge().appendDebugEvent("autoReturnToHostApp using fallback suspend", source: "mainapp", category: "MainView.Return")
             suspendApp()
         }
     }
@@ -421,16 +472,19 @@ extension MainView.DeepLink: Identifiable {
     func openAppByBundleID(_ bundleID: String) -> Bool {
         guard let wsClass = NSClassFromString("LSApplicationWorkspace") else {
             rlog("[EchoApp] LSApplicationWorkspace class not found")
+            AppGroupBridge().appendDebugEvent("LSApplicationWorkspace class missing", source: "mainapp", category: "MainView.Return")
             return false
         }
 
         let defaultWsSel = NSSelectorFromString("defaultWorkspace")
         guard wsClass.responds(to: defaultWsSel) else {
             rlog("[EchoApp] LSApplicationWorkspace does not respond to defaultWorkspace")
+            AppGroupBridge().appendDebugEvent("LSApplicationWorkspace defaultWorkspace missing", source: "mainapp", category: "MainView.Return")
             return false
         }
         guard let wsResult = (wsClass as AnyObject).perform(defaultWsSel) else {
             rlog("[EchoApp] defaultWorkspace returned nil")
+            AppGroupBridge().appendDebugEvent("LSApplicationWorkspace defaultWorkspace call returned nil", source: "mainapp", category: "MainView.Return")
             return false
         }
         let workspace = wsResult.takeUnretainedValue()
@@ -438,10 +492,12 @@ extension MainView.DeepLink: Identifiable {
         let openSel = NSSelectorFromString("openApplicationWithBundleIdentifier:")
         guard (workspace as AnyObject).responds(to: openSel) else {
             rlog("[EchoApp] workspace does not respond to openApplicationWithBundleIdentifier:")
+            AppGroupBridge().appendDebugEvent("workspace openApplicationWithBundleIdentifier selector missing", source: "mainapp", category: "MainView.Return")
             return false
         }
 
         rlog("[EchoApp] opening app via LSApplicationWorkspace: \(bundleID)")
+        AppGroupBridge().appendDebugEvent("LSApplicationWorkspace opening bundleID=\(bundleID)", source: "mainapp", category: "MainView.Return")
         _ = (workspace as AnyObject).perform(openSel, with: bundleID)
         return true
     }
